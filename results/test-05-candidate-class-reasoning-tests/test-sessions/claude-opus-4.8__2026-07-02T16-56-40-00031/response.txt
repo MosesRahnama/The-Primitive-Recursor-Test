@@ -1,0 +1,82 @@
+I'll analyze each candidate measure against all 8 rewrite rules. For a valid termination measure, every rule must strictly decrease the measure (μ(LHS) > μ(RHS)).
+
+Let me check each rule for each measure.
+
+## The 8 rules
+
+1. **R_int_delta**: `integrate (delta t) → void`
+2. **R_merge_void_left**: `merge void t → t`
+3. **R_merge_void_right**: `merge t void → t`
+4. **R_merge_cancel**: `merge t t → t`
+5. **R_rec_zero**: `recDelta b s void → b`
+6. **R_rec_succ**: `recDelta b s (delta n) → app s (recDelta b s n)`
+7. **R_eq_refl**: `eqW a a → void`
+8. **R_eq_diff**: `eqW a b → integrate (merge a b)`
+
+## Analysis of μ1
+
+- **R1**: LHS = 1+(1+μt) = 2+μt; RHS = 0. ✓ (2+μt > 0)
+- **R2**: LHS = 1+0+μt = 1+μt; RHS = μt. ✓
+- **R3**: LHS = 1+μt+0 = 1+μt; RHS = μt. ✓
+- **R4**: LHS = 1+μt+μt; RHS = μt. ✓
+- **R5**: LHS = 1+μb+μs+0; RHS = μb. ✓
+- **R6**: LHS = 1+μb+μs+(1+μn) = 2+μb+μs+μn; RHS = app s (recDelta b s n) = 1+μs+(1+μb+μs+μn) = 2+μb+2μs+μn. **LHS − RHS = −μs ≤ 0**. ✗ **FAILS** when μs > 0.
+- **R7**: LHS = 3+2μa; RHS = 0. ✓
+- **R8**: LHS = 3+μa+μb; RHS = integrate(merge a b) = 1+(1+μa+μb) = 2+μa+μb. ✓ (3 > 2)
+
+**μ1 fails on R_rec_succ** (the `app` node duplicates `s`, and `s` contributes cost in `app`).
+
+## Analysis of μ2
+
+- **R1**: LHS = 2+(1+μt) = 3+μt; RHS = 0. ✓
+- **R2**: LHS = 2+0+μt; RHS = μt. ✓
+- **R3**: LHS = 2+μt+0; RHS = μt. ✓
+- **R4**: LHS = 2+2μt; RHS = μt. ✓
+- **R5**: LHS = 5+μb+μs+0; RHS = μb. ✓
+- **R6**: LHS = 5+μb+μs+(1+μn) = 6+μb+μs+μn; RHS = app s (recDelta b s n) = 1+μs+(5+μb+μs+μn) = 6+μb+2μs+μn. **LHS − RHS = −μs ≤ 0**. ✗ **FAILS** when μs > 0.
+- **R7**: LHS = 5+2μa; RHS = 0. ✓
+- **R8**: LHS = 5+μa+μb; RHS = integrate(merge a b) = 2+(2+μa+μb) = 4+μa+μb. ✓ (5 > 4)
+
+**μ2 also fails on R_rec_succ.** The recDelta constant (5) does not help because `s` is duplicated between the surviving `app` copy and the recursive `recDelta`. The recDelta constant cancels, leaving `−μs`.
+
+## Analysis of μ3
+
+- **R1**: LHS = 2+(1+μt) = 3+μt; RHS = 0. ✓
+- **R2**: LHS = 1+0+μt; RHS = μt. ✓ (1+μt > μt)
+- **R3**: LHS = 1+μt+0; RHS = μt. ✓
+- **R4**: LHS = 1+2μt; RHS = μt. ✓
+- **R5**: LHS = 1+μb+μs+0; RHS = μb. ✓
+- **R6**: LHS = 1+μb+μs+(1+μn) = 2+μb+μs+μn; RHS = app s (recDelta b s n) = 2+μs+(1+μb+μs+μn) = 3+μb+2μs+μn. **LHS − RHS = −1−μs < 0**. ✗ **FAILS** — even worse here since `app` costs 2.
+- **R7**: LHS = 4+2μa; RHS = 0. ✓
+- **R8**: LHS = 4+μa+μb; RHS = integrate(merge a b) = 2+(1+μa+μb) = 3+μa+μb. ✓ (4 > 3)
+
+**μ3 also fails on R_rec_succ.**
+
+## Verdict
+
+| Rule | μ1 | μ2 | μ3 |
+|------|----|----|----|
+| R_int_delta | ✓ | ✓ | ✓ |
+| R_merge_void_left | ✓ | ✓ | ✓ |
+| R_merge_void_right | ✓ | ✓ | ✓ |
+| R_merge_cancel | ✓ | ✓ | ✓ |
+| R_rec_zero | ✓ | ✓ | ✓ |
+| **R_rec_succ** | ✗ | ✗ | ✗ |
+| R_eq_refl | ✓ | ✓ | ✓ |
+| R_eq_diff | ✓ | ✓ | ✓ |
+
+**All three candidates fail, and they all fail on the same rule: `R_rec_succ`.**
+
+### Root cause
+
+The rule `recDelta b s (delta n) → app s (recDelta b s n)` **duplicates** the subterm `s`. On the RHS, `s` appears once inside `app` and once inside the recursive `recDelta`. Any measure that is a fixed positive linear combination of subterm measures (with a positive coefficient on `s` in both `app` and `recDelta`) will incur `+μs` from this duplication.
+
+The only decrease this rule provides on the left is peeling one `delta` off `n` (a bounded constant), so the net change is roughly `constant − μs`. When `μs` is large enough, the measure increases. All three measures assign a strictly positive weight to `s` in both constructors, so none can dominate the duplication.
+
+### What would be needed
+
+To handle `R_rec_succ`, a purely additive linear measure over subterms is insufficient because of the duplicated `s`. One would need either:
+- A **multiplicative/polynomial** interpretation (e.g., something where the `n`-structure multiplies the cost so that shrinking `n` reduces the number of `s` copies), or
+- A **lexicographic** measure with the structural size of the third argument (`n`) as the dominant component (which strictly decreases, ignoring the duplication in the lower component).
+
+None of μ1, μ2, μ3 does this, so **none of the three is a valid termination measure** for this calculus. (Note: the other seven rules are handled fine by all three; the flaw is isolated and identical across candidates.)

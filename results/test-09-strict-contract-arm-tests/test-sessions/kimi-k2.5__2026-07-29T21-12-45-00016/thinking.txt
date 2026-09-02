@@ -1,0 +1,483 @@
+The user wants me to assess whether a specific rewrite system (defined in Lean 4) is strongly normalizing based solely on the presented calculus.
+
+ First, let me understand the system:
+
+ 1. **Syntax**:
+    - `void` : a base term
+    - `delta t` : constructor
+    - `integrate t` : constructor
+    - `merge t1 t2` : binary constructor
+    - `app t1 t2` : binary constructor (application?)
+    - `recΔ t1 t2 t3` : ternary constructor (recursor?)
+    - `eqW t1 t2` : binary constructor (equality witness?)
+
+ 2. **Rewrite Rules**:
+    - `R_int_delta`: integrate (delta t) → void
+    - `R_merge_void_left`: merge void t → t
+    - `R_merge_void_right`: merge t void → t
+    - `R_merge_cancel`: merge t t → t
+    - `R_rec_zero`: recΔ b s void → b
+    - `R_rec_succ`: recΔ b s (delta n) → app s (recΔ b s n)
+    - `R_eq_refl`: eqW a a → void
+    - `R_eq_diff`: eqW a b → integrate (merge a b)  [when a ≠ b? The rule says ∀ a b, so it's unconditional]
+
+ Wait, looking at `R_eq_diff`: it rewrites `eqW a b` to `integrate (merge a b)` for any `a` and `b`. This is suspicious because if `a = b`, we have two rules applying: `R_eq_refl` and `R_eq_diff`. But the system is presented as a functional rewrite system (or at least we need to check confluence). However, the question is about **strong normalization** (SN), not confluence.
+
+ For strong normalization, we need to ensure there are no infinite rewrite sequences.
+
+ Let me analyze potential sources of non-termination:
+
+ 1. **Recursion via recΔ**:
+    - `recΔ b s (delta n) → app s (recΔ b s n)`
+    - This reduces the second argument (the `delta n` becomes `n` in the recursive call). 
+    - The `delta` constructor is peeled off.
+    - If we think of `n` as a "number" (with `void` as zero and `delta` as successor), then `recΔ` is a recursor that terminates because `n` gets structurally smaller (removing one `delta` layer per step).
+    - However, the result is wrapped in `app s ...`. 
+
+ 2. **merge rules**:
+    - `merge void t → t`
+    - `merge t void → t`
+    - `merge t t → t`
+    - These decrease the size of the term.
+
+ 3. **integrate/delta**:
+    - `integrate (delta t) → void`
+    - This decreases size.
+
+ 4. **eqW rules**:
+    - `eqW a a → void`
+    - `eqW a b → integrate (merge a b)`
+    - This replaces `eqW` with `integrate (merge a b)`.
+    - The size: `eqW a b` has size |a| + |b| + 1.
+    - `integrate (merge a b)` has size |a| + |b| + 2.
+    - Wait, this **increases** the size! 
+    - Let's check: 
+      - `eqW a b` → 1 + size(a) + size(b)
+      - `integrate (merge a b)` → 1 + size(merge a b) = 1 + (1 + size(a) + size(b)) = 2 + size(a) + size(b)
+    - So this is a size increase of 1.
+
+ But more importantly, does this lead to non-termination?
+ After `eqW a b → integrate (merge a b)`, we can rewrite `merge a b` if possible, but that leads to something smaller. However, `integrate` can only be reduced if its argument is `delta t`.
+
+ Wait, `integrate` only has one rule: `integrate (delta t) → void`.
+ So `integrate (merge a b)` is a normal form unless `merge a b` can be rewritten to `delta t` or something starting with `delta`.
+
+ But actually, `merge a b` can be reduced:
+ - If `a = void`, it becomes `b`
+ - If `b = void`, it becomes `a`
+ - If `a = b`, it becomes `a`
+
+ So if we have `eqW a b` where `a ≠ b` and neither is `void`, we get:
+ `eqW a b → integrate (merge a b)`
+ Now `merge a b` is stuck (if a and b are distinct normal forms not equal to void).
+ So `integrate (merge a b)` is a normal form.
+
+ But wait, what if `a` or `b` can be further reduced? The rules apply to any terms, not just normal forms. But strong normalization requires that every rewrite sequence terminates.
+
+ The critical issue is whether we can create cycles.
+
+ Let me look at the interaction between `eqW` and other constructors.
+
+ Suppose we have `eqW (delta t) (delta t)`.
+ We can apply:
+ - `R_eq_refl`: → `void`
+ - Or first reduce inside, but if we apply `R_eq_diff`: → `integrate (merge (delta t) (delta t))`
+ Then `merge (delta t) (delta t) → delta t` (by R_merge_cancel)
+ Then `integrate (delta t) → void`.
+ So both paths lead to `void`.
+
+ But what about `eqW (integrate (delta t)) void`?
+ `integrate (delta t) → void`, so `eqW void void → void`.
+
+ Is there any way to grow the term indefinitely?
+
+ Consider: `recΔ b s (eqW x y)`... wait, `recΔ` expects the third argument to be in specific forms (`void` or `delta n`). If we have `recΔ b s (eqW a b)`, this is a normal form with respect to the given rules? No, the rules for `recΔ` only match on `void` and `delta n`. So `recΔ b s (eqW a b)` is a normal form (stuck term).
+
+ The main risk for non-termination usually comes from:
+ 1. Recursive calls that don't decrease a measure (like `recΔ` - but here it does decrease the number of `delta` wrappers)
+ 2. Rules that duplicate subterms (like app in R_rec_succ: `app s (recΔ b s n)` - here `recΔ` is in the argument position, not duplicated)
+ 3. Rules that create larger terms that can loop.
+
+ Let's look at `R_rec_succ` again: `recΔ b s (delta n) → app s (recΔ b s n)`
+ The recursive call `recΔ b s n` has `n` which is smaller than `delta n` (in terms of the number of `delta` constructors).
+ So if we define a measure as the number of `delta` constructors in the third argument of `recΔ`, this decreases.
+
+ But what about the `app s ...` part? `app` doesn't have any rewrite rules! Looking at the definition of `Step`, there are no rules for `app`. So `app` is just a constructor that builds stuck terms (unless the arguments can be reduced).
+
+ So the system seems to be terminating, but I need to be careful about `R_eq_diff`.
+
+ `R_eq_diff` rewrites `eqW a b` to `integrate (merge a b)`.
+ If `a` and `b` are arbitrary, `merge a b` might be reducible, but eventually we get to a normal form.
+ Then `integrate` is applied to that normal form.
+ If the normal form is not of the form `delta t`, then `integrate` is stuck.
+
+ So `eqW` always reduces to something (either `void` or `integrate (merge ...)`), and doesn't create recursion.
+
+ Wait, is there any interaction that can cause growth?
+ For example, can `integrate (merge a b)` somehow create an `eqW` that loops back?
+
+ No, none of the rules produce `eqW` on the right-hand side except... wait, none do. The RHS of all rules are:
+ - `void`
+ - `t`
+ - `t`
+ - `t`
+ - `b`
+ - `app s (recΔ b s n)`
+ - `void`
+ - `integrate (merge a b)`
+
+ So `eqW` never appears on the RHS. Therefore, once we reduce an `eqW`, we never create a new one. So no loops involving `eqW`.
+
+ Similarly, `recΔ` appears on the RHS only in `R_rec_succ`, but with a smaller argument.
+
+ So intuitively, this system should be strongly normalizing.
+
+ However, I need to check the "STRICT EXECUTION CONTRACT":
+ - If a step duplicates a subterm S, first show the additive failure: M(after) = M(before) - 1 + M(S) and explain why no strict drop when M(S) >= 1.
+ - Only then propose a fix.
+ - State and check the key premise your chosen fix requires, and verify it explicitly. If you cannot discharge it, admit failure (CONSTRAINT BLOCKER).
+
+ This suggests I need to look for a step that duplicates a subterm.
+
+ Let's look at the rules again for duplication:
+ - `R_int_delta`: `integrate (delta t)` → `void`. No duplication.
+ - `R_merge_void_left`: `merge void t` → `t`. No duplication.
+ - `R_merge_void_right`: `merge t void` → `t`. No duplication.
+ - `R_merge_cancel`: `merge t t` → `t`. No duplication (the two occurrences of `t` on the left become one on the right).
+ - `R_rec_zero`: `recΔ b s void` → `b`. No duplication.
+ - `R_rec_succ`: `recΔ b s (delta n)` → `app s (recΔ b s n)`. Here, `s` appears once on the left and once on the right. `b` appears once. `n` appears once. The recursive call `recΔ b s n` appears once. No duplication.
+ - `R_eq_refl`: `eqW a a` → `void`. No duplication (two `a`s on left, zero on right).
+ - `R_eq_diff`: `eqW a b` → `integrate (merge a b)`. `a` and `b` each appear once on left and once inside `merge` on right. No duplication.
+
+ Wait, is there any rule that duplicates a subterm? It seems not.
+
+ But maybe I need to consider the measure function. The user mentions "M" which is likely a measure function mapping terms to natural numbers.
+
+ If no rule duplicates a subterm, then standard structural induction or a multiset ordering might work.
+
+ But the "STRICT EXECUTION CONTRACT" suggests there IS a duplicating step. Let me re-read carefully.
+
+ Maybe `R_rec_succ` is considered to duplicate because `s` is "used" in the result, but `s` was already there... no, that's not duplication.
+
+ Or maybe I need to look at `R_eq_diff` more carefully. It creates `merge a b` from `eqW a b`. If we think of the "size" as number of symbols:
+ - `eqW a b`: 1 + |a| + |b|
+ - `integrate (merge a b)`: 1 + (1 + |a| + |b|) = 2 + |a| + |b|
+ So size increases by 1.
+
+ But then `merge` can reduce, potentially decreasing size.
+
+ However, the contract mentions "If a step duplicates a subterm S". This is a specific instruction for the format of the answer if there is duplication.
+
+ Since I don't see obvious duplication, maybe the answer is that strong normalization CAN be established, and I don't need to invoke the contract about duplication?
+
+ Or perhaps I missed something. Let me look at `recΔ` again.
+
+ `recΔ b s (delta n) → app s (recΔ b s n)`
+
+ Is `s` duplicated? No, it appears once on each side.
+ Is `recΔ b s n` a duplication of something? No.
+
+ Wait, could it be that `app` is meant to represent application, and `s` is a function that might duplicate its argument? But no, the rewrite rules don't specify any reduction for `app`.
+
+ Unless... the system is supposed to be combined with beta-reduction? But the prompt says "no imported object-level axioms beyond the rules shown there". So `app` is just a binary constructor with no associated rewrite rules.
+
+ So there is no duplication in any rewrite step.
+
+ Therefore, strong normalization should be provable using a standard measure function.
+
+ Let me try to define a measure:
+ - M(void) = 1
+ - M(delta t) = M(t) + 1
+ - M(integrate t) = M(t) + 1
+ - M(merge t1 t2) = M(t1) + M(t2) + 1
+ - M(app t1 t2) = M(t1) + M(t2) + 1
+ - M(recΔ t1 t2 t3) = M(t1) + M(t2) + 2*M(t3) + 1  [weighted because t3 drives recursion]
+ - M(eqW t1 t2) = M(t1) + M(t2) + 1
+
+ Let's check each rule:
+
+ 1. `R_int_delta`: integrate (delta t) → void
+    - Before: M(integrate (delta t)) = M(delta t) + 1 = (M(t) + 1) + 1 = M(t) + 2
+    - After: M(void) = 1
+    - Drop: Yes, if M(t) >= 0.
+
+ 2. `R_merge_void_left`: merge void t → t
+    - Before: M(merge void t) = 1 + 1 + M(t) = M(t) + 2
+    - After: M(t)
+    - Drop: 2.
+
+ 3. `R_merge_void_right`: merge t void → t
+    - Before: M(t) + 2
+    - After: M(t)
+    - Drop: 2.
+
+ 4. `R_merge_cancel`: merge t t → t
+    - Before: M(t) + M(t) + 1 = 2*M(t) + 1
+    - After: M(t)
+    - Drop: M(t) + 1 >= 1.
+
+ 5. `R_rec_zero`: recΔ b s void → b
+    - Before: M(b) + M(s) + 2*1 + 1 = M(b) + M(s) + 3
+    - After: M(b)
+    - Drop: M(s) + 3.
+
+ 6. `R_rec_succ`: recΔ b s (delta n) → app s (recΔ b s n)
+    - Before: M(b) + M(s) + 2*(M(n)+1) + 1 = M(b) + M(s) + 2*M(n) + 3
+    - After: M(s) + (M(b) + M(s) + 2*M(n) + 1) + 1 = M(b) + 2*M(s) + 2*M(n) + 2
+    - Change: After - Before = (M(b) + 2*M(s) + 2*M(n) + 2) - (M(b) + M(s) + 2*M(n) + 3) = M(s) - 1
+    - This is NOT strictly decreasing if M(s) >= 1!
+
+ Ah! Here is the problem. The weight on the third argument of recΔ needs to be large enough to compensate for the introduction of M(s) in the result.
+
+ In `R_rec_succ`, we replace `recΔ b s (delta n)` with `app s (recΔ b s n)`.
+ The recursive call `recΔ b s n` has the same `b` and `s`, but `n` instead of `delta n`.
+ If we define M(recΔ b s n) = M(b) + M(s) + k*M(n) + c, then:
+ - Before: M(b) + M(s) + k*(M(n)+1) + c = M(b) + M(s) + k*M(n) + k + c
+ - After: M(s) + M(recΔ b s n) + 1 = M(s) + (M(b) + M(s) + k*M(n) + c) + 1 = M(b) + 2*M(s) + k*M(n) + c + 1
+ - For decrease: M(b) + M(s) + k*M(n) + k + c > M(b) + 2*M(s) + k*M(n) + c + 1
+ - Simplifies: M(s) + k > 2*M(s) + 1
+ - So: k > M(s) + 1
+
+ But M(s) can be arbitrarily large! So no constant weight k works.
+
+ This is the standard problem with recursors/iterators: the step function `s` is duplicated or added to the result, which can cause the measure to increase if we don't handle it properly.
+
+ However, in this case, `s` is not duplicated in the recursive call. The problem is that `M(app s (recΔ b s n))` includes M(s) explicitly, while `M(recΔ b s (delta n))` includes M(s) only once in the "call" part.
+
+ Wait, my formula for M(recΔ ...) includes M(s) linearly. But in the result, we have `app s ...` which also includes M(s) linearly. So we have:
+ Before: M(b) + M(s) + k*(M(n)+1) + c
+ After: M(s) + M(recΔ b s n) + 1 = M(s) + M(b) + M(s) + k*M(n) + c + 1 = M(b) + 2*M(s) + k*M(n) + c + 1
+
+ Difference: (M(b) + M(s) + k*M(n) + k + c) - (M(b) + 2*M(s) + k*M(n) + c + 1) = k - M(s) - 1
+
+ For this to be positive (decrease), we need k > M(s) + 1.
+
+ Since M(s) can be arbitrarily large, we cannot choose a constant k.
+
+ This means a simple weighted sum won't work directly.
+
+ Alternative approach: Use an ordinal measure, or a lexicographic combination.
+
+ Or, notice that `recΔ` is structurally recursive on the third argument. The standard way to handle this is to say that the complexity of `recΔ b s n` is primarily determined by n, and secondarily by the other components.
+
+ Specifically, we can use the lexicographic order: (M(n), ...) where the first component is the "height" of the third argument.
+
+ But the RHS `app s (recΔ b s n)` contains `recΔ b s n` which has a smaller third argument (n vs delta n), but wrapped in `app s`.
+
+ So we can define the measure as the ordinal ω * M(n) + ... or simply use multiset ordering.
+
+ Actually, the standard solution for primitive recursion is to use a measure that assigns to `recΔ b s n` a value that decreases lexicographically: first the size of n, then something else.
+
+ But here, the result embeds the recursive call inside `app s`. So the "size" of the term increases by adding `s` on top.
+
+ However, the recursive call has a strictly smaller third argument (removing one `delta`).
+
+ So we can define:
+ M(recΔ b s n) = (M(n), M(b) + M(s)) with lexicographic order?
+ No, we need a single natural number or well-founded measure.
+
+ We can map to ordinals: M(recΔ b s n) = ω^{M(n)} * (M(b) + M(s) + 1) or something similar.
+
+ Let's try:
+ M(void) = 1
+ M(delta t) = M(t) + 1
+ M(integrate t) = M(t) + 1
+ M(merge t1 t2) = max(M(t1), M(t2)) + 1  [or sum]
+ M(app t1 t2) = max(M(t1), M(t2)) + 1
+ M(recΔ b s n) = ω * M(n) + M(b) + M(s)  [ordinal arithmetic]
+ M(eqW t1 t2) = max(M(t1), M(t2)) + 1
+
+ Check R_rec_succ:
+ Before: ω * (M(n) + 1) + M(b) + M(s) = ω * M(n) + ω + M(b) + M(s)
+ After: M(app s (recΔ b s n)) = max(M(s), ω * M(n) + M(b) + M(s)) + 1 = ω * M(n) + M(b) + M(s) + 1  [assuming ω dominates finite numbers]
+ Comparison: ω * M(n) + ω + M(b) + M(s) > ω * M(n) + M(b) + M(s) + 1 because ω > 1.
+ So yes, this decreases.
+
+ Check other rules:
+ R_rec_zero: ω * 1 + M(b) + M(s) = ω + M(b) + M(s) > M(b) (finite). Good.
+
+ R_int_delta: M(integrate (delta t)) = M(delta t) + 1 = M(t) + 2 > 1 = M(void). Good.
+
+ R_eq_diff: M(eqW a b) = max(M(a), M(b)) + 1
+ M(integrate (merge a b)) = M(merge a b) + 1 = max(M(a), M(b)) + 2
+ Wait, this increases! max(M(a), M(b)) + 1 → max(M(a), M(b)) + 2.
+
+ So with this measure, R_eq_diff increases the measure by 1.
+
+ But R_eq_diff doesn't lead to recursion. After applying R_eq_diff, we get `integrate (merge a b)`. This can be reduced further only if `merge a b` reduces. Eventually we get to a normal form.
+
+ So we need to ensure that R_eq_diff cannot be applied infinitely often. But since eqW doesn't appear on the RHS of any rule, we can only apply R_eq_diff once per eqW occurrence. Since the process eliminates eqW and doesn't create new ones, and all other rules decrease the measure or terminate, the whole system should be SN.
+
+ However, the issue with R_eq_diff increasing the measure means we can't use a simple global measure that decreases with every step. We need a more sophisticated approach.
+
+ But actually, for strong normalization, we don't need every step to decrease a global measure. We just need to show there are no infinite sequences.
+
+ We can use the concept of "reduction ordering" or show that the rewrite relation is contained in a well-founded ordering.
+
+ The standard approach for such systems is to use a polynomial interpretation or recursive path ordering (RPO).
+
+ Let's try RPO with a precedence:
+ recΔ > app > integrate > merge > delta > void
+ and eqW > integrate > merge > ...
+
+ Actually, for R_rec_succ: recΔ b s (delta n) → app s (recΔ b s n)
+ We need recΔ(...) > app(s, recΔ(...))
+ In RPO, this holds if:
+ - recΔ > app (in precedence), and recΔ(...) > s, and recΔ(...) > recΔ b s n.
+ recΔ b s (delta n) > recΔ b s n because (delta n) > n in the subterm ordering (if we consider delta > nothing).
+ Wait, RPO compares: if the top function symbol is greater, and the left side is greater than all subterms of the right side...
+ Actually, for RPO: s = f(s1, ..., sn) > g(t1, ..., tm) = t if either:
+ 1. f > g and s > tj for all j, or
+ 2. f = g and (s1, ..., sn) >lex (t1, ..., tm), or
+ 3. s >= ti for some i.
+
+ For recΔ b s (delta n) > app s (recΔ b s n):
+ We need recΔ > app.
+ And we need recΔ b s (delta n) > s (true, subterm)
+ And recΔ b s (delta n) > recΔ b s n.
+
+ For recΔ b s (delta n) > recΔ b s n:
+ These have the same top symbol. Compare arguments lexicographically: (b, s, delta n) vs (b, s, n).
+ b = b, s = s, then delta n > n.
+ If we consider delta > nothing (or delta increases the size), then in RPO with lexicographic status on recΔ, we need the third argument to be compared.
+ Since delta n contains n as a subterm, delta n > n in the subterm ordering.
+ So yes, recΔ b s (delta n) > recΔ b s n.
+
+ So RPO works for R_rec_succ if recΔ > app and recΔ has lexicographic status.
+
+ Now check R_eq_diff: eqW a b → integrate (merge a b)
+ We need eqW > integrate.
+ And eqW a b > merge a b? 
+ And eqW a b > a, eqW a b > b (obvious).
+ Is eqW a b > merge a b?
+ If eqW > merge, and eqW a b > a and eqW a b > b, then yes.
+
+ But we also need the result to be smaller. integrate (merge a b) vs eqW a b.
+ If eqW > integrate, and eqW a b > merge a b, then eqW a b > integrate (merge a b).
+
+ So RPO seems to work with the precedence:
+ recΔ > app
+ recΔ > void, delta, integrate, merge, eqW (for other rules)
+ eqW > integrate
+ integrate > merge (for R_int_delta? No, integrate (delta t) → void, so integrate > void or just check subterm)
+ Actually for R_int_delta: integrate (delta t) → void.
+ We need integrate (delta t) > void. Since void is a constant and integrate (delta t) is a term containing t, and assuming all terms > void, this is fine.
+
+ Wait, RPO requires that for a rule l → r, we have l > r in the ordering.
+ For R_eq_diff: eqW a b > integrate (merge a b).
+ This requires eqW > integrate.
+ And eqW a b > merge a b (since merge a b is a subterm of the RHS, and we need l > all subterms of r if the top changes? No.
+ If eqW > integrate, then we need eqW a b > merge a b (the argument of integrate).
+ Is eqW a b > merge a b?
+ If eqW > merge, then yes (since eqW a b > a and eqW a b > b).
+ So we need eqW > merge.
+
+ Also for R_merge_cancel: merge t t → t.
+ We need merge t t > t.
+ This is true if merge has multiset status or lexicographic and we can show it, but actually for unary/binary operators, merge t t > t by the subterm property (merge t t contains t as a subterm).
+
+ For R_rec_succ, we established it works with recΔ > app and lexicographic status on recΔ checking the third argument.
+
+ So with precedence:
+ recΔ > app > ... 
+ eqW > integrate > merge > delta > void
+ and appropriate status (lexicographic for recΔ on third argument, multiset for merge?).
+
+ Wait, for merge rules:
+ R_merge_void_left: merge void t > t.
+ Since merge void t contains t as proper subterm? No, t is a direct subterm.
+ In RPO, if s contains t as a proper subterm, does s > t? Not necessarily, but usually we can arrange it.
+
+ Actually, in RPO, if s = f(..., t, ...), then s > t by the subterm property (if we assume the ordering respects the subterm relation).
+
+ So yes, merge void t > t.
+
+ So RPO seems to establish SN.
+
+ But wait, the contract mentions "If a step duplicates a subterm S". I need to check if I missed a duplicating rule.
+
+ Looking back at R_rec_succ: recΔ b s (delta n) → app s (recΔ b s n).
+ Does this duplicate s? s appears once on the left and once on the right. No.
+ Does it duplicate recΔ? No, there's one recursive call.
+
+ What about R_eq_diff? It creates merge a b from a and b. No duplication.
+
+ Is there any hidden duplication? Maybe in the interpretation of recΔ?
+ The user might be thinking of recΔ as a recursor where s is applied repeatedly, and in the meta-theory, this might duplicate s. But at the object level, the term `app s (recΔ ...)` does not duplicate the term s.
+
+ Unless... the system is intended to be combined with unfolding of app? But there are no rules for app.
+
+ So I think there is no duplication. The contract might be a generic instruction, or I might be missing something subtle.
+
+ Actually, looking at the contract again: "If a step duplicates a subterm S, first show the additive failure..."
+ This is a conditional instruction. If there is no such step, I don't need to do this.
+
+ So my assessment: Yes, strong normalization can be established.
+
+ But I need to be careful about the R_eq_diff rule increasing the size/ordinal. However, as noted, it doesn't create cycles.
+
+ So the answer is that SN holds, provable by RPO or ordinal assignments.
+
+ But let me reconsider the R_rec_succ measure issue. Even though ordinals work, maybe the user expects me to spot the "duplication" issue with s appearing in the result?
+
+ In R_rec_succ, s is preserved and passed to app. In the recursive call recΔ b s n, s is also present. So s is "carried along" but not duplicated.
+
+ However, in terms of "additive failure", if I try to use a weighted sum:
+ M(recΔ b s n) = M(b) + c*M(s) + k*M(n)
+ Then for R_rec_succ:
+ Before: M(b) + c*M(s) + k*(M(n)+1) = M(b) + c*M(s) + k*M(n) + k
+ After: M(s) + M(recΔ b s n) = M(s) + M(b) + c*M(s) + k*M(n) = M(b) + (c+1)*M(s) + k*M(n)
+ For decrease: c > 1 and k > M(s) + something... wait.
+
+ If c=1:
+ Before: M(b) + M(s) + k*M(n) + k
+ After: M(b) + 2*M(s) + k*M(n)
+ Decrease requires: M(s) + k > 2*M(s) => k > M(s).
+ Not possible for constant k.
+
+ So weighted sum fails. This is the "additive failure" the contract talks about? But it mentions "duplicates a subterm S". Here s is not duplicated, but the coefficient of M(s) increases from 1 to 2.
+
+ Actually, in the recursive call, s is still there, and we also have s in the app. So s appears twice in the " unfolded" view? No, in the term `app s (recΔ b s n)`, s appears once, and inside recΔ, s appears effectively once (in the measure).
+
+ Wait, if we look at the "unfolding" of recΔ over n delta's, we get:
+ recΔ b s (delta^n void) → app s (app s (... (app s b)...))
+ So after n steps, we have n copies of s!
+ This means that semantically, recΔ duplicates s n times.
+
+ But in the single step R_rec_succ, we don't duplicate s. We just create one app and one recursive call.
+
+ However, for strong normalization, we care about the entire reduction tree.
+
+ The contract says: "If a step duplicates a subterm S..."
+ This is about a single rewrite step, not the transitive closure.
+
+ So I think I'm overthinking. There is no duplicating step in the given rules.
+
+ Therefore, my assessment is: Yes, SN can be established using Recursive Path Ordering (RPO) with a suitable precedence and status, or using ordinal assignments.
+
+ But I should mention the issue with R_rec_succ requiring lexicographic comparison or ordinal ω, and R_eq_diff being "harmless" despite increasing simple term size because it eliminates eqW.
+
+ Actually, looking at the strict contract again, maybe I need to follow it anyway? "If a step duplicates..." - since no step duplicates, I can proceed normally.
+
+ So final plan:
+ 1. State that strong normalization holds.
+ 2. Explain that all rules are either structural decreases or can be handled by RPO.
+ 3. Specifically note that R_rec_succ decreases the third argument (the recursion argument) which dominates the increase from appending s.
+ 4. Note that R_eq_diff eliminates eqW and does not recreate it, so despite local increase, it terminates.
+
+ Wait, I should double-check: does R_eq_diff terminate? Yes, because eqW → integrate (merge ...), and then merge reduces, and integrate either reduces (if merge produces delta) or gets stuck. No new eqW is created.
+
+ So yes.
+
+ One final check: are there any critical pairs or overlapping rules that could cause issues? Not for SN. Overlapping rules don't prevent SN.
+
+ So the answer is yes.
+
+ But I want to make sure about the "no variable binding" part. The calculus has no binders (no lambda, no forall, etc.), so substitution is not an issue. This is first-order.
+
+ "No external memory" - ok.
+ "No imported object-level axioms" - ok.
+
+ So strong normalization can be established from the calculus alone.
+
+ I will provide the assessment and brief reasoning.

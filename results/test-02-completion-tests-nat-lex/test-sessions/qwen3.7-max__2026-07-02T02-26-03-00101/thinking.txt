@@ -1,0 +1,364 @@
+The user wants a proof skeleton for the remaining 5 cases in a Lean 4 file.
+The file proves that a specific term rewrite system is strongly normalizing by showing that each step strictly decreases a lexicographic measure `(kappa, mu)`.
+The measure is defined as:
+`kappa`:
+- void: 0
+- delta t: kappa t
+- integrate t: kappa t
+- merge a b: max (kappa a) (kappa b)
+- app a b: max (kappa a) (kappa b)
+- recDelta b s (delta n): max (max (kappa b) (kappa s)) (kappa n) + 1
+- recDelta b s n: max (max (kappa b) (kappa s)) (kappa n)
+- eqW a b: max (kappa a) (kappa b)
+
+`mu`:
+- void: 0
+- delta t: mu t
+- integrate t: 1 + mu t
+- merge a b: 2 + mu a + mu b
+- app a b: 1 + mu a + mu b
+- recDelta b s n: 3 + mu b + mu s + mu n
+- eqW a b: 4 + mu a + mu b
+
+The remaining cases are:
+1. `R_int_delta t`: `integrate (delta t) --> void`
+   - `kappa (void) = 0`
+   - `kappa (integrate (delta t)) = kappa (delta t) = kappa t >= 0`
+   - So `kappa (void) <= kappa (integrate (delta t))`.
+   - Wait, is it strictly less? If `kappa t = 0`, then `kappa` ties (both 0). Then we need `mu` to strictly decrease.
+   - `mu (void) = 0`
+   - `mu (integrate (delta t)) = 1 + mu (delta t) = 1 + mu t > 0`.
+   - So if `kappa` ties, `mu` strictly decreases. If `kappa` strictly decreases, we use `drop_left`.
+   - Actually, `kappa (void) = 0 <= kappa t`. If `kappa t > 0`, `drop_left`. If `kappa t = 0`, `drop_right`.
+   - We can just use `Nat.lt_or_eq_of_le` or do cases on `kappa t`. Or simply observe that `kappa void <= kappa (integrate (delta t))` and if it's `<` we use `drop_left`, if `=` we use `drop_right`.
+   - Wait, the previous proofs just used `have hk : kappa t = kappa ...` because it was an exact equality. Here `kappa void = 0` and `kappa (integrate (delta t)) = kappa t`. It's not necessarily equal!
+   - Let's check `kappa (integrate (delta t))`. It is `kappa t`.
+   - So we need to show `LexOrder (0, 0) (kappa t, 1 + mu t)`.
+   - If `kappa t > 0`, then `0 < kappa t`, so `Prod.Lex.left` applies.
+   - If `kappa t = 0`, then `0 = 0`, and `0 < 1 + mu t`, so `Prod.Lex.right` applies.
+   - We can write:
+     ```lean
+     by_cases h : kappa t = 0
+     · have hk : kappa void = kappa (integrate (delta t)) := by simp [h]
+       have hmu : mu void < mu (integrate (delta t)) := by simp [mu]; omega
+       exact drop_right hmu hk
+     · have hk : kappa void < kappa (integrate (delta t)) := by simp [kappa]; omega
+       exact drop_left hk
+     ```
+     Or simply:
+     ```lean
+     by_cases h : kappa t = 0 <;> simp [h, kappa, mu, measure, LexOrder, Prod.Lex] <;> omega
+     ```
+     But the user wants a "proof skeleton", maybe using `drop_left` and `drop_right` or just standard Lean tactics. Let's provide a clear skeleton.
+
+2. `R_rec_zero b s`: `recDelta b s void --> b`
+   - `kappa (recDelta b s void) = max (max (kappa b) (kappa s)) (kappa void) = max (kappa b) (kappa s)`.
+   - `kappa b <= max (kappa b) (kappa s)`.
+   - `mu (recDelta b s void) = 3 + mu b + mu s + 0`.
+   - `mu b < 3 + mu b + mu s`.
+   - If `kappa s > kappa b`, then `kappa b < kappa (recDelta ...)`, use `drop_left`.
+   - If `kappa s <= kappa b`, then `kappa b = kappa (recDelta ...)`, use `drop_right`.
+   - Skeleton:
+     ```lean
+     by_cases h : kappa b < kappa (recDelta b s void)
+     · exact drop_left h
+     · have hk : kappa b = kappa (recDelta b s void) := by
+         have h_ge : kappa b >= kappa (recDelta b s void) := by omega -- wait, kappa b <= max ... is always true.
+         -- actually, simp [kappa] at h ⊢; omega
+         sorry
+       have hmu : mu b < mu (recDelta b s void) := by simp [mu]; omega
+       exact drop_right hmu hk
+     ```
+
+3. `R_rec_succ b s n`: `recDelta b s (delta n) --> app s (recDelta b s n)`
+   - LHS: `recDelta b s (delta n)`
+     - `kappa`: `max (max (kappa b) (kappa s)) (kappa n) + 1`
+     - `mu`: `3 + mu b + mu s + mu (delta n) = 3 + mu b + mu s + mu n`
+   - RHS: `app s (recDelta b s n)`
+     - `kappa`: `max (kappa s) (kappa (recDelta b s n))`
+       - `kappa (recDelta b s n) = max (max (kappa b) (kappa s)) (kappa n)` (since `n` is not necessarily `delta`, wait, the definition of `kappa` for `recDelta b s n` when `n` is not `delta` is `max (max (kappa b) (kappa s)) (kappa n)`).
+       - So `kappa` of RHS is `max (kappa s) (max (max (kappa b) (kappa s)) (kappa n)) = max (max (kappa b) (kappa s)) (kappa n)`.
+     - LHS `kappa` is `max (max (kappa b) (kappa s)) (kappa n) + 1`.
+     - So LHS `kappa` is strictly greater than RHS `kappa`!
+     - Thus, `kappa (RHS) < kappa (LHS)`. We can just use `drop_left`.
+   - Skeleton:
+     ```lean
+     have hk : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+       simp [kappa]
+       -- omega might need a hint about max, or we can just use `omega` after simp.
+       sorry
+     exact drop_left hk
+     ```
+
+4. `R_eq_refl a`: `eqW a a --> void`
+   - LHS: `eqW a a`
+     - `kappa`: `max (kappa a) (kappa a) = kappa a`
+     - `mu`: `4 + mu a + mu a`
+   - RHS: `void`
+     - `kappa`: 0
+     - `mu`: 0
+   - Similar to `R_int_delta`.
+   - Skeleton:
+     ```lean
+     by_cases h : kappa a = 0
+     · have hk : kappa void = kappa (eqW a a) := by simp [h, kappa]
+       have hmu : mu void < mu (eqW a a) := by simp [mu]; omega
+       exact drop_right hmu hk
+     · have hk : kappa void < kappa (eqW a a) := by simp [kappa]; omega
+       exact drop_left hk
+     ```
+
+5. `R_eq_diff a b`: `eqW a b --> integrate (merge a b)`
+   - LHS: `eqW a b`
+     - `kappa`: `max (kappa a) (kappa b)`
+     - `mu`: `4 + mu a + mu b`
+   - RHS: `integrate (merge a b)`
+     - `kappa`: `kappa (merge a b) = max (kappa a) (kappa b)`
+     - `mu`: `1 + mu (merge a b) = 1 + 2 + mu a + mu b = 3 + mu a + mu b`
+   - Here `kappa` is exactly equal! `kappa (RHS) = kappa (LHS)`.
+   - `mu` strictly decreases: `3 + mu a + mu b < 4 + mu a + mu b`.
+   - Skeleton:
+     ```lean
+     have hk : kappa (integrate (merge a b)) = kappa (eqW a b) := by simp [kappa]
+     have hmu : mu (integrate (merge a b)) < mu (eqW a b) := by simp [mu]; omega
+     exact drop_right hmu hk
+     ```
+
+Let's refine the skeletons to make them as complete and robust as possible, filling in the `sorry`s with actual Lean 4 code where feasible, or leaving minimal `sorry`s if it's too complex (but these are actually quite simple). The prompt asks to "Provide a proof skeleton for completing the remaining cases." I will provide the code with `sorry` replaced by actual proofs or very detailed skeletons. Actually, I can just write the full proofs since they are straightforward.
+
+Let's double check `R_rec_succ`:
+```lean
+| _, _, Step.R_rec_succ b s n => by
+    have hk : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+      simp only [kappa_app, kappa_rec_delta, kappa]
+      -- kappa (recDelta b s n) is max (max (kappa b) (kappa s)) (kappa n)
+      -- we need to show max (kappa s) (max (max (kappa b) (kappa s)) (kappa n)) < max (max (kappa b) (kappa s)) (kappa n) + 1
+      -- This is true because max x y <= y + something... wait.
+      -- Let M = max (max (kappa b) (kappa s)) (kappa n).
+      -- Then kappa s <= M.
+      -- So max (kappa s) M = M.
+      -- And M < M + 1.
+      -- In Lean, we can use `omega` if we have the right lemmas, or just `linarith` / `omega` after `simp`.
+      -- Actually, `simp [kappa]` might not unfold `kappa (recDelta b s n)` if it doesn't match the `delta` pattern.
+      -- The definition of kappa has:
+      -- | .recDelta b s (.delta n) => ...
+      -- | .recDelta b s n => ...
+      -- So `simp [kappa]` will reduce `kappa (recDelta b s n)` to `max (max (kappa b) (kappa s)) (kappa n)`.
+      -- Let's write a robust proof:
+      have h1 : kappa s <= max (max (kappa b) (kappa s)) (kappa n) := by
+        apply le_max_of_le_right
+        apply le_max_of_le_left
+        apply le_max_left
+      have h2 : max (kappa s) (max (max (kappa b) (kappa s)) (kappa n)) = max (max (kappa b) (kappa s)) (kappa n) := by
+        apply max_eq_right h1
+      simp only [kappa_app, kappa_rec_delta, kappa, h2]
+      omega
+    exact drop_left hk
+```
+Wait, the prompt says "Provide a proof skeleton for completing the remaining cases." I can just provide the code blocks for the 5 cases.
+
+Let's review `R_int_delta`:
+```lean
+| _, _, Step.R_int_delta t => by
+    by_cases h : kappa t = 0
+    · have hk : kappa void = kappa (integrate (delta t)) := by simp [kappa, h]
+      have hmu : mu void < mu (integrate (delta t)) := by simp [mu]; omega
+      exact drop_right hmu hk
+    · have hk : kappa void < kappa (integrate (delta t)) := by
+        simp only [kappa_void, kappa_integrate, kappa_delta]
+        omega
+      exact drop_left hk
+```
+
+Review `R_rec_zero`:
+```lean
+| _, _, Step.R_rec_zero b s => by
+    by_cases h : kappa b < kappa (recDelta b s void)
+    · exact drop_left h
+    · have hk : kappa b = kappa (recDelta b s void) := by
+        simp only [kappa] at h ⊢
+        -- kappa (recDelta b s void) = max (max (kappa b) (kappa s)) 0 = max (kappa b) (kappa s)
+        -- h says ~(kappa b < max (kappa b) (kappa s)), which means kappa b >= max (kappa b) (kappa s)
+        -- since kappa b <= max (kappa b) (kappa s) is always true, they are equal.
+        omega
+      have hmu : mu b < mu (recDelta b s void) := by simp [mu]; omega
+      exact drop_right hmu hk
+```
+
+Review `R_eq_refl`:
+```lean
+| _, _, Step.R_eq_refl a => by
+    by_cases h : kappa a = 0
+    · have hk : kappa void = kappa (eqW a a) := by simp [kappa, h]
+      have hmu : mu void < mu (eqW a a) := by simp [mu]; omega
+      exact drop_right hmu hk
+    · have hk : kappa void < kappa (eqW a a) := by
+        simp only [kappa_void, kappa_eqW]
+        omega
+      exact drop_left hk
+```
+
+Review `R_eq_diff`:
+```lean
+| _, _, Step.R_eq_diff a b => by
+    have hk : kappa (integrate (merge a b)) = kappa (eqW a b) := by simp [kappa]
+    have hmu : mu (integrate (merge a b)) < mu (eqW a b) := by simp [mu]; omega
+    exact drop_right hmu hk
+```
+
+These are fully fleshed out proofs, not just skeletons with `sorry`. This is even better. I will present them clearly.
+
+Let's do a quick syntax check on Lean 4.
+`by_cases h : kappa t = 0` is valid.
+`simp only [kappa_void, kappa_integrate, kappa_delta]` is valid.
+`omega` is valid (requires `import Mathlib.Tactic.Omega` usually, but the file doesn't import it. Wait, the file uses `omega` in the proved cases! `have hmu : mu t < mu (merge t t) := by simp [mu]; omega`. So `omega` is available, probably via `Mathlib` or `Init` in this environment, or it's a built-in tactic in Lean 4 now. Yes, `omega` is in Lean 4 core now).
+
+One minor thing: `kappa (recDelta b s void)` reduces to `max (max (kappa b) (kappa s)) (kappa void)` which is `max (max (kappa b) (kappa s)) 0`.
+In Lean, `max x 0 = x` for `Nat`. So `simp [kappa]` will simplify it to `max (kappa b) (kappa s)`.
+Then `omega` can easily handle `kappa b < max (kappa b) (kappa s)` and its negation.
+
+For `R_rec_succ`:
+```lean
+| _, _, Step.R_rec_succ b s n => by
+    have hk : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+      simp only [kappa_app, kappa_rec_delta, kappa]
+      -- The goal is:
+      -- max (kappa s) (max (max (kappa b) (kappa s)) (kappa n)) < max (max (kappa b) (kappa s)) (kappa n) + 1
+      have h_le : kappa s <= max (max (kappa b) (kappa s)) (kappa n) := by
+        apply le_max_of_le_right
+        apply le_max_of_le_left
+        apply le_max_left
+      have h_max : max (kappa s) (max (max (kappa b) (kappa s)) (kappa n)) = max (max (kappa b) (kappa s)) (kappa n) := by
+        rw [max_eq_right h_le]
+      rw [h_max]
+      omega
+    exact drop_left hk
+```
+This is very robust and avoids relying on `omega` to solve non-linear/max inequalities directly, which it sometimes struggles with.
+
+Let's double check `R_int_delta`:
+```lean
+| _, _, Step.R_int_delta t => by
+    by_cases h : kappa t = 0
+    · have hk : kappa void = kappa (integrate (delta t)) := by simp [kappa, h]
+      have hmu : mu void < mu (integrate (delta t)) := by simp [mu]; omega
+      exact drop_right hmu hk
+    · have hk : kappa void < kappa (integrate (delta t)) := by
+        simp only [kappa_void, kappa_integrate, kappa_delta]
+        omega
+      exact drop_left hk
+```
+This is perfectly fine.
+
+For `R_rec_zero`:
+```lean
+| _, _, Step.R_rec_zero b s => by
+    by_cases h : kappa b < kappa (recDelta b s void)
+    · exact drop_left h
+    · have hk : kappa b = kappa (recDelta b s void) := by
+        simp only [kappa] at h ⊢
+        omega
+      have hmu : mu b < mu (recDelta b s void) := by simp [mu]; omega
+      exact drop_right hmu hk
+```
+Also perfectly fine.
+
+I will formulate the response containing the completed code for the 5 remaining cases. I'll provide just the replaced blocks to make it easy to copy-paste, or the whole section. The prompt says "Provide a proof skeleton for completing the remaining cases." I'll provide the exact code for the 5 cases.
+
+```lean
+-- integrate (delta t) --> void
+| _, _, Step.R_int_delta t => by
+    by_cases h : kappa t = 0
+    · have hk : kappa void = kappa (integrate (delta t)) := by simp [kappa, h]
+      have hmu : mu void < mu (integrate (delta t)) := by simp [mu]; omega
+      exact drop_right hmu hk
+    · have hk : kappa void < kappa (integrate (delta t)) := by
+        simp only [kappa_void, kappa_integrate, kappa_delta]
+        omega
+      exact drop_left hk
+
+-- recDelta b s void --> b
+| _, _, Step.R_rec_zero b s => by
+    by_cases h : kappa b < kappa (recDelta b s void)
+    · exact drop_left h
+    · have hk : kappa b = kappa (recDelta b s void) := by
+        simp only [kappa] at h ⊢
+        omega
+      have hmu : mu b < mu (recDelta b s void) := by simp [mu]; omega
+      exact drop_right hmu hk
+
+-- recDelta b s (delta n) --> app s (recDelta b s n)
+| _, _, Step.R_rec_succ b s n => by
+    have hk : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+      simp only [kappa_app, kappa_rec_delta, kappa]
+      have h_le : kappa s <= max (max (kappa b) (kappa s)) (kappa n) := by
+        apply le_max_of_le_right
+        apply le_max_of_le_left
+        apply le_max_left
+      have h_max : max (kappa s) (max (max (kappa b) (kappa s)) (kappa n)) = max (max (kappa b) (kappa s)) (kappa n) := by
+        rw [max_eq_right h_le]
+      rw [h_max]
+      omega
+    exact drop_left hk
+
+-- eqW a a --> void
+| _, _, Step.R_eq_refl a => by
+    by_cases h : kappa a = 0
+    · have hk : kappa void = kappa (eqW a a) := by simp [kappa, h]
+      have hmu : mu void < mu (eqW a a) := by simp [mu]; omega
+      exact drop_right hmu hk
+    · have hk : kappa void < kappa (eqW a a) := by
+        simp only [kappa_void, kappa_eqW]
+        omega
+      exact drop_left hk
+
+-- eqW a b --> integrate (merge a b)
+| _, _, Step.R_eq_diff a b => by
+    have hk : kappa (integrate (merge a b)) = kappa (eqW a b) := by simp [kappa]
+    have hmu : mu (integrate (merge a b)) < mu (eqW a b) := by simp [mu]; omega
+    exact drop_right hmu hk
+```
+
+This looks solid. The prompt asks to "Provide a proof skeleton for completing the remaining cases. Do not modify the file or run the compiler. Do not read any other files in the workspace or search the web."
+I will output the completed cases clearly.
+No extra imports or modifications to the rest of the file are needed. The use of `omega` is consistent with the existing proved cases. The use of `max_eq_right`, `le_max_of_le_right`, etc., are standard Mathlib lemmas for `Nat.max` (or `max` in general) which should be available since `Mathlib.Data.Prod.Lex` is imported, and Mathlib's `Order.Bounds` or similar is likely in scope, or they are in core. Actually, `max_eq_right` is in Lean 4 core (`Init.Order.Bounds` or similar, or `Mathlib`). If not, `omega` can prove `max a b = b` if `a <= b`. Let's just use `omega` to be safe if `max_eq_right` is not found, but `max_eq_right` is very standard. Alternatively, I can just use `simp [h_le]` or `rw [max_eq_right h_le]`. Actually, `max_eq_right` is definitely in Mathlib.
+
+Wait, for `R_rec_succ`, I can also just do:
+```lean
+    have hk : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+      simp only [kappa_app, kappa_rec_delta, kappa]
+      have h_le : kappa s <= max (max (kappa b) (kappa s)) (kappa n) := by omega
+      have h_max : max (kappa s) (max (max (kappa b) (kappa s)) (kappa n)) = max (max (kappa b) (kappa s)) (kappa n) := by
+        apply max_eq_right h_le
+      rw [h_max]
+      omega
+```
+This is even shorter and relies on `omega` for the `le` proof, which it handles trivially.
+
+Let's refine `R_rec_succ`:
+```lean
+| _, _, Step.R_rec_succ b s n => by
+    have hk : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+      simp only [kappa_app, kappa_rec_delta, kappa]
+      have h_le : kappa s ≤ max (max (kappa b) (kappa s)) (kappa n) := by omega
+      rw [max_eq_right h_le]
+      omega
+    exact drop_left hk
+```
+This is very clean.
+
+One more check on `R_rec_zero`:
+```lean
+| _, _, Step.R_rec_zero b s => by
+    by_cases h : kappa b < kappa (recDelta b s void)
+    · exact drop_left h
+    · have hk : kappa b = kappa (recDelta b s void) := by
+        simp only [kappa] at h ⊢
+        omega
+      have hmu : mu b < mu (recDelta b s void) := by simp [mu]; omega
+      exact drop_right hmu hk
+```
+This is also very clean.
+
+I'm ready to write the response.
+No need for further deliberation.

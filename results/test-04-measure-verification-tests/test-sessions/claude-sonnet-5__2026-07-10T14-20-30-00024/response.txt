@@ -1,0 +1,48 @@
+## Verdict: **Unsound**
+
+The proposed lexicographic measure `(phase, cost)` fails to strictly decrease on several rewrite rules. The problem is that `phase` is defined by *pattern-matching on the outermost constructor only*, so a term `t` that happens to match `recDelta _ _ (delta _)` has `phase t = 1`, but as soon as `t` is wrapped inside `merge`, `eqW`, `integrate`, etc., the wrapped term gets `phase = 0`. Several rules erase such wrapping and expose the inner term directly, causing `phase` to *increase* along the step, which the lexicographic order cannot tolerate (a `0`-phase term is always considered "less than" a `1`-phase term regardless of cost).
+
+### Concrete counterexample
+
+Take
+```
+t := recDelta void void (delta void)
+```
+so `phase t = 1` and `cost t = 1 + 0 + 0 + (1 + 0) = 2`.
+
+Consider the rule `R_merge_void_left`:
+```
+Step (merge void t) t
+```
+
+- LHS `= merge void t`: its outermost constructor is `merge`, so `phase (merge void t) = 0` (the `recDelta _ _ (delta _)` pattern is never matched). Hence `measure (merge void t) = (0, 1 + cost t) = (0, 3)`.
+- RHS `= t = recDelta void void (delta void)`: outer constructor matches `recDelta _ _ (delta _)`, so `phase t = 1`. Hence `measure t = (1, 2)`.
+
+Comparing lexicographically:
+```
+(0, 3) <_lex (1, 2)
+```
+i.e. **`measure(LHS) < measure(RHS)`**, exactly the opposite of what a termination measure needs (`measure(LHS) > measure(RHS)`). So this single step already violates the required strict decrease.
+
+### Why this is not an isolated glitch
+
+The same failure pattern recurs for every rule that discards an outer wrapper and returns a raw subterm that might itself be a `recDelta _ _ (delta _)` term:
+
+- `R_merge_void_left : merge void t → t` — as shown above.
+- `R_merge_void_right : merge t void → t` — symmetric issue.
+- `R_merge_cancel : merge t t → t` — same issue (`merge t t` has phase 0, `t` can have phase 1).
+- `R_rec_zero : recDelta b s void → b` — `recDelta b s void` has phase 0 (third argument is `void`, not `delta _`), but `b` can itself be of the form `recDelta _ _ (delta _)`, giving phase 1 on the right-hand side.
+
+In each of these cases one can instantiate the metavariables (`t`, `b`, etc.) with a term of shape `recDelta _ _ (delta _)` to make `phase` jump from `0` to `1`, defeating the lexicographic decrease irrespective of the `cost` component.
+
+### What does work
+
+To be fair, some rules *are* correctly oriented by this measure:
+- `R_int_delta`, `R_eq_diff`, `R_eq_refl`: phase stays `0` on both sides, and `cost` strictly decreases.
+- `R_rec_succ : recDelta b s (delta n) → app s (recDelta b s n)`: phase correctly drops from `1` to `0`, which is presumably the reason `phase` was introduced in the first place.
+
+But because `phase` is not stable under the "erase to a subterm" rules above, it does not provide a globally sound decrease certificate, and the `cost` function alone (without `phase`) also does not fix this, since it does not need to decrease when `phase` drops — the combination lex order breaks precisely because `phase` can *increase* in the "wrong" rules.
+
+### Conclusion
+
+The lexicographic measure `(phase, cost)` is **not sound** as a termination argument for `Step`: rules `R_merge_void_left`, `R_merge_void_right`, `R_merge_cancel`, and `R_rec_zero` can all cause `phase` to increase from `0` to `1`, which the lexicographic order cannot compensate for via `cost`, producing concrete steps (e.g. `merge void (recDelta void void (delta void)) → recDelta void void (delta void)`) where the measure strictly *increases* rather than decreases.

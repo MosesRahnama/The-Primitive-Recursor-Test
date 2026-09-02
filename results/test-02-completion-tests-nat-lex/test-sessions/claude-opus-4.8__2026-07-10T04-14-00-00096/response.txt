@@ -1,0 +1,143 @@
+# Proof Skeleton for the Remaining Five Cases
+
+Below is a skeleton for each of the five `sorry` cases, with the intended measure argument (which coordinate drops, which ties) and the mechanical steps to discharge each goal. The two helper lemmas `drop_left` (kappa strictly decreases) and `drop_right` (kappa ties, mu strictly decreases) are the only two entry points you need.
+
+---
+
+## Case 1: `R_int_delta` — `integrate (delta t) → void`
+
+**Analysis.**
+- `kappa (integrate (delta t)) = kappa (delta t) = kappa t`, and `kappa void = 0`. So kappa **ties only if `kappa t = 0`**, otherwise kappa *drops*. This is ambiguous, so prefer the coordinate that always works.
+- `mu (integrate (delta t)) = 1 + mu (delta t) = 1 + mu t`, and `mu void = 0`. So `mu void = 0 < 1 + mu t`, i.e. **mu always drops**.
+- But kappa does *not* always tie (only when `kappa t = 0`). Use `drop_left` when `kappa t > 0`, and `drop_right` when `kappa t = 0`. Cleanest: case split on `kappa t`.
+
+**Skeleton.**
+```lean
+| _, _, Step.R_int_delta t => by
+    -- kappa (integrate (delta t)) = kappa t ; kappa void = 0
+    -- mu void = 0 < 1 + mu t always
+    rcases Nat.eq_zero_or_pos (kappa t) with h0 | hpos
+    · -- kappa ties at 0: use mu drop
+      have hmu : mu void < mu (integrate (delta t)) := by simp [mu]; omega
+      have hk  : kappa void = kappa (integrate (delta t)) := by simp [kappa, h0]
+      exact drop_right hmu hk
+    · -- kappa strictly drops
+      have hk : kappa void < kappa (integrate (delta t)) := by simp [kappa]; omega
+      exact drop_left hk
+```
+
+---
+
+## Case 2: `R_rec_zero` — `recDelta b s void → b`
+
+**Analysis.**
+- `kappa (recDelta b s void)`: the third arg is `void`, *not* `delta _`, so the **fall-through** clause applies: `= max (max (kappa b) (kappa s)) (kappa void) = max (max (kappa b) (kappa s)) 0`. And `kappa b ≤ max (max (kappa b) (kappa s)) 0`. So kappa **ties or drops** — not guaranteed a strict drop, and may tie above `kappa b`.
+- `mu (recDelta b s void) = 3 + mu b + mu s + mu void = 3 + mu b + mu s`, and `mu b < 3 + mu b + mu s`. So **mu always drops**.
+- kappa need not tie (if `kappa s > kappa b`, kappa strictly drops to `kappa b`). Case split as before, or better: prove `kappa b ≤ kappa (recDelta b s void)` and split into `<` vs `=`.
+
+**Skeleton.**
+```lean
+| _, _, Step.R_rec_zero b s => by
+    -- mu b < 3 + mu b + mu s  (always)
+    have hmu : mu b < mu (recDelta b s void) := by simp [mu]; omega
+    -- kappa b ≤ kappa (recDelta b s void)
+    have hle : kappa b ≤ kappa (recDelta b s void) := by
+      simp [kappa]                 -- reduces RHS to max (max (kappa b) (kappa s)) 0
+      omega                        -- kappa b ≤ that max
+    rcases Nat.lt_or_ge (kappa b) (kappa (recDelta b s void)) with hlt | hge
+    · exact drop_left hlt
+    · have hk : kappa b = kappa (recDelta b s void) := le_antisymm hle hge
+      exact drop_right hmu hk
+```
+*Note:* the `simp [kappa]` on the fall-through case must match the non-`delta` `recDelta` clause. If `simp` does not fire (because there is no `@[simp]` lemma for the fall-through pattern), replace with `show kappa b ≤ Nat.max (Nat.max (kappa b) (kappa s)) (kappa void)` and `simp [kappa]; omega`, or unfold `kappa` directly via `rfl`-style rewriting on `kappa (recDelta b s void)`.
+
+---
+
+## Case 3: `R_rec_succ` — `recDelta b s (delta n) → app s (recDelta b s n)`
+
+**Analysis (the crucial case).**
+- LHS: third arg is `delta n`, so the `+1` clause fires:
+  `kappa (recDelta b s (delta n)) = max (max (kappa b) (kappa s)) (kappa n) + 1`.
+- RHS: `kappa (app s (recDelta b s n)) = max (kappa s) (kappa (recDelta b s n))`. Here the inner `recDelta b s n` has third arg `n` (**not** `delta _`, since `n` is arbitrary — but careful: if `n` itself is a `delta`, the inner one also gets `+1`). In general:
+  `kappa (recDelta b s n) = max (max (kappa b) (kappa s)) (kappa n)` **or** `+1` depending on `n`. In *either* shape it is `≤ max (max (kappa b) (kappa s)) (kappa n) + 1` when `n` is not delta, but if `n = delta n'` you must bound it. The key invariant: `kappa (recDelta b s n) ≤ kappa (recDelta b s (delta n))` always, because peeling one `delta` removes exactly one `+1` layer (kappa counts delta-nesting of the recursion argument). So RHS kappa `= max (kappa s) (kappa (recDelta b s n)) < LHS kappa`. This is a **strict kappa drop** → use `drop_left`.
+
+**Skeleton.**
+```lean
+| _, _, Step.R_rec_succ b s n => by
+    -- Goal: kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n))
+    -- RHS(lex-larger) = max (max (kappa b)(kappa s)) (kappa n) + 1
+    -- LHS(new)        = max (kappa s) (kappa (recDelta b s n))
+    have hk : kappa (app s (recDelta b s n))
+                < kappa (recDelta b s (delta n)) := by
+      simp only [kappa_rec_delta, kappa_app]
+      -- Need: max (kappa s) (kappa (recDelta b s n))
+      --         < max (max (kappa b) (kappa s)) (kappa n) + 1
+      -- Establish the two bounds:
+      have hs : kappa s ≤ Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) := by omega
+      have hrec : kappa (recDelta b s n)
+                    ≤ Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) := by
+        -- case on whether n is delta-headed
+        cases n with
+        | delta n' => simp [kappa]; omega
+        | _        => simp [kappa]; omega   -- one line per remaining constructor,
+                                            -- or use `all_goals (simp [kappa]; omega)`
+      omega
+    exact drop_left hk
+```
+*Note:* the inner `cases n` may need `all_goals (simp [kappa]; omega)` to cover all 7 constructors uniformly. The `delta` sub-case introduces the extra `+1` from the inner `recDelta`, which `omega` still closes because the outer LHS carries `+1` from `delta n`.
+
+---
+
+## Case 4: `R_eq_refl` — `eqW a a → void`
+
+**Analysis.**
+- `kappa (eqW a a) = max (kappa a) (kappa a) = kappa a`; `kappa void = 0`. So kappa ties iff `kappa a = 0`, else drops.
+- `mu (eqW a a) = 4 + mu a + mu a`; `mu void = 0 < 4 + …`. So **mu always drops**.
+- Same pattern as Case 1: split on `kappa a`.
+
+**Skeleton.**
+```lean
+| _, _, Step.R_eq_refl a => by
+    rcases Nat.eq_zero_or_pos (kappa a) with h0 | hpos
+    · have hmu : mu void < mu (eqW a a) := by simp [mu]; omega
+      have hk  : kappa void = kappa (eqW a a) := by simp [kappa, h0]
+      exact drop_right hmu hk
+    · have hk : kappa void < kappa (eqW a a) := by simp [kappa]; omega
+      exact drop_left hk
+```
+
+---
+
+## Case 5: `R_eq_diff` — `eqW a b → integrate (merge a b)`
+
+**Analysis.**
+- `kappa (eqW a b) = max (kappa a) (kappa b)`.
+- `kappa (integrate (merge a b)) = kappa (merge a b) = max (kappa a) (kappa b)`. So **kappa ties exactly** — use `drop_right`.
+- `mu (eqW a b) = 4 + mu a + mu b`; `mu (integrate (merge a b)) = 1 + mu (merge a b) = 1 + 2 + mu a + mu b = 3 + mu a + mu b`. So `3 + mu a + mu b < 4 + mu a + mu b`. **mu drops by 1.**
+
+**Skeleton.**
+```lean
+| _, _, Step.R_eq_diff a b => by
+    have hmu : mu (integrate (merge a b)) < mu (eqW a b) := by
+      simp [mu]; omega
+    have hk  : kappa (integrate (merge a b)) = kappa (eqW a b) := by
+      simp [kappa]
+    exact drop_right hmu hk
+```
+
+---
+
+## Summary Table
+
+| Rule | kappa behaviour | mu behaviour | Lemma used |
+|---|---|---|---|
+| `R_int_delta` | ties (`k=0`) / drops | always drops | split → `drop_right`/`drop_left` |
+| `R_rec_zero` | ties / drops | always drops | split → `drop_right`/`drop_left` |
+| `R_rec_succ` | **strictly drops** (loses `+1`) | (irrelevant) | `drop_left` |
+| `R_eq_refl` | ties (`k=0`) / drops | always drops | split → `drop_right`/`drop_left` |
+| `R_eq_diff` | **ties exactly** | drops by 1 | `drop_right` |
+
+**General remarks / likely friction points:**
+- For the `simp [kappa]` calls on the *fall-through* `recDelta` clause (Case 2), a `@[simp]` lemma is not provided; if `simp` stalls, unfold manually with `show …` matching the definitional value, or use `Nat.max` lemmas + `omega`.
+- Case 3 is the only genuine kappa-drop and the only one requiring inspection of `n`'s head constructor; wrap the sub-cases with `all_goals (simp [kappa]; omega)`.
+- Every `omega` here operates purely on `Nat.max` / linear arithmetic goals after `simp [kappa]` / `simp [mu]`; if `omega` can't see `Nat.max`, add `simp only [Nat.max_def]` or `rcases Nat.le_total …` before `omega`.

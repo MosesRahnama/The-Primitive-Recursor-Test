@@ -1,0 +1,95 @@
+# Assessment: The Helper Strategy Is Unsound
+
+## The Core Bug: `kappa` Is Blind to Nested `delta`
+
+The measure `kappa` treats `delta` as transparent:
+
+```lean
+| .delta t => kappa t
+```
+
+This means `kappa (delta t) = kappa t` for **all** `t`, so deeply nested `delta`-wrappers are invisible to the measure. This breaks both helper theorems.
+
+---
+
+## Theorem 1: `kappa_rec_delta_step` Is False
+
+```lean
+theorem kappa_rec_delta_step (b s n : Trace) :
+  kappa (recDelta b s (delta n)) = kappa (recDelta b s n) + 1
+```
+
+This claims that stripping one `delta` from the third argument of `recDelta` always reduces `kappa` by exactly 1. Let $M = \max(\kappa\,b,\;\kappa\,s)$.
+
+**When $n$ is not a `delta`-term** (e.g., $n = \texttt{void}$), the claim holds:
+
+| Side | Evaluation |
+|------|-----------|
+| LHS: $\kappa(\texttt{recDelta}\;b\;s\;(\texttt{delta}\;n))$ | Matches first `recDelta` equation → $M' + 1$ where $M' = \max(M,\;\kappa\,n)$ |
+| RHS: $\kappa(\texttt{recDelta}\;b\;s\;n) + 1$ | $n$ is not `delta`, so second equation → $\max(M,\;\kappa\,n) + 1 = M' + 1$ |
+
+**When $n = \texttt{delta}\;m$**, the claim **fails**:
+
+| Side | Evaluation |
+|------|-----------|
+| LHS: $\kappa(\texttt{recDelta}\;b\;s\;(\texttt{delta}\;(\texttt{delta}\;m)))$ | Third arg is `delta (delta m)`. Matches first equation with inner `n` bound to `delta m`. Result: $\max(M,\;\kappa(\texttt{delta}\;m)) + 1 = \max(M,\;\kappa\,m) + 1$ |
+| RHS: $\kappa(\texttt{recDelta}\;b\;s\;(\texttt{delta}\;m)) + 1$ | `delta m` matches first equation → $(\max(M,\;\kappa\,m) + 1) + 1 = \max(M,\;\kappa\,m) + 2$ |
+
+**Concrete counterexample:** $b = s = m = \texttt{void}$ (all $\kappa = 0$).
+
+$$\text{LHS} = \kappa(\texttt{recDelta void void (delta (delta void))}) = 0 + 1 = 1$$
+$$\text{RHS} = \kappa(\texttt{recDelta void void (delta void)}) + 1 = (0 + 1) + 1 = 2$$
+
+$$1 \neq 2 \quad \text{— contradiction.}$$
+
+---
+
+## Theorem 2: `kappa_rec_succ_drop` Is False
+
+```lean
+theorem kappa_rec_succ_drop (b s n : Trace) :
+  kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n))
+```
+
+Using the same counterexample $b = s = m = \texttt{void}$, $n = \texttt{delta void}$:
+
+| Expression | Value |
+|------------|-------|
+| $\kappa(\texttt{recDelta void void (delta void)})$ | First equation: $\max(0, \kappa\,\texttt{void}) + 1 = 1$ |
+| $\kappa(\texttt{app void (recDelta void void (delta void))})$ | $\max(\kappa\,\texttt{void},\;1) = 1$ |
+| $\kappa(\texttt{recDelta void void (delta (delta void))})$ | First equation: $\max(0,\;\kappa(\texttt{delta void})) + 1 = 1$ |
+
+The theorem requires $1 < 1$, which is **false**.
+
+### How the `rw` Masks the Failure
+
+The proof of `kappa_rec_succ_drop` begins with `rw [kappa_rec_delta_step]`, which rewrites the RHS from $\kappa(\texttt{recDelta}\;b\;s\;(\texttt{delta}\;n))$ to $\kappa(\texttt{recDelta}\;b\;s\;n) + 1$. In our counterexample this inflates the RHS from $1$ to $2$, turning the false goal $1 < 1$ into the true (but irrelevant) statement $1 < 2$. The rewrite is only possible because `kappa_rec_delta_step` is admitted via `sorry`; if it were actually provable, the original theorem would be true.
+
+---
+
+## Broader Problem: `kappa` Fails for Almost All Rules
+
+Even setting the helper theorems aside, `kappa` does not strictly decrease for 7 of the 8 rewrite rules:
+
+| Rule | LHS $\kappa$ | RHS $\kappa$ | Decreases? |
+|------|-------------|-------------|------------|
+| `R_int_delta`: $\texttt{integrate (delta t)} \to \texttt{void}$ | $\kappa\,t$ | $0$ | No (e.g. $t = \texttt{void}$) |
+| `R_merge_void_left`: $\texttt{merge void t} \to t$ | $\max(0, \kappa\,t) = \kappa\,t$ | $\kappa\,t$ | No (equal) |
+| `R_merge_void_right`: $\texttt{merge t void} \to t$ | $\kappa\,t$ | $\kappa\,t$ | No (equal) |
+| `R_merge_cancel`: $\texttt{merge t t} \to t$ | $\kappa\,t$ | $\kappa\,t$ | No (equal) |
+| `R_rec_zero`: $\texttt{recDelta b s void} \to b$ | $\max(\kappa\,b, \kappa\,s)$ | $\kappa\,b$ | No (if $\kappa\,b \geq \kappa\,s$) |
+| **`R_rec_succ`**: $\texttt{recDelta b s (delta n)} \to \texttt{app s (recDelta b s n)}$ | $\max(M, \kappa\,n)+1$ | see analysis | **Sometimes** (fails when $n$ is `delta`) |
+| `R_eq_refl`: $\texttt{eqW a a} \to \texttt{void}$ | $\kappa\,a$ | $0$ | No (e.g. $a = \texttt{void}$) |
+| `R_eq_diff`: $\texttt{eqW a b} \to \texttt{integrate (merge a b)}$ | $\max(\kappa\,a, \kappa\,b)$ | $\max(\kappa\,a, \kappa\,b)$ | No (equal) |
+
+---
+
+## Conclusion
+
+The helper strategy is **unsound as written**. The `kappa` measure assigns the same value to `delta`-wrapped and unwrapped terms, which:
+
+1. Makes `kappa_rec_delta_step` **false** whenever $n$ is itself a `delta`-term.
+2. Makes `kappa_rec_succ_drop` **false** in the same cases.
+3. Fails to provide a well-founded decreasing measure for 7 of the 8 rewrite rules.
+
+A sound termination argument would require a measure that accounts for `delta`-depth (or a lexicographic combination of structural depth and subterm measures), and helper lemmas that are actually true for all inputs.

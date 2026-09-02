@@ -1,0 +1,65 @@
+# Assessment: The helper strategy is **unsound**.
+
+## Analysis
+
+### Problem with `kappa_rec_delta_step`
+
+This theorem claims:
+```
+kappa (recDelta b s (delta n)) = kappa (recDelta b s n) + 1
+```
+
+The LHS is well-defined by the `simp` lemma:
+```
+kappa (recDelta b s (delta n)) = max (max (kappa b) (kappa s)) (kappa n) + 1
+```
+
+The RHS depends on `kappa (recDelta b s n)`, whose value **depends on the shape of `n`**, because `kappa` pattern-matches on the third argument:
+
+- **If `n = delta m`:** the first `recDelta` clause fires:
+  ```
+  kappa (recDelta b s (delta m)) = max (max (kappa b) (kappa s)) (kappa m) + 1
+  ```
+  Then RHS `= max (max (kappa b) (kappa s)) (kappa m) + 2`.
+  
+  But LHS `= max (max (kappa b) (kappa s)) (kappa (delta m)) + 1 = max (max (kappa b) (kappa s)) (kappa m) + 1` (since `kappa (delta m) = kappa m`).
+  
+  So LHS `= X + 1` while RHS `= X + 2`. **These are unequal.**
+
+**Concrete counterexample:** Let `b = s = void`, `n = delta void`.
+- LHS: `kappa (recDelta void void (delta (delta void)))` = `max (max 0 0) (kappa (delta void)) + 1` = `max 0 0 + 1` = `1`.
+- RHS: `kappa (recDelta void void (delta void)) + 1` = `(max (max 0 0) (kappa void) + 1) + 1` = `(0 + 1) + 1` = `2`.
+
+`1 ≠ 2`, so `kappa_rec_delta_step` is **false** and cannot be proved. The `sorry` is unclosable.
+
+### Consequence for `kappa_rec_succ_drop`
+
+The second theorem's proof begins with `rw [kappa_rec_delta_step]`, which invokes the false lemma. Even if we ignore that dependency, examine the actual goal:
+
+```
+kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n))
+```
+
+The RHS is `max (max (kappa b) (kappa s)) (kappa n) + 1`.
+
+The LHS is `max (kappa s) (kappa (recDelta b s n))`.
+
+**This inequality is also false in general.** Take `n = delta void`, `b = void`, `s = void`:
+- LHS: `kappa (app void (recDelta void void (delta void)))` = `max 0 (kappa (recDelta void void (delta void)))` = `max 0 1` = `1`.
+- RHS: `kappa (recDelta void void (delta (delta void)))` = `1` (computed above).
+
+`1 < 1` is **false**.
+
+The issue: when the recursive subterm `recDelta b s n` itself has the form `recDelta b s (delta m)`, it carries its own `+1`, but the head `recDelta ... (delta n)` only adds a *single* `+1`. The measure does not strictly dominate the nested case.
+
+## Conclusion
+
+The strategy is **not sound**:
+
+1. `kappa_rec_delta_step` is arithmetically false whenever `n` is itself a `delta` (the `+1` from the inner match is lost because `kappa (delta m) = kappa m` collapses the increment on the LHS but not on the RHS).
+
+2. `kappa_rec_succ_drop` is false in the same regime, independent of the first lemma.
+
+**Root cause:** `kappa` only adds `+1` for a *single* outer `delta` guard rather than counting the depth of the `delta`-spine. Since `R_rec_succ` peels one `delta` but the reduct `app s (recDelta b s n)` retains `recDelta b s n` (which may still be a `delta`-headed `recDelta` with its own `+1`), the measure fails to decrease.
+
+**Fix direction:** `kappa` should recurse structurally so that each `delta` in the third argument contributes, e.g. `kappa (recDelta b s (delta n)) = max(...) + (kappa-of-recDelta b s n)`-style additive counting, or a separate depth measure counting `delta`-nesting in the recursion argument. As written, both helpers should be rejected.

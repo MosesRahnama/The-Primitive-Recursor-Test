@@ -1,0 +1,112 @@
+## Overview of the proof strategy
+
+Looking at the three solved cases, the recurring pattern is:
+
+1. Compute (or bound) `kappa` of the reduct vs. the redex.
+2. If `kappa` **strictly drops**, finish with `drop_left`.
+3. If `kappa` only **ties**, show `mu` strictly drops and finish with `drop_right`.
+
+For rules where we can't tell *a priori* whether `kappa` strictly drops or only ties (because one sub‑term is a variable that could itself be `void`, or `delta`-headed, etc.), the clean way to organize the proof is:
+
+```
+have hle : kappa <reduct> ≤ kappa <redex> := by simp [kappa]; omega  -- (or exact Nat.zero_le _)
+rcases lt_or_eq_of_le hle with hk | hk
+· exact drop_left hk
+· have hmu : mu <reduct> < mu <redex> := by simp [mu]; omega
+  exact drop_right hmu hk
+```
+
+This is exactly the `hle`/`rcases lt_or_eq_of_le` idiom used below for `R_int_delta`, `R_rec_zero`, and `R_eq_refl`. For `R_eq_diff` the tie is *exact* (no case split needed). For `R_rec_succ` we must case on the shape of the recursion argument `n`, because `kappa`'s `recDelta` clause looks only one `delta`-layer ahead.
+
+```lean
+-- integrate (delta t) --> void
+| _, _, Step.R_int_delta t => by
+    have hle : kappa void ≤ kappa (integrate (delta t)) := by
+      rw [kappa_void]; exact Nat.zero_le _
+    rcases lt_or_eq_of_le hle with hk | hk
+    · exact drop_left hk
+    · have hmu : mu void < mu (integrate (delta t)) := by simp [mu]
+      exact drop_right hmu hk
+
+-- recDelta b s void --> b
+| _, _, Step.R_rec_zero b s => by
+    have hle : kappa b ≤ kappa (recDelta b s void) := by
+      simp [kappa]; omega
+    rcases lt_or_eq_of_le hle with hk | hk
+    · exact drop_left hk
+    · have hmu : mu b < mu (recDelta b s void) := by simp [mu]
+      exact drop_right hmu hk
+
+-- recDelta b s (delta n) --> app s (recDelta b s n)
+| _, _, Step.R_rec_succ b s n => by
+    -- `kappa`'s recDelta clause only checks whether its *third argument's*
+    -- outer constructor is `delta`.  After peeling one `delta` layer from
+    -- `n`, the new recDelta node might again have a `delta`-headed third
+    -- argument (`n = delta m`), in which case `kappa` re-fires its "+1"
+    -- and the value ties with the redex.  We case on the shape of `n`.
+    cases n with
+    | void =>
+        have hk : kappa (app s (recDelta b s void)) < kappa (recDelta b s (delta void)) := by
+          simp [kappa]; omega
+        exact drop_left hk
+    | integrate t =>
+        have hk : kappa (app s (recDelta b s (integrate t))) <
+                    kappa (recDelta b s (delta (integrate t))) := by
+          simp [kappa]; omega
+        exact drop_left hk
+    | merge x y =>
+        have hk : kappa (app s (recDelta b s (merge x y))) <
+                    kappa (recDelta b s (delta (merge x y))) := by
+          simp [kappa]; omega
+        exact drop_left hk
+    | app x y =>
+        have hk : kappa (app s (recDelta b s (app x y))) <
+                    kappa (recDelta b s (delta (app x y))) := by
+          simp [kappa]; omega
+        exact drop_left hk
+    | recDelta x y z =>
+        have hk : kappa (app s (recDelta b s (recDelta x y z))) <
+                    kappa (recDelta b s (delta (recDelta x y z))) := by
+          simp [kappa]; omega
+        exact drop_left hk
+    | eqW x y =>
+        have hk : kappa (app s (recDelta b s (eqW x y))) <
+                    kappa (recDelta b s (delta (eqW x y))) := by
+          simp [kappa]; omega
+        exact drop_left hk
+    | delta m =>
+        -- Here `kappa` genuinely *ties*: both the redex and the reduct's
+        -- inner recDelta node have a delta-headed third argument, so both
+        -- pick up the same "+1".  `mu`'s recDelta clause is uniform in `n`
+        -- (no case split), so it does not compensate here either.
+        -- A fully general proof needs a measure that counts the *total*
+        -- number of nested `delta`s under a `recDelta`'s third argument
+        -- (not just a one-layer lookahead).  This is the delicate
+        -- sub-case; left as the remaining obligation.
+        sorry
+
+-- eqW a a --> void
+| _, _, Step.R_eq_refl a => by
+    have hle : kappa void ≤ kappa (eqW a a) := by
+      rw [kappa_void]; exact Nat.zero_le _
+    rcases lt_or_eq_of_le hle with hk | hk
+    · exact drop_left hk
+    · have hmu : mu void < mu (eqW a a) := by simp [mu]; omega
+      exact drop_right hmu hk
+
+-- eqW a b --> integrate (merge a b)
+| _, _, Step.R_eq_diff a b => by
+    have hk : kappa (integrate (merge a b)) = kappa (eqW a b) := by
+      simp [kappa]
+    have hmu : mu (integrate (merge a b)) < mu (eqW a b) := by
+      simp [mu]; omega
+    exact drop_right hmu hk
+```
+
+### Notes on each case
+
+- **`R_int_delta`**: `kappa void = 0 ≤ kappa (integrate (delta t)) = kappa t`. Either `kappa t = 0` (tie, `mu` strictly drops since `mu (integrate (delta t)) = 1 + mu t ≥ 1`) or `kappa t > 0` (strict drop).
+- **`R_rec_zero`**: `kappa b ≤ max(max(kappa b, kappa s), kappa void) = max(kappa b, kappa s)`, same tie/strict split; `mu b < 3 + mu b + mu s + mu void` always.
+- **`R_rec_succ`**: strict decrease in six of the seven shapes of `n` (all non‑`delta` constructors), since then the inner `recDelta b s n` does **not** get the "+1"; the `delta m` shape is the genuinely delicate case flagged above.
+- **`R_eq_refl`**: `kappa (eqW a a) = kappa a`, compare against `kappa void = 0` with the same tie/strict split; in the tie case `mu void = 0 < mu (eqW a a) = 4 + 2·mu a`.
+- **`R_eq_diff`**: `kappa (integrate (merge a b)) = kappa (merge a b) = max(kappa a, kappa b) = kappa (eqW a b)` — an *exact* tie always, so only `drop_right` is needed, using `mu (integrate (merge a b)) = 3 + mu a + mu b < 4 + mu a + mu b = mu (eqW a b)`.

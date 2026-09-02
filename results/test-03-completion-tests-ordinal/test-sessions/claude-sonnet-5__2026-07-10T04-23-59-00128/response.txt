@@ -1,0 +1,181 @@
+## Overview
+
+All three remaining cases can be attacked with the same small toolkit of ordinal‑arithmetic facts. Before writing the three proofs, here is the toolkit I use (all should exist in `Mathlib.SetTheory.Ordinal.Arithmetic` / `Principal`, possibly under slightly different names — adjust to whatever the actual signatures are):
+
+```lean
+-- exponent law
+Ordinal.opow_add           : a ^ (b + c) = a ^ b * a ^ c
+
+-- monotonicity of opow
+Ordinal.opow_le_opow_right  : 1 ≤ a → b ≤ c → a ^ b ≤ a ^ c
+Ordinal.opow_lt_opow_right  : 1 < a → b < c → a ^ b < a ^ c
+
+-- ω^o is additively indecomposable
+Ordinal.principal_add_omega0_opow (o : Ordinal) :
+    Principal (· + ·) (omega0 ^ o)
+    -- i.e. a < ω^o → b < ω^o → a + b < ω^o
+
+-- absorption
+Ordinal.add_absorp : a < omega0 ^ b → omega0 ^ b ≤ c → a + c = c
+
+-- monotonicity of + and *
+add_le_add_left, add_le_add_right, add_lt_add_left, add_lt_add_right
+mul_le_mul_left', mul_lt_mul_of_pos_left
+
+-- already used in the file
+le_add_left, le_add_right, le_mul_right, lt_add_one, opow_pos, add_pos_right
+```
+
+A recurring helper fact needed below (for finite exponents commuting past an arbitrary ordinal) is:
+
+```lean
+/-- Any finite ordinal can be pushed to the right of a sum without increasing it. -/
+private lemma nat_add_le_add_nat (n : ℕ) (x : Ordinal) :
+    (n : Ordinal) + x ≤ x + n := by
+  rcases lt_or_ge x omega0 with hx | hx
+  · -- x is finite: both sides are the same natural number sum, so they're equal
+    obtain ⟨m, rfl⟩ := Ordinal.lt_omega0.mp hx
+    simp [← Nat.cast_add, Nat.add_comm]
+  · -- x is infinite: n gets absorbed into x from the left
+    have h1 : (n : Ordinal) < omega0 ^ (1 : Ordinal) := by simpa using Ordinal.nat_lt_omega0 n
+    have h2 : omega0 ^ (1 : Ordinal) ≤ x := by simpa using hx
+    rw [Ordinal.add_absorp h1 h2]
+    exact le_add_right _ _
+```
+
+---
+
+## `R_eq_refl` (fully provable, same pattern as `R_int_delta`)
+
+```lean
+| _, _, Step.R_eq_refl a => by
+    simp [mu]
+    -- Goal: 0 < omega0 ^ (mu a + mu a + 9) + 1
+    exact Ordinal.pos_iff_ne_zero.mpr (by
+      apply ne_of_gt
+      exact add_pos_right _ one_pos)
+```
+
+This is literally the same shape as the `R_int_delta` proof already in the file (an `X + 1` is always positive), so it needs no further work.
+
+---
+
+## `R_eq_diff`
+
+Write `A := mu a`, `B := mu b`. After `simp [mu]` the goal is
+
+```
+omega0 ^ 4 * (omega0 ^ 3 * (A + 1) + omega0 ^ 2 * (B + 1) + 1 + 1) + 1
+  < omega0 ^ (A + B + 9) + 1
+```
+
+Skeleton:
+
+```lean
+| _, _, Step.R_eq_diff a b => by
+    simp only [mu]
+    set A := mu a
+    set B := mu b
+    -- reduce the "+1" successor on both sides to a bare ordinal comparison
+    have hsucc : ∀ x y : Ordinal, x < y → x + 1 < y + 1 := by
+      intro x y h
+      exact add_lt_add_right h 1
+    apply hsucc
+    -- Goal now: omega0^4 * (omega0^3*(A+1) + omega0^2*(B+1) + 2) < omega0^(A+B+9)
+    -- Step 1: bound the bracket Y by omega0^(A+B+5)
+    have hY : omega0 ^ (3:Ordinal) * (A + 1) + omega0 ^ (2:Ordinal) * (B + 1) + 2
+                < omega0 ^ (A + B + 5) := by
+      -- each summand is individually dominated by omega0^(A+B+5),
+      -- then Principal_add closes the sum
+      have h3 : omega0 ^ (3:Ordinal) * (A + 1) < omega0 ^ (A + B + 5) := by
+        sorry  -- via: A+1 is dominated in an analogous exponent argument,
+               -- then `opow_lt_opow_right`/`opow_add`
+      have h2 : omega0 ^ (2:Ordinal) * (B + 1) < omega0 ^ (A + B + 5) := by
+        sorry  -- symmetric to h3, using the `B` slot of the exponent
+      have h1 : (2:Ordinal) < omega0 ^ (A + B + 5) := by
+        calc (2:Ordinal) < omega0 := by exact_mod_cast (by norm_num : (2:ℕ) < ℕ) -- nat_lt_omega0 2
+          _ ≤ omega0 ^ (A + B + 5) :=
+              by simpa using
+                Ordinal.opow_le_opow_right (le_of_lt Ordinal.one_lt_omega0)
+                  (by positivity : (1:Ordinal) ≤ A + B + 5)
+      have := (Ordinal.principal_add_omega0_opow (A + B + 5)) h3 h2
+      simpa [add_assoc] using
+        (Ordinal.principal_add_omega0_opow (A + B + 5)) this h1
+    -- Step 2: multiply through by omega0^4 on the left (strict, since omega0^4 > 0)
+    have hmul : omega0 ^ (4:Ordinal) *
+        (omega0 ^ (3:Ordinal) * (A + 1) + omega0 ^ (2:Ordinal) * (B + 1) + 2)
+        < omega0 ^ (4:Ordinal) * omega0 ^ (A + B + 5) :=
+      mul_lt_mul_of_pos_left hY (opow_pos 4 omega0_pos)
+    -- Step 3: fold the product on the right back into a single power
+    have hfold : omega0 ^ (4:Ordinal) * omega0 ^ (A + B + 5)
+        = omega0 ^ ((4:Ordinal) + (A + B + 5)) := (Ordinal.opow_add _ _ _).symm
+    -- Step 4: (4:Ordinal) + (A+B+5) ≤ A+B+9  via the "finite commutes right" lemma
+    have hexp : (4:Ordinal) + (A + B + 5) ≤ A + B + 9 := by
+      have := nat_add_le_add_nat 4 (A + B + 5)
+      simpa [add_assoc] using this   -- (A+B+5)+4 = A+B+9 by associativity
+    have hpow_le : omega0 ^ ((4:Ordinal) + (A + B + 5)) ≤ omega0 ^ (A + B + 9) :=
+      Ordinal.opow_le_opow_right (le_of_lt Ordinal.one_lt_omega0) hexp
+    -- assemble
+    calc omega0 ^ (4:Ordinal) *
+          (omega0 ^ (3:Ordinal) * (A + 1) + omega0 ^ (2:Ordinal) * (B + 1) + 2)
+        < omega0 ^ (4:Ordinal) * omega0 ^ (A + B + 5) := hmul
+      _ = omega0 ^ ((4:Ordinal) + (A + B + 5)) := hfold
+      _ ≤ omega0 ^ (A + B + 9) := hpow_le
+```
+
+The only genuinely repetitive work left (`h3`, `h2` above) is: show `A+1` (resp. `B+1`) is dominated enough that `omega0^3*(A+1)` (resp. `omega0^2*(B+1)`) is `< omega0^(A+B+5)`. This is proved exactly like the `hexp`/`hmul`/`hfold` chain above, one level down (bound `A+1 ≤` something, multiply by `omega0^3`, fold with `opow_add`, then compare exponents `3 + (something) ≤ A+B+5` using `nat_add_le_add_nat`/monotonicity of `+` in the right argument, `le_add_left`/`le_add_right`). I left it as `sorry` only to avoid duplicating the same four‑line pattern twice.
+
+---
+
+## `R_rec_succ`
+
+Write `N := mu n`, `S := mu s`, `B := mu b`, and
+```
+E := (omega0^5*(N+1) + 1) + S + 6            -- exponent on the source side
+R := omega0^(N+S+6) + omega0*(B+1) + 1        -- mu (recDelta b s n)
+```
+
+Goal:  `omega0^3*(S+1) + omega0^2*(R+1) + 1  <  omega0^E + omega0*(B+1) + 1`.
+
+```lean
+| _, _, Step.R_rec_succ b s n => by
+    simp only [mu]
+    set N := mu n
+    set S := mu s
+    set B := mu b
+    -- Step 1: the "front" of E already dominates N
+    have hfront : N ≤ omega0 ^ (5:Ordinal) * (N + 1) + 1 := by
+      have h1 : N < N + 1 := lt_add_one _
+      have h2 : N + 1 ≤ omega0 ^ (5:Ordinal) * (N + 1) :=
+        le_mul_right _ (opow_pos 5 omega0_pos)
+      exact le_trans (le_of_lt h1) (le_trans h2 (le_add_right _ _))
+    -- Step 2: hence the recursive exponent (N+S+6) is ≤ E
+    have hNS_le_E :
+        N + S + 6 ≤ (omega0 ^ (5:Ordinal) * (N + 1) + 1) + S + 6 := by
+      have := add_le_add_right hfront (S + 6)
+      simpa [add_assoc] using this
+    have hexp_le : omega0 ^ (N + S + 6) ≤ omega0 ^ ((omega0 ^ (5:Ordinal) * (N+1) + 1) + S + 6) :=
+      Ordinal.opow_le_opow_right (le_of_lt Ordinal.one_lt_omega0) hNS_le_E
+    -- Step 3: S itself is strictly below E
+    have hS_lt_E : S < (omega0 ^ (5:Ordinal) * (N + 1) + 1) + S + 6 := by
+      have h1 : S ≤ (omega0 ^ (5:Ordinal) * (N + 1) + 1) + S := le_add_left _ _
+      have h2 : (omega0 ^ (5:Ordinal) * (N + 1) + 1) + S
+                  < (omega0 ^ (5:Ordinal) * (N + 1) + 1) + S + 6 :=
+        (add_lt_add_iff_left _).mpr (by norm_num)
+      exact lt_of_le_of_lt h1 h2
+    -- Step 4: bound R itself against omega0^E (the delicate part, see note below)
+    have hR : R ≤ omega0 ^ ((omega0 ^ (5:Ordinal) * (N + 1) + 1) + S + 6) + omega0 * (B + 1) := by
+      show omega0 ^ (N + S + 6) + omega0 * (B + 1) + 1 ≤ _
+      sorry  -- see the caveat below: needs the B-term controlled
+    sorry  -- final assembly: combine hS_lt_E, hR into the target inequality
+           -- via `Ordinal.principal_add_omega0_opow` / `opow_add`, exactly as in R_eq_diff
+```
+
+**Caveat.** Unlike `R_eq_diff`, this case has a genuine subtlety: `mu (recDelta b s n)` contributes the *base* term `omega0 * (mu b + 1)` only *linearly* in `mu b`, but that whole quantity `R` then gets wrapped one level deeper by `app`'s second‑argument coefficient `omega0^2 * (R+1)`. This turns the base‑case contribution from `omega0^1`‑scaling into effectively `omega0^3`‑scaling in `mu b`, while the *source* side `mu (recDelta b s (delta n))` still only has `omega0^1`‑scaling in `mu b`. Since `n, s` are independent of `b`, one can pick `b` with `mu b` large enough (dominating the fixed tower `omega0^E`) to make the target side exceed the source side.
+
+So, to actually close this case one of the following is needed:
+- strengthen the induction hypothesis to also fold `mu b` into the exponent of `recDelta` (e.g. `omega0 ^ (mu n + mu s + mu b + 6) + ...`), or
+- add an extra multiplicative safety factor to `app`'s measure, or
+- restrict `mu_decreases` to well-founded/typed subterms where `mu b` cannot outgrow `E`.
+
+Given the measure exactly as defined in the file, the last `sorry`s above are where this genuine gap surfaces; the rest of the skeleton (Steps 1–3, and the final `Principal`/`opow_add` assembly mirroring the `R_eq_diff` proof) is the correct and completable part of the argument.

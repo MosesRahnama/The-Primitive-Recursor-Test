@@ -1,0 +1,137 @@
+[TOOL-CALL code_execution]
+def lpo(s, t, prec):
+    if s == t:
+        return False
+    if isinstance(s, str):  # variable
+        return False
+    if isinstance(t, str):  # variable
+        return t in get_vars(s)
+    
+    # s is a function f(s1..sn)
+    f = s[0]
+    s_args = s[1]
+    
+    # Condition 1: s_i >= t
+    for s_i in s_args:
+        if s_i == t or lpo(s_i, t, prec):
+            return True
+            
+    # t is a function g(t1..tm)
+    g = t[0]
+    t_args = t[1]
+    
+    # Condition 2: f > g and for all t_i, s > t_i
+    if prec.get(f, 0) > prec.get(g, 0):
+        if all(lpo(s, t_i, prec) for t_i in t_args):
+            return True
+            
+    # Condition 3: f == g, lex order
+    if f == g:
+        for i in range(len(s_args)):
+            if s_args[i] != t_args[i]:
+                if lpo(s_args[i], t_args[i], prec):
+                    if all(lpo(s, t_j, prec) for t_j in t_args[i+1:]):
+                        return True
+                break
+                
+    return False
+
+def get_vars(t):
+    if isinstance(t, str):
+        return {t}
+    vars = set()
+    for arg in t[1]:
+        vars.update(get_vars(arg))
+    return vars
+
+prec = {
+    'eqW': 5,
+    'integrate': 4,
+    'merge': 3,
+    'void': 1,
+    'recΔ': 5,
+    'app': 4,
+    'delta': 4
+}
+
+rules = [
+    # integrate(delta(t)) -> void
+    (('integrate', [('delta', ['t'])]), ('void', [])),
+    
+    # merge(void, t) -> t
+    (('merge', [('void', []), 't']), 't'),
+    
+    # merge(t, void) -> t
+    (('merge', ['t', ('void', [])]), 't'),
+    
+    # merge(t, t) -> t
+    (('merge', ['t', 't']), 't'),
+    
+    # rec(b, s, void) -> b
+    (('recΔ', ['b', 's', ('void', [])]), 'b'),
+    
+    # rec(b, s, delta(n)) -> app(s, rec(b, s, n))
+    (('recΔ', ['b', 's', ('delta', ['n'])]), ('app', ['s', ('recΔ', ['b', 's', 'n'])])),
+    
+    # eqW(a, a) -> void
+    (('eqW', ['a', 'a']), ('void', [])),
+    
+    # eqW(a, b) -> integrate(merge(a, b))
+    (('eqW', ['a', 'b']), ('integrate', [('merge', ['a', 'b'])])),
+]
+
+all_ok = True
+for i, (lhs, rhs) in enumerate(rules):
+    ok = lpo(lhs, rhs, prec)
+    print(f"Rule {i+1}: {ok}")
+    if not ok:
+        all_ok = False
+print(f"All OK: {all_ok}")
+[/TOOL]
+
+
+
+[TOOL-RESULT code_execution]
+{
+ "outcome": "OUTCOME_OK",
+ "output": "Rule 1: True\nRule 2: True\nRule 3: True\nRule 4: True\nRule 5: True\nRule 6: True\nRule 7: True\nRule 8: True\nAll OK: True\n",
+ "id": "2o4et9fg"
+}
+[/TOOL]
+
+**Assessment:**  
+**Yes.** Strong normalization of this system can be established exactly as presented. 
+
+**Reasoning:**  
+The provided Lean 4 calculus is a finite, first-order Term Rewriting System (TRS) with no variable binding. Strong normalization (termination of all possible rewrite sequences) can be proven using a standard, purely metatheoretic method: a **polynomial interpretation** over the natural numbers. Because we can define a measure that strictly decreases for every rule and is bounded below, there are no infinite rewrite paths.
+
+This requires zero extra rewrite rules, structural axioms, object-level assumptions, guards, or side conditions. Even the apparent overlap between `R_eq_refl` and `R_eq_diff` (where `eqW a a` can step to either `void` or `integrate (merge a a)`) poses no problem: while this overlap destroys confluence (determinism), it does not break strong normalization because both possible branches strictly reduce the size of the term.
+
+**Standard Proof Method (Polynomial Interpretation):**
+We map every term of type `Trace` to a strictly positive integer $\mathbb{N}_{\ge 1}$. We define the weight $[[ \cdot ]]$ recursively as follows:
+* $[[ \text{void} ]] = 1$
+* $[[ \text{delta}(t) ]] = [[t]] + 1$
+* $[[ \text{integrate}(t) ]] = [[t]] + 1$
+* $[[ \text{merge}(a, b) ]] = [[a]] + [[b]] + 1$
+* $[[ \text{app}(a, b) ]] = [[a]] + [[b]] + 1$
+* $[[ \text{eqW}(a, b) ]] = [[a]] + [[b]] + 3$
+* $[[ \text{recΔ}(b, s, n) ]] = [[b]] + ([[s]] \times [[n]]) + 2[[n]]$
+
+Because the functions use only addition and multiplication with positive coefficients, they are strictly monotonic (e.g., $x > y \implies C[x] > C[y]$ for any context $C$). If we evaluate the left-hand side (LHS) and right-hand side (RHS) of every rule, we observe a strict decrease:
+
+1. **`R_int_delta`:** $[[ \text{integrate}(\text{delta}(t)) ]] = [[t]] + 2$. Since $[[t]] \ge 1$, this is strictly greater than $[[ \text{void} ]] = 1$.
+2. **`R_merge_void_left`:** $[[ \text{merge}(\text{void}, t) ]] = 1 + [[t]] + 1 = [[t]] + 2 > [[t]]$.
+3. **`R_merge_void_right`:** $[[ \text{merge}(t, \text{void}) ]] = [[t]] + 1 + 1 = [[t]] + 2 > [[t]]$.
+4. **`R_merge_cancel`:** $[[ \text{merge}(t, t) ]] = 2[[t]] + 1 > [[t]]$.
+5. **`R_rec_zero`:** $[[ \text{recΔ}(b, s, \text{void}) ]] = [[b]] + [[s]](1) + 2(1) = [[b]] + [[s]] + 2 > [[b]]$.
+6. **`R_rec_succ`:**  
+   * **LHS:** $[[b]] + [[s]]([[n]] + 1) + 2([[n]] + 1) = [[b]] + [[s]][[n]] + [[s]] + 2[[n]] + 2$  
+   * **RHS:** $[[s]] + ([[b]] + [[s]][[n]] + 2[[n]]) + 1 = [[b]] + [[s]][[n]] + [[s]] + 2[[n]] + 1$  
+   * LHS is exactly RHS $+ 1$, so LHS $>$ RHS.
+7. **`R_eq_refl`:** $[[ \text{eqW}(a, a) ]] = 2[[a]] + 3 > 1 = [[ \text{void} ]]$.
+8. **`R_eq_diff`:**  
+   * **LHS:** $[[a]] + [[b]] + 3$  
+   * **RHS:** $([[a]] + [[b]] + 1) + 1 = [[a]] + [[b]] + 2$  
+   * LHS is exactly RHS $+ 1$, so LHS $>$ RHS.
+
+Every reduction step—whether applied at the root or deep inside a context—strictly decreases this measure. Because an infinite, strictly decreasing sequence of positive integers is impossible, the system is strongly normalizing exactly as written.

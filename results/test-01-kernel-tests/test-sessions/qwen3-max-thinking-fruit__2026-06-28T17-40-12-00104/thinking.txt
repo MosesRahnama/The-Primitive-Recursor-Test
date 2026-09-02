@@ -1,0 +1,262 @@
+We need to assess whether strong normalization (SN) of the given rewrite system can be established from the presented calculus alone, without importing structural axioms or object-level assumptions beyond what is derivable from the given syntax and rewrite rules. The system is defined in Lean 4 with an inductive type `Trace` and an inductive relation `Step` that defines rewrite rules. The question is: can we prove that every term has no infinite reduction sequence (i.e., the rewrite system is strongly normalizing) using only the given rules and standard proof methods that do not require adding extra rules, guards, etc.
+
+First, let's understand the rewrite system:
+
+- Terms are built from constructors: `plum` (constant), `grape` (unary), `mango` (unary), `peach` (binary), `pear` (binary), `banana` (ternary), `cherry` (binary). Note: `pear` appears only on the right-hand side of `R_apple_orange`, and `cherry` has two rules.
+
+Rewrite rules (Step constructors):
+
+1. `R_mango_grape`: `mango (grape t) → plum`
+2. `R_peach_plum_left`: `peach plum t → t`
+3. `R_peach_plum_right`: `peach t plum → t`
+4. `R_peach_cancel`: `peach t t → t`
+5. `R_banana_zero`: `banana b s plum → b`
+6. `R_apple_orange`: `banana b s (grape n) → pear s (banana b s n)`  [Note: rule name suggests apple/orange but uses banana and pear; likely a naming quirk]
+7. `R_cherry_refl`: `cherry a a → plum`
+8. `R_cherry_diff`: if `a ≠ b`, then `cherry a b → mango (peach a b)`
+
+Important: The rules are defined as an inductive relation `Step : Trace → Trace → Prop`, meaning each rule is a constructor of the relation. The system is a first-order term rewriting system (TRS) with no variable binding. However, note that rule `R_cherry_diff` has a side condition `a ≠ b`. In term rewriting, such a condition is a "conditional rewrite rule". But in the Lean definition, it is encoded as an implication: for any `a b`, if `a ≠ b` (as a proposition in Lean's logic), then there is a step. However, in the context of the rewrite system itself, the condition `a ≠ b` is a meta-level condition that must be checked. Since the system is defined within Lean, the condition is part of the rule's applicability. For strong normalization, we need to consider whether the condition can lead to non-termination or if it can be handled.
+
+But note: the question says "without importing structural axioms or object-level assumptions beyond what is derivable from the given syntax and rewrite rules". The condition `a ≠ b` is a condition on the terms `a` and `b`. In the rewrite system, when we have a term `cherry a b`, we can apply `R_cherry_refl` if `a` and `b` are syntactically equal (since `cherry a a` matches), and we can apply `R_cherry_diff` if `a` and `b` are syntactically distinct (because the condition `a ≠ b` is a proposition that is true when `a` and `b` are not the same term). However, in a standard TRS, we do not have such conditional rules based on inequality. But here, the rule is defined with an explicit condition. For the purpose of strong normalization, we must consider the rewrite relation as defined: a step exists from `cherry a b` to `plum` if `a = b` (by `R_cherry_refl`), and a step exists to `mango (peach a b)` if `a ≠ b` (by `R_cherry_diff`). Since for any pair `(a,b)`, exactly one of the two rules applies (if `a=b`, only `R_cherry_refl` applies; if `a≠b`, only `R_cherry_diff` applies), there is no overlap in applicability. However, note that `R_cherry_refl` requires the two arguments to be identical, while `R_cherry_diff` requires them to be distinct. So the rewrite relation is deterministic for `cherry` terms? Not exactly: if `a` and `b` are such that we cannot decide equality? But in the term algebra, terms are syntactic objects, so equality is decidable. In the context of the rewrite system as a mathematical relation, for any concrete terms `a` and `b`, either `a = b` (as terms) or `a ≠ b`, so exactly one rule applies. Therefore, the rewrite relation is confluent for `cherry` terms? But we are concerned with termination, not confluence.
+
+Now, the main question: can we prove strong normalization? Strong normalization means there is no infinite sequence of rewrites.
+
+We need to check if there is any possibility of an infinite reduction sequence. Let's analyze the rules:
+
+- Rules that reduce the size of the term: 
+  - `R_mango_grape`: replaces `mango (grape t)` (size: 1 + size(t) + 1? Actually, we need a measure) with `plum` (constant). This reduces size if `t` is non-empty? But `t` could be any term, so the left-hand side has at least two constructors (mango and grape) plus the size of t, while right-hand side is one constructor. So size decreases.
+  - `R_peach_plum_left` and `R_peach_plum_right`: replace `peach plum t` with `t`. The left-hand side has at least two constructors (peach and plum) plus size of t, right-hand side is t. So size decreases if we consider the size of the term. Similarly for `R_peach_cancel`: `peach t t` to `t` – left-hand side has peach and two copies of t, so size is 1 + 2*size(t), right-hand side is size(t), so size decreases if size(t) > 0. But if t is plum, then left-hand side: peach plum plum (size: peach has two arguments, each plum is size 1, so total size maybe 3? depending on definition) and right-hand side is plum (size 1). So size decreases.
+  - `R_banana_zero`: `banana b s plum` to `b`. Left-hand side has banana (3 args) plus b, s, plum. Right-hand side is b. So size decreases if b is smaller than the whole term. But note: b could be a large term. However, the left-hand side includes b, s, and plum, so the size of left-hand side is at least size(b) + size(s) + constant. The right-hand side is just b, so size decreases if size(s) + constant > 0, which is always true because s is a term (at least size 1 if we count constructors) and plum is size 1. But careful: if we define size as number of constructors, then:
+    - plum: 1
+    - grape t: 1 + size(t)
+    - mango t: 1 + size(t)
+    - peach t1 t2: 1 + size(t1) + size(t2)
+    - similarly for others.
+    So for `banana b s plum`: size = 1 (banana) + size(b) + size(s) + size(plum)=1 + size(b) + size(s) + 1 = size(b) + size(s) + 2.
+    Right-hand side: size(b). So the size decreases by size(s)+2, which is at least 1+2=3 if s is at least plum (size 1). So yes, size decreases.
+  - `R_cherry_refl`: `cherry a a` to `plum`: left-hand side size = 1 + 2*size(a), right-hand side size=1, so decreases if size(a) >= 1. If a is plum, left size=1+2=3, right=1, decreases.
+  - `R_cherry_diff`: `cherry a b` (with a≠b) to `mango (peach a b)`. Left size = 1 + size(a) + size(b). Right size = 1 (mango) + 1 (peach) + size(a) + size(b) = 2 + size(a) + size(b). So the right-hand side is larger by 1! This is a problem: the rule increases the size of the term. Specifically, it replaces a binary constructor `cherry` (size 1 + sizes of args) with `mango (peach a b)`, which has two constructors: mango and peach, so total size = 1 (mango) + [1 (peach) + size(a) + size(b)] = 2 + size(a) + size(b). Left size was 1 + size(a) + size(b). So the size increases by 1. This rule can potentially lead to non-termination if it can be applied repeatedly.
+
+But note: after applying `R_cherry_diff`, we get `mango (peach a b)`. Now, can this term be reduced further? Let's see:
+- `mango (peach a b)` might match `R_mango_grape` only if the argument of mango is `grape t`, but here it is `peach a b`, which is not `grape` unless `peach a b` is of the form `grape t`, which it isn't because `peach` is a different constructor. So `R_mango_grape` does not apply.
+- However, `peach a b` might be reducible by the peach rules if one of its arguments is plum or if a=b. But note: in `R_cherry_diff`, we have the condition a≠b, so a and b are distinct. But they could be such that one of them is plum? For example, if a=plum and b is something else (and b≠plum), then `peach plum b` can be reduced by `R_peach_plum_left` to b. Similarly, if b=plum and a≠plum, then `peach a plum` reduces to a by `R_peach_plum_right`. Also, if a and b are equal? But condition says a≠b, so `R_peach_cancel` does not apply because it requires both arguments equal. So after `R_cherry_diff`, we get `mango (peach a b)`, and then if one of a or b is plum, we can reduce the inner `peach` to the other argument, yielding `mango (something)`. Then, if that something is `grape t`, we could apply `R_mango_grape` to get plum. But if neither a nor b is plum, and a≠b, then `peach a b` is in normal form? Because the peach rules require at least one argument to be plum or both equal. Since a≠b and neither is plum (assuming), then `peach a b` cannot be reduced. Then `mango (peach a b)` is also in normal form because `mango` only has a rule when its argument is `grape t`. So in that case, the reduction stops.
+
+However, the problem is that `R_cherry_diff` increases size, but it might lead to a term that can be reduced further, possibly leading to a cycle or infinite growth. We need to check if there is a possibility of an infinite reduction sequence.
+
+Consider a term that involves `cherry` with distinct arguments that are not plum and not equal, and such that after applying `R_cherry_diff`, we get `mango (peach a b)`, and then if we can somehow get back to a `cherry` term or something that can be reduced again to increase size further. But note: the rules do not introduce `cherry` on the right-hand side except possibly through other rules? Let's check all right-hand sides:
+- R_mango_grape: plum
+- R_peach_plum_left: t
+- R_peach_plum_right: t
+- R_peach_cancel: t
+- R_banana_zero: b
+- R_apple_orange: pear s (banana b s n)  [introduces pear and banana]
+- R_cherry_refl: plum
+- R_cherry_diff: mango (peach a b)  [introduces mango and peach]
+
+None of the right-hand sides contain `cherry` except possibly if t, b, s, n contain cherry, but the rules do not create new cherry terms from non-cherry terms. However, note that `R_apple_orange` introduces `pear` and `banana`, and `pear` is a constructor that does not have any rewrite rules defined (it only appears on the right-hand side of R_apple_orange). Similarly, `banana` appears on the right-hand side of R_apple_orange, and banana has rules that can be applied if its third argument is plum or grape n. So `pear` might be a problem: it is a constructor with no rewrite rules, so any term containing `pear` as a top symbol is in normal form unless it is inside another reducible context. But `pear` itself is not reducible. However, `pear` can appear as an argument to other constructors? For example, in `R_apple_orange`, the result is `pear s (banana b s n)`. This term has top symbol `pear`, so it is not reducible by any rule because none of the rules have left-hand side starting with `pear`. Therefore, once a `pear` is created, that subterm is stuck. But the whole term might be reducible if it is inside a context that matches a rule. For example, if we have `banana ... (grape n)` and we apply R_apple_orange, we get `pear s (banana b s n)`. Now, this term is the result of the reduction, and if it is the whole term, it is in normal form because no rule applies to a term starting with `pear`. However, if this term is an argument to another constructor that has a rule, it might be reducible. For instance, could `pear s (banana b s n)` be an argument to `mango`? Then we would have `mango (pear ...)`, but `mango` only has a rule when its argument is `grape t`, so no. Could it be an argument to `peach`? Then we have `peach (pear ...) t`, but the peach rules require one argument to be plum or both equal. Since `pear ...` is not plum (unless s and the banana term somehow reduce to plum, but pear itself is not plum), and unless the other argument is exactly the same pear term (unlikely), it won't reduce. Similarly, `cherry` could have `pear` as an argument, but then if the two arguments are distinct, we would apply `R_cherry_diff` to get `mango (peach (pear ...) ...)`, which again introduces mango and peach. But note: `R_cherry_diff` increases size, and then we might get stuck again.
+
+The critical rule for potential non-termination is `R_cherry_diff` because it increases size. However, after applying it, we get a term that may or may not be reducible further. If it is reducible, the reduction might decrease size or lead to another cherry term. But can we get a cycle? For example, start with `cherry a b` (a≠b), reduce to `mango (peach a b)`. Now, if `peach a b` can be reduced to something that eventually leads back to a `cherry` term with distinct arguments, and then we apply `R_cherry_diff` again, increasing size each time, that could lead to infinite growth. But do any rules produce a `cherry` term? Looking at all right-hand sides: none of the rules have `cherry` on the right-hand side. The only way to have a `cherry` term is if it was present in the original term or created by a rule. Since no rule creates `cherry`, the only `cherry` terms are those that are subterms of the initial term. Therefore, once we reduce a `cherry` term (either by R_cherry_refl or R_cherry_diff), it is replaced by a term without `cherry` (plum or mango(peach a b)). And since no rule introduces `cherry`, we cannot get a new `cherry` term later. Therefore, each `cherry` subterm can be reduced at most once. This is crucial.
+
+Similarly, let's check other constructors:
+- `plum`: no rules have plum on left-hand side except as an argument (like in peach rules), but plum itself is a constant and is in normal form.
+- `grape`: only appears in rules as argument to mango (in R_mango_grape) or as argument to banana (in R_apple_orange). But grape itself has no rule; it is a constructor. However, a term `grape t` can be reduced only if it is inside `mango (grape t)` (by R_mango_grape) or inside `banana b s (grape n)` (by R_apple_orange). So grape terms are only reducible in specific contexts.
+- `mango`: has a rule only when its argument is `grape t`. Otherwise, mango terms are stuck.
+- `peach`: has rules when one argument is plum or both arguments equal. Otherwise, stuck.
+- `pear`: no rules at all, so any pear term is stuck.
+- `banana`: has rules when third argument is plum (R_banana_zero) or grape n (R_apple_orange). Otherwise, stuck.
+- `cherry`: as discussed, reduced once and then gone.
+
+Therefore, the rewrite system is such that each reducible subterm can be reduced only a bounded number of times because:
+- For `cherry`: each occurrence can be reduced exactly once (to either plum or mango(peach a b)), and after reduction, no new cherry is created.
+- For `banana`: when we have `banana b s t`, if t is plum, we reduce to b (R_banana_zero). If t is `grape n`, we reduce to `pear s (banana b s n)` (R_apple_orange). Note that in the latter case, we introduce a new `banana` term: `banana b s n` inside the pear. So this rule can create a new banana term with a smaller third argument? Because originally we had `banana b s (grape n)`, and after reduction, we have `banana b s n` as a subterm. The third argument changed from `grape n` to `n`. If we define a measure on the third argument of banana, such as the "height" or "size" of the term, then `grape n` has size 1 + size(n), while n has size size(n). So the new banana term has a third argument that is smaller (in size) than the original third argument. However, note that the new banana term is inside a `pear` constructor, and pear has no rules, so the banana term inside pear might not be reducible unless the pear term is somehow taken out of context. But the banana term is an argument to pear, and pear is not reducible, so the banana subterm inside pear is not accessible for reduction because the rules only apply at the top level? Wait, in term rewriting, reduction can occur at any subterm (context). The Step relation is defined for the whole term, but typically in such inductive definitions of reduction, we assume that reduction can happen in any context. However, looking at the Lean code: the Step relation is defined only for the top-level term? Actually, in the given code, Step is an inductive relation on Trace → Trace → Prop, and the constructors only give steps for the whole term matching the left-hand side. There is no rule for contextual reduction (i.e., reduction under constructors). This is critical.
+
+In standard term rewriting systems, reduction is closed under contexts: if t → t', then C[t] → C[t'] for any context C. However, in this Lean formalization, the Step relation is defined only by the given constructors, and there is no constructor for contextual steps. Therefore, the rewrite relation as defined is only for top-level reductions. That means reduction can only happen at the root of the term. This is a very restricted system: only when the entire term matches one of the left-hand sides of the rules can a step be taken. There is no reduction under constructors.
+
+Let me check the Lean code again: 
+```
+inductive Step : Trace → Trace → Prop
+| R_mango_grape : ∀ t, Step (mango (grape t)) plum
+| ... 
+```
+Each constructor specifies a step from a specific term form to another term. There is no rule like "if Step t t' then Step (grape t) (grape t')". Therefore, the Step relation is not closed under contexts. This means that reduction is only allowed at the root. This is unusual for a rewrite system, but the problem states "first-order rewrite calculus with no variable binding, no external memory", but it doesn't specify if reduction is contextual. However, in the definition of Step, only root steps are given. Therefore, we must interpret the system as having reduction only at the root. This changes everything.
+
+In such a system, a term can only be reduced if its top symbol and structure match one of the left-hand sides exactly. For example, the term `peach plum (grape plum)` would not reduce by R_peach_plum_left because the whole term is `peach plum (grape plum)`, and R_peach_plum_left requires the second argument to be any t, but the rule is `Step (peach plum t) t`, so yes, it would match: t is `(grape plum)`, so it would reduce to `(grape plum)`. But note: the reduction is at the root. However, if we have a term like `mango (peach plum t)`, this term does not match any left-hand side because the top symbol is `mango`, and the only rule for mango is `R_mango_grape` which requires the argument to be `grape t`, but here the argument is `peach plum t`, which is not of the form `grape _`. Therefore, no step is possible from `mango (peach plum t)`, even though the subterm `peach plum t` could be reduced if it were at the root. Since reduction is only at the root, we cannot reduce inside.
+
+Therefore, the rewrite system is a "root-rewriting" system. In such systems, termination is often easier to prove because the structure of the term limits the number of possible root reductions. Specifically, each rule replaces the entire term with a new term. The question is: can there be an infinite sequence of root reductions?
+
+Let's list all possible root reductions:
+
+- If the term is of the form `mango (grape t)`, it reduces to `plum`.
+- If the term is `peach plum t`, reduces to `t`.
+- If the term is `peach t plum`, reduces to `t`.
+- If the term is `peach t t`, reduces to `t`.
+- If the term is `banana b s plum`, reduces to `b`.
+- If the term is `banana b s (grape n)`, reduces to `pear s (banana b s n)`.
+- If the term is `cherry a a`, reduces to `plum`.
+- If the term is `cherry a b` with a≠b, reduces to `mango (peach a b)`.
+
+Note: For `cherry a b`, the condition a≠b is required for the second rule. But as discussed, for any concrete terms a and b, either a=b or a≠b, so exactly one rule applies if the term is `cherry a b`. However, in the inductive definition of Step, the rule R_cherry_diff has a premise `a ≠ b`, which in Lean is a proposition. For the step to exist, we need to provide a proof of `a ≠ b`. In the context of the rewrite relation as a mathematical relation on terms, we consider that a step exists from `cherry a b` to `mango (peach a b)` if and only if a and b are syntactically distinct terms. Since the terms are from an inductive type, syntactic equality is decidable, and for any two distinct terms, the inequality holds. So in the rewrite relation, for any term of the form `cherry a b` with a and b distinct, there is a step. Similarly, if a and b are identical, there is a step to plum. So every `cherry` term can be reduced at the root.
+
+Now, can we have an infinite sequence of root reductions? Let's consider possible cycles or infinite chains.
+
+Start with a term T0. After one reduction, we get T1. For the sequence to be infinite, we must be able to keep applying root reductions forever.
+
+Observe that many rules reduce the term to a subterm (like peach rules reduce to t, banana_zero reduces to b, cherry_refl reduces to plum). These tend to simplify the term. However, two rules can increase the "complexity":
+- R_apple_orange: `banana b s (grape n)` → `pear s (banana b s n)`. The right-hand side has a new banana term with third argument n (which is smaller than grape n in terms of structure, but the overall term now has a pear constructor and a nested banana). However, note that the new term has top symbol `pear`. Since there is no rule with left-hand side starting with `pear`, once we reduce a banana term with third argument grape n to a pear term, the resulting term `pear s (banana b s n)` is in normal form (no root reduction possible) because no rule matches a term starting with pear. Therefore, after applying R_apple_orange, the reduction stops at the root. So this rule cannot be followed by another root reduction on the same term (unless the resulting term somehow matches another rule, but pear is not the head of any left-hand side). Therefore, R_apple_orange leads to a normal form in one step.
+
+- R_cherry_diff: `cherry a b` (a≠b) → `mango (peach a b)`. The result has top symbol `mango`. Now, can `mango (peach a b)` be reduced at the root? Only if it matches R_mango_grape, which requires the argument of mango to be `grape t`. But here the argument is `peach a b`, which is not of the form `grape _` (since peach is a different constructor). Therefore, `mango (peach a b)` is in normal form (no root reduction possible) unless `peach a b` somehow equals `grape t` for some t, which is impossible because constructors are distinct. Therefore, after applying R_cherry_diff, the term becomes a mango term with a peach argument, and since no rule applies to mango unless its argument is grape, and peach is not grape, it is stuck. So R_cherry_diff also leads to a normal form in one step.
+
+Wait, but what if a or b is such that `peach a b` can be reduced? But reduction is only at the root, so even if `peach a b` is reducible (e.g., if a=plum), we cannot reduce it because it is not at the root. The whole term is `mango (peach a b)`, and the root is mango, so we only check rules for mango. Since the argument is not grape, no rule applies. Therefore, the term is in normal form.
+
+Similarly, for other rules:
+- R_mango_grape: reduces to plum, which is a constant and has no rule (plum is not the head of any left-hand side? Check: is there a rule with left-hand side plum? No. So plum is normal form.
+- R_peach_plum_left: reduces to t. Now, t could be any term. So after reduction, we get t, and then we can try to reduce t at the root. So this rule can lead to further reductions if t is reducible at the root. Similarly for R_peach_plum_right and R_peach_cancel: they reduce to t, and then t might be reducible.
+- R_banana_zero: reduces to b, and b might be reducible at the root.
+- R_cherry_refl: reduces to plum, which is normal form.
+
+Therefore, the only rules that can lead to a chain of reductions are those that reduce to a term that itself is reducible at the root: namely, the peach rules (when they reduce to t, and t is reducible) and banana_zero (reduces to b, which might be reducible). Also, note that R_peach_cancel reduces to t, and t could be reducible.
+
+But also, consider: could a term be reduced by multiple rules? For example, a term might match more than one rule. For instance, `peach plum plum` matches both R_peach_plum_left (with t=plum) and R_peach_plum_right (with t=plum) and R_peach_cancel (with t=plum). But all reduce to plum. So no issue.
+
+Now, the key is: can we have an infinite sequence where each step reduces to a term that is again reducible at the root, and this continues forever? Since each reduction that reduces to a subterm (like peach rules reducing to t) is essentially "unwrapping" the term, and the subterm t is structurally smaller than the original term? Not necessarily in size, but in terms of the path to the root.
+
+Let's define a measure. Since reduction is only at the root, the sequence of terms is T0 → T1 → T2 → ... where each Ti+1 is obtained by applying a root rule to Ti. For the sequence to be infinite, we must have that for each i, Ti is reducible at the root, and Ti+1 is also reducible at the root, and so on.
+
+Consider the structure of terms that are reducible at the root. A term is reducible at the root if its top symbol and arguments match one of the left-hand sides. Let's list the patterns that are reducible:
+
+- mango (grape _)
+- peach plum _
+- peach _ plum
+- peach t t (for any t)
+- banana _ _ plum
+- banana _ _ (grape _)
+- cherry a a
+- cherry a b with a≠b
+
+Note: For peach t t, it requires the two arguments to be identical. For cherry, as discussed, exactly one rule applies depending on equality.
+
+Now, when we apply a rule that reduces to a subterm (like peach rules reducing to the second argument or the first argument, or banana_zero reducing to the first argument), the resulting term is one of the arguments of the original term. Therefore, the new term is a direct subterm of the original term. In term algebra, the subterm relation is well-founded: you cannot have an infinite sequence of taking subterms because each time you go to a proper subterm, and terms are finite. However, caution: when we reduce `peach plum t` to `t`, t is a subterm of the original term. Similarly, `banana b s plum` reduces to `b`, which is a subterm. `peach t t` reduces to `t`, which is a subterm (and since both arguments are the same, t is a subterm). Therefore, any reduction that results in a subterm strictly decreases the term in the subterm order. The subterm order is well-founded (since terms are finite trees). Therefore, any sequence of reductions that only use rules that reduce to a subterm must terminate, because you cannot have an infinite descending chain in the subterm order.
+
+But what about rules that do not reduce to a subterm? We have:
+- R_mango_grape: reduces to plum. plum is not necessarily a subterm of `mango (grape t)`? Actually, plum is a constant, and it is not a subterm of the left-hand side unless t contains plum, but in general, plum is not a subterm. However, the result is a constant, which is a normal form (as we established, plum has no root rule). So after this reduction, the sequence stops. So it cannot be part of an infinite sequence because the next term is not reducible.
+- R_apple_orange: reduces to `pear s (banana b s n)`. This term is not a subterm of the original `banana b s (grape n)`; it is a new term. However, as argued, the result has top symbol pear, which is not reducible at the root (no rule matches pear). Therefore, after this reduction, the term is in normal form, so the sequence stops.
+- R_cherry_refl: reduces to plum, normal form.
+- R_cherry_diff: reduces to `mango (peach a b)`, which is not a subterm, but as argued, this term is not reducible at the root (since mango requires grape argument, and peach is not grape). So it is a normal form.
+
+Therefore, the only rules that can be followed by another reduction are those that reduce to a subterm that itself is reducible at the root. And as argued, reducing to a subterm means that the term size (in terms of tree size) decreases, and since the subterm order is well-founded, any sequence of such reductions must be finite. Moreover, after a reduction that does not reduce to a subterm (i.e., the "expanding" rules like R_apple_orange and R_cherry_diff), the resulting term is in normal form, so the sequence terminates immediately after that step.
+
+But wait: is it possible that after reducing to a subterm, that subterm is reducible, and then we apply a rule that again reduces to a subterm, and so on, and this chain could be infinite? No, because each time we take a proper subterm, and the term size (number of constructors) strictly decreases. Since the size is a natural number, it cannot decrease infinitely. Therefore, any sequence of reductions that only uses the "subterm-reducing" rules (peach rules, banana_zero, and also note: R_peach_cancel reduces to t, which is a subterm) must terminate after at most size(T0) steps.
+
+However, we must check if there is any rule that reduces to a term that is not a subterm but is still reducible at the root. We argued that R_apple_orange and R_cherry_diff produce terms that are not reducible at the root. But is that always true?
+
+For R_apple_orange: result is `pear s (banana b s n)`. Top symbol is pear. Is there any rule with left-hand side starting with pear? Looking at the rules: none. So indeed, no root reduction is possible from a term starting with pear. Therefore, it is a normal form.
+
+For R_cherry_diff: result is `mango (peach a b)`. Top symbol is mango. The only rule for mango is R_mango_grape, which requires the argument to be of the form `grape t`. But the argument is `peach a b`, which is a term starting with peach. Since constructors are distinct, `peach a b` cannot be equal to `grape t` for any t. Therefore, no rule applies. So it is a normal form.
+
+What about R_mango_grape? Result is plum, which is normal form.
+
+R_cherry_refl: result is plum, normal form.
+
+Therefore, the only rules that can be followed by another reduction are the ones that reduce to a subterm: specifically:
+- R_peach_plum_left: reduces to the second argument (t)
+- R_peach_plum_right: reduces to the first argument (t) [note: in R_peach_plum_right, it's `peach t plum` → t, so t is the first argument]
+- R_peach_cancel: reduces to t (which is both arguments, so it's a subterm)
+- R_banana_zero: reduces to b (the first argument)
+
+Additionally, could there be a case where a term matches multiple rules, and one rule reduces to a subterm and another rule reduces to a non-subterm? For example, consider a term that is both `peach t t` and also matches another pattern? But `peach t t` only matches the peach rules. If t is such that the term also matches, say, if t is plum, then `peach plum plum` matches R_peach_plum_left, R_peach_plum_right, and R_peach_cancel, all reducing to plum. So no issue.
+
+Another point: what about the condition in R_cherry_diff? It requires a≠b. But if a and b are such that after reduction to `mango (peach a b)`, and if by some miracle `peach a b` equals `grape t`? But as constructors are injective and distinct, `peach a b` cannot be equal to `grape t` because the top symbols are different. So no.
+
+Therefore, in all cases, any reduction sequence must consist of a (possibly empty) sequence of reductions that reduce to a subterm (each time decreasing the term size), followed by at most one reduction that produces a normal form (either by an expanding rule or by a rule that produces a constant). Since the subterm-reducing steps are bounded by the initial term size, and after that we might have one more step that terminates, the entire sequence is finite.
+
+But wait: could there be a reduction that reduces to a subterm, and that subterm is itself reducible by an expanding rule? For example, suppose we have a term T = `peach plum U`, and we reduce to U by R_peach_plum_left. Now, if U is of the form `banana b s (grape n)`, then U is reducible at the root by R_apple_orange. So the sequence would be: T → U → V, where V = `pear s (banana b s n)`. Then V is normal form. So the sequence has two steps: first a subterm-reducing step (size decreases from size(T) to size(U)), then an expanding step that produces a normal form. The expanding step does not reduce to a subterm, but it is applied to U, which is a subterm of T. However, after the first step, we have U, and then we apply R_apple_orange to U. But R_apple_orange is not a subterm-reducing rule; it produces a term V that is not a subterm of U. However, V is in normal form, so the sequence stops. So the total number of steps is finite.
+
+Could there be a case where after reducing to a subterm U, U is reducible by a rule that again reduces to a subterm of U, and so on, and then eventually we hit an expanding rule? But the expanding rule, when applied, produces a normal form, so it terminates the sequence. The key is that the expanding rules (R_apple_orange, R_cherry_diff, R_mango_grape, R_cherry_refl) all produce terms that are normal forms (no further root reduction). Therefore, once an expanding rule is applied, the sequence ends. The only way to have multiple expanding rules in a sequence is if after an expanding rule, the result is reducible, but we argued that the results of expanding rules are not reducible. Therefore, at most one expanding rule can be applied in a sequence, and it must be the last step. All preceding steps must be subterm-reducing steps. Since subterm-reducing steps strictly decrease the term size (in terms of number of constructors), and the size is a natural number, there can be at most size(initial term) subterm-reducing steps. Therefore, the entire reduction sequence is bounded by size(initial term) + 1, hence finite.
+
+But we must confirm that the subterm-reducing steps indeed strictly decrease the size. Let's define size formally:
+- size(plum) = 1
+- size(grape t) = 1 + size(t)
+- size(mango t) = 1 + size(t)
+- size(peach t1 t2) = 1 + size(t1) + size(t2)
+- size(pear t1 t2) = 1 + size(t1) + size(t2)  [though pear only appears on RHS]
+- size(banana b s t) = 1 + size(b) + size(s) + size(t)
+- size(cherry a b) = 1 + size(a) + size(b)
+
+Now, for the subterm-reducing rules:
+- R_peach_plum_left: left size = 1 + size(plum) + size(t) = 1 + 1 + size(t) = 2 + size(t). Right size = size(t). Since size(t) >= 1 (as t is a term, minimum size 1 for plum), left size >= 3, right size = size(t) <= left size - 2. So size decreases by at least 2.
+- Similarly, R_peach_plum_right: same.
+- R_peach_cancel: left size = 1 + size(t) + size(t) = 1 + 2*size(t). Right size = size(t). Decrease by at least 1 + size(t) >= 2 (since size(t)>=1).
+- R_banana_zero: left size = 1 + size(b) + size(s) + size(plum) = 1 + size(b) + size(s) + 1 = size(b) + size(s) + 2. Right size = size(b). Decrease by size(s) + 2 >= 1 + 2 = 3 (since size(s)>=1).
+
+So yes, size strictly decreases.
+
+For the expanding rules:
+- R_mango_grape: left size = 1 (mango) + [1 (grape) + size(t)] = 2 + size(t). Right size = 1 (plum). Decrease by 1 + size(t) >= 2. Wait, this actually decreases size! I earlier thought it might not be a subterm, but size decreases. However, the result is plum, which is normal form. So it is a size-decreasing rule that also produces a normal form. Similarly, R_cherry_refl: left size = 1 + 2*size(a) >= 3, right size=1, decrease. R_cherry_diff: left size = 1 + size(a) + size(b), right size = 1 (mango) + [1 (peach) + size(a) + size(b)] = 2 + size(a) + size(b). So size increases by 1. But as argued, the result is normal form. R_apple_orange: left size = 1 (banana) + size(b) + size(s) + [1 (grape) + size(n)] = size(b) + size(s) + size(n) + 2. Right size = 1 (pear) + size(s) + [1 (banana) + size(b) + size(s) + size(n)] = size(b) + 2*size(s) + size(n) + 2. Compare: left size = size(b)+size(s)+size(n)+2, right size = size(b)+2*size(s)+size(n)+2. So right size = left size + size(s). Since size(s) >= 1, size increases. But result is normal form.
+
+So the only rule that increases size is R_cherry_diff and R_apple_orange. However, as established, after applying either of these, the term is in normal form, so no further reduction is possible. Therefore, even though size increases in that step, it is the last step. So the sequence cannot continue.
+
+Therefore, any reduction sequence must be finite. Hence, the system is strongly normalizing.
+
+But wait: is there a possibility of a term that matches an expanding rule, and after reduction, the result is reducible? We argued no for R_apple_orange and R_cherry_diff. But let's double-check R_apple_orange: result is `pear s (banana b s n)`. Could this term match any rule? The rules require specific top symbols: mango, peach, banana, cherry. Pear is not among them. So no. Similarly, for R_cherry_diff: result is `mango (peach a b)`. The only rule for mango is R_mango_grape, which requires the argument to be `grape _`. But `peach a b` is not `grape _` because the constructor is peach, not grape. Since the type is inductive and constructors are distinct, in Lean, `peach a b` and `grape t` are not equal for any a,b,t. Therefore, no match. So indeed, normal form.
+
+What about the possibility of a term that is reducible by multiple rules, and choosing one rule leads to a longer sequence than another? But strong normalization requires that all reduction sequences are finite, regardless of the choice of rule at each step. We need to ensure that no matter which applicable rule we choose at each step, the sequence terminates. In our analysis, we considered that after any step, the resulting term either is in normal form or is a proper subterm (in the case of subterm-reducing rules). However, if a term matches both a subterm-reducing rule and an expanding rule, we must check both possibilities.
+
+Is there a term that matches both a subterm-reducing rule and an expanding rule? Let's see:
+
+- Consider a term that is `peach t t` and also matches another pattern? For example, if t is such that `peach t t` also matches `peach plum _`? Only if t=plum, then `peach plum plum` matches R_peach_plum_left, R_peach_plum_right, and R_peach_cancel. All of these reduce to plum, which is a subterm-reducing step (to plum). There is no expanding rule that applies to `peach plum plum` because the only rules for peach are the ones listed, and they all reduce to a subterm (plum). So no conflict.
+
+- Consider a term that is `banana b s plum`. This matches R_banana_zero, which reduces to b (subterm-reducing). Could it also match R_apple_orange? R_apple_orange requires the third argument to be `grape n`, but here it is plum, so no.
+
+- Consider a term that is `banana b s (grape n)`. This matches R_apple_orange (expanding rule). Could it also match R_banana_zero? No, because third argument is grape n, not plum.
+
+- Consider a term that is `cherry a b`. If a=b, it matches R_cherry_refl (which reduces to plum, size-decreasing and normal form). If a≠b, it matches R_cherry_diff (expanding rule, size-increasing, but normal form). There is no other rule for cherry. So no overlap between subterm-reducing and expanding for cherry.
+
+- Consider a term that is `mango (grape t)`. Only matches R_mango_grape, which reduces to plum (size-decreasing, normal form). Not expanding in the sense of increasing size, but it is a terminating step.
+
+- What about a term that is `peach plum t` where t is such that the whole term also matches another rule? For example, if t = plum, then it matches multiple peach rules, but all reduce to plum. If t is something else, only R_peach_plum_left applies. No expanding rule applies to peach terms.
+
+Therefore, there is no term that can be reduced by both a rule that leads to a reducible term (subterm-reducing) and a rule that leads to a normal form (expanding) in a way that choosing the expanding rule would prevent termination? But actually, if a term matches only expanding rules, then applying it leads to normal form, so sequence length 1. If it matches only subterm-reducing rules, then applying it leads to a smaller term, and we continue. If it matches both types? From above, it seems no term matches both a subterm-reducing rule and an expanding rule. Let's verify thoroughly:
+
+List of rules by type:
+- Subterm-reducing (result is a proper subterm of the original term, and the result may be reducible): 
+  * R_peach_plum_left: result = second argument (t)
+  * R_peach_plum_right: result = first argument (t)
+  * R_peach_cancel: result = t (which is both arguments, so a subterm)
+  * R_banana_zero: result = first argument (b)
+- Terminating rules (result is a normal form, i.e., no root reduction possible):
+  * R_mango_grape: result = plum (normal form)
+  * R_cherry_refl: result = plum (normal form)
+  * R_cherry_diff: result = mango(peach a b) (normal form, as argued)
+  * R_apple_orange: result = pear s (banana b s n) (normal form)
+
+Now, check if any term can be an instance of both a subterm-reducing rule and a terminating rule.
+
+- For a term to match a subterm-reducing rule, its top symbol must be peach or banana (with specific arguments). For terminating rules, top symbol must be mango, cherry, or banana (for R_apple_orange) or cherry (for R_cherry_diff). Wait, R_apple_orange has top symbol banana, and R_banana_zero also has top symbol banana. So a banana term could potentially match both R_banana_zero and R_apple_orange? But R_banana_zero requires third argument = plum, R_apple_orange requires third argument = grape n. Since plum and grape n are distinct constructors, a term cannot have third argument both plum and grape n. So no overlap.
+
+- Could a peach term match a terminating rule? The terminating rules do not have peach as top symbol, so no.
+
+- Could a cherry term match a subterm-reducing rule? No, because subterm-reducing rules require top symbol peach or banana.
+
+- Could a mango term match a subterm-reducing rule? No.
+
+Therefore, the sets of terms matched by subterm-reducing rules and terminating rules are disjoint. Moreover, within the subterm-reducing rules, the result is always a proper subterm, and the size decreases. Within the terminating rules, the result is always a normal form (no further reduction). Therefore, any reduction sequence must consist of zero or more applications of subterm-reducing rules (each time decreasing the size of the term), followed by at most one application of a terminating rule (which then stops). Since the size is a natural number and decreases with each subterm-reducing step, the number of such steps is bounded by the initial size. Hence, all reduction sequences are finite.
+
+Therefore, strong normalization holds.
+
+But wait: what about the condition in R_cherry_diff? The rule requires a proof of a ≠ b. In the context of the rewrite relation as a mathematical relation, for any two distinct terms a and b, the step exists. However, in a reduction sequence, when we have a term `cherry a b` with a≠b, we can apply R_cherry_diff. But is there any scenario where a and b are not syntactically distinct but we cannot prove a≠b? In the meta-theory, since terms are syntactic objects, if a and b are distinct terms, then a≠b is true, and the step exists. If a and b are the same term, then R_cherry_refl applies. So for every cherry term, exactly one rule applies. Therefore, no issue.
+
+Another subtle point: the rule R_cherry_diff has a premise `a ≠ b`, which in Lean is a proposition. In the inductive definition of Step, to construct a Step for `cherry a b` to `mango (peach a b)`, we need to provide a proof of `a ≠ b`. In the context of proving strong normalization, we are reasoning about the existence of reduction sequences. For any concrete terms a and b that are distinct, such a proof exists (by decidability of equality on the inductive type Trace). Therefore, the step is available. So in the rewrite relation, the step is present for all distinct a,b. Hence, our analysis holds.
+
+Therefore, from the given calculus alone, we can establish strong normalization by a simple size argument combined with the observation that all rules either reduce to a proper subterm (and thus decrease a well-founded measure) or produce a normal form. No additional axioms or assumptions are needed beyond the syntax and the rewrite rules as given.
+
+However, we must be cautious: the measure we used is the size of the term (number of constructors). For the subterm-reducing rules, size strictly decreases. For the terminating rules, even if size increases (R_cherry_diff, R_apple_orange), the result is a normal form, so no further steps. Therefore, the maximum length of a reduction sequence starting from a term of size n is at most n (from subterm-reducing steps) plus possibly one terminating step. Since n is finite, the sequence is finite.
+
+But is it possible that a subterm-reducing step reduces to a term that has larger size than the original? No, because we checked that for subterm-reducing rules, the result is a proper subterm, and in term algebras, a proper subterm has strictly smaller size. For example, in R_peach_plum_left, the result is t, which is a direct subterm of the original term `peach plum t`, and size(t) < size(peach plum t) because the latter has at least the peach constructor and plum. Similarly for others.
+
+Therefore, the system is strongly normalizing.
+
+Final assessment: Yes, strong normalization can be established from the presented calculus alone. The reasoning is that the rewrite relation is root-only, and every possible root reduction either (a) replaces the term with a proper subterm (strictly decreasing the term size, and the subterm may be further reducible) or (b) replaces the term with a normal form (no further root reductions possible). Since the term size is a natural number and decreases in case (a), any sequence of reductions must be finite. No additional axioms or structural properties beyond the given syntax and rules are required; the argument relies solely on the structure of the rules and the well-foundedness of the subterm relation (or term size).
+
+Note: The well-foundedness of the subterm relation is a basic property of inductive types (finite trees), which is derivable from the syntax alone (i.e., the fact that terms are finite and built from constructors). This does not require importing external axioms; it is a meta-theoretic observation about the term algebra. The problem states "without importing structural axioms or object-level assumptions beyond what is derivable from the given syntax and rewrite rules". The finiteness of terms and the subterm order being well-founded is inherent to the syntax (inductive type definition). Therefore, it is permissible.
+
+Thus, the answer is yes.

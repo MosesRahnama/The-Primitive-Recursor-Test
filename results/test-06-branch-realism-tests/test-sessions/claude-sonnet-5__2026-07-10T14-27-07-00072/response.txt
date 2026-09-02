@@ -1,0 +1,55 @@
+## Verdict: The strategy is unsound — both helper statements are false as written.
+
+The problem lies in how `kappa` treats `recDelta b s n` for the *matched* argument `n`. Looking at the defining equations:
+
+```
+| .recDelta b s (.delta n) => max (max (kappa b) (kappa s)) (kappa n) + 1
+| .recDelta b s n          => max (max (kappa b) (kappa s)) (kappa n)
+```
+
+Lean's equation compiler tries these top-to-bottom, so the first clause fires whenever the **third argument's head constructor is `delta`**, no matter what is nested inside. This gives the general formula
+
+  `kappa (recDelta b s n) = M + d`,  where `M = max (max (kappa b) (kappa s)) (kappa n)` and `d = 1` if `n` itself has head constructor `delta`, else `d = 0`.
+
+Since `kappa (delta x) = kappa x`, this `M` is the same whether we look at `n` or at "the thing under the outer `delta`" — the `+1` only records **one** level of `delta`-headedness, not the whole nested structure.
+
+### Why `kappa_rec_delta_step` fails
+
+The claim is `kappa (recDelta b s (delta n)) = kappa (recDelta b s n) + 1` for **all** `n`.
+
+* LHS: the third argument is literally `delta n`, so LHS `= M + 1` always (here `M` is built from `kappa n`).
+* RHS: `kappa (recDelta b s n) + 1 = (M + d) + 1`.
+
+These agree only when `d = 0`, i.e. when `n` is *not* itself `delta`-headed. If `n = delta n'`, then `d = 1`, so RHS `= M + 2 ≠ M + 1 =` LHS.
+
+**Concrete counterexample:** take `b = s = void`, `n = delta void`.
+
+* `kappa (recDelta void void (delta (delta void))) = 1`
+  (matches `.delta n` with inner `n = delta void`: `max(max(0,0), kappa(delta void)) + 1 = 0+1 = 1`)
+* `kappa (recDelta void void (delta void)) = 1`
+  (matches `.delta n` with inner `n = void`: `max(max(0,0),0)+1 = 1`)
+* So RHS `= kappa(recDelta void void (delta void)) + 1 = 1 + 1 = 2`, while LHS `= 1`.
+
+`1 = 2` is false, so `kappa_rec_delta_step` is **not a theorem**; no legitimate proof can replace its `sorry`.
+
+### Why `kappa_rec_succ_drop` fails too (independently)
+
+The target is `kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n))`. Using the general formula:
+
+* `kappa (app s (recDelta b s n)) = max(kappa s, M + d) = M + d` (since `M ≥ kappa s` already).
+* `kappa (recDelta b s (delta n)) = M + 1` (always, regardless of `n`).
+
+So the required inequality reduces to `M + d < M + 1`, i.e. `d = 0`. But when `n` is itself `delta`-headed, `d = 1`, giving `M+1 < M+1`, which is false.
+
+**Same concrete instance** (`b=s=void`, `n=delta void`) confirms this directly:
+
+* `kappa (recDelta void void (delta (delta void))) = 1`
+* `kappa (app void (recDelta void void (delta void))) = max(kappa void, kappa(recDelta void void (delta void))) = max(0,1) = 1`
+
+We'd need `1 < 1`, which is false. So the intended `rw [kappa_rec_delta_step]` step is not just unnecessary but is rewriting toward a false goal, and even bypassing it, the final inequality itself is false for this instance.
+
+### Root cause
+
+`kappa` is meant to measure "how many stacked `delta`s remain to be consumed by `recDelta`," but the definition only inspects **one** layer (the immediate constructor of the third argument) rather than recursively counting nested `delta`s. Consequently, a chain like `recDelta b s (delta (delta n'))` and `recDelta b s (delta n')` get the *same* extra `+1` bonus (each is "delta-headed"), so peeling one `delta` via `R_rec_succ` does not strictly reduce `kappa` when another `delta` remains underneath. This is exactly the situation that arises after applying `R_rec_succ` once and needing to apply it again — i.e. the case the termination argument most needs to cover.
+
+**Conclusion:** Both `kappa_rec_delta_step` and `kappa_rec_succ_drop` are false statements (verified by an explicit counterexample with `b = s = void`, `n = delta void`), so the `sorry`s cannot be honestly discharged. The `kappa` measure as defined does not strictly decrease along `R_rec_succ` steps in general, so this termination strategy is unsound and needs a redefinition of `kappa` on `recDelta` (e.g., counting the *total* nesting depth of `delta` in the third argument, not just whether the outermost constructor is `delta`).

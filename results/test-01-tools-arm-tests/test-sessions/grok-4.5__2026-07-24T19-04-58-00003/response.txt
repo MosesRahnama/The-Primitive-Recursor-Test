@@ -1,0 +1,320 @@
+I will assess strong normalization (SN) of the given first-order rewrite system by examining the rules directly, searching for potential infinite reduction sequences, and checking whether a termination measure or inductive argument can be derived solely from the syntax and the eight rules.
+
+[TOOL-CALL code_interpreter_call]
+{
+ "type": "code_interpreter_call",
+ "status": "completed",
+ "code": "from dataclasses import dataclass\nfrom typing import Union, List, Tuple, Optional\nimport itertools\n\n# Define Trace terms\n@dataclass(frozen=True)\nclass Void:\n    def __repr__(self): return \"void\"\n\n@dataclass(frozen=True)\nclass Delta:\n    t: 'Trace'\n    def __repr__(self): return f\"delta({self.t})\"\n\n@dataclass(frozen=True)\nclass Integrate:\n    t: 'Trace'\n    def __repr__(self): return f\"integrate({self.t})\"\n\n@dataclass(frozen=True)\nclass Merge:\n    t1: 'Trace'\n    t2: 'Trace'\n    def __repr__(self): return f\"merge({self.t1},{self.t2})\"\n\n@dataclass(frozen=True)\nclass App:\n    t1: 'Trace'\n    t2: 'Trace'\n    def __repr__(self): return f\"app({self.t1},{self.t2})\"\n\n@dataclass(frozen=True)\nclass RecΔ:\n    b: 'Trace'\n    s: 'Trace'\n    n: 'Trace'\n    def __repr__(self): return f\"recΔ({self.b},{self.s},{self.n})\"\n\n@dataclass(frozen=True)\nclass EqW:\n    a: 'Trace'\n    b: 'Trace'\n    def __repr__(self): return f\"eqW({self.a},{self.b})\"\n\nTrace = Union[Void, Delta, Integrate, Merge, App, RecΔ, EqW]\n\nvoid = Void()\n\ndef all_subterms(t: Trace) -> List[Trace]:\n    \"\"\"Collect all subterms including self\"\"\"\n    res = [t]\n    if isinstance(t, Delta):\n        res += all_subterms(t.t)\n    elif isinstance(t, Integrate):\n        res += all_subterms(t.t)\n    elif isinstance(t, Merge):\n        res += all_subterms(t.t1) + all_subterms(t.t2)\n    elif isinstance(t, App):\n        res += all_subterms(t.t1) + all_subterms(t.t2)\n    elif isinstance(t, RecΔ):\n        res += all_subterms(t.b) + all_subterms(t.s) + all_subterms(t.n)\n    elif isinstance(t, EqW):\n        res += all_subterms(t.a) + all_subterms(t.b)\n    return res\n\ndef one_step_reductions(t: Trace) -> List[Trace]:\n    \"\"\"All possible one-step reducts, including under contexts (congruence)\"\"\"\n    reducts = []\n    \n    # Root reductions\n    if isinstance(t, Integrate) and isinstance(t.t, Delta):\n        reducts.append(void)  # R_int_delta\n    if isinstance(t, Merge):\n        if isinstance(t.t1, Void):\n            reducts.append(t.t2)  # R_merge_void_left\n        if isinstance(t.t2, Void):\n            reducts.append(t.t1)  # R_merge_void_right\n        if t.t1 == t.t2:\n            reducts.append(t.t1)  # R_merge_cancel\n    if isinstance(t, RecΔ):\n        if isinstance(t.n, Void):\n            reducts.append(t.b)  # R_rec_zero\n        if isinstance(t.n, Delta):\n            reducts.append(App(t.s, RecΔ(t.b, t.s, t.n.t)))  # R_rec_succ\n    if isinstance(t, EqW):\n        if t.a == t.b:\n            reducts.append(void)  # R_eq_refl\n        reducts.append(Integrate(Merge(t.a, t.b)))  # R_eq_diff always\n    \n    # Congruence: reduce inside\n    if isinstance(t, Delta):\n        for r in one_step_reductions(t.t):\n            reducts.append(Delta(r))\n    elif isinstance(t, Integrate):\n        for r in one_step_reductions(t.t):\n            reducts.append(Integrate(r))\n    elif isinstance(t, Merge):\n        for r in one_step_reductions(t.t1):\n            reducts.append(Merge(r, t.t2))\n        for r in one_step_reductions(t.t2):\n            reducts.append(Merge(t.t1, r))\n    elif isinstance(t, App):\n        for r in one_step_reductions(t.t1):\n            reducts.append(App(r, t.t2))\n        for r in one_step_reductions(t.t2):\n            reducts.append(App(t.t1, r))\n    elif isinstance(t, RecΔ):\n        for r in one_step_reductions(t.b):\n            reducts.append(RecΔ(r, t.s, t.n))\n        for r in one_step_reductions(t.s):\n            reducts.append(RecΔ(t.b, r, t.n))\n        for r in one_step_reductions(t.n):\n            reducts.append(RecΔ(t.b, t.s, r))\n    elif isinstance(t, EqW):\n        for r in one_step_reductions(t.a):\n            reducts.append(EqW(r, t.b))\n        for r in one_step_reductions(t.b):\n            reducts.append(EqW(t.a, r))\n    \n    # Unique\n    return list(dict.fromkeys(reducts))  # preserve order, unique\n\ndef size(t: Trace) -> int:\n    if isinstance(t, Void): return 1\n    if isinstance(t, Delta): return 1 + size(t.t)\n    if isinstance(t, Integrate): return 1 + size(t.t)\n    if isinstance(t, Merge): return 1 + size(t.t1) + size(t.t2)\n    if isinstance(t, App): return 1 + size(t.t1) + size(t.t2)\n    if isinstance(t, RecΔ): return 1 + size(t.b) + size(t.s) + size(t.n)\n    if isinstance(t, EqW): return 1 + size(t.a) + size(t.b)\n    return 0\n\n# Generate small terms up to certain depth/size\ndef generate_terms(max_size: int) -> List[Trace]:\n    terms = [void]\n    # We build by increasing size\n    from collections import defaultdict\n    by_size = defaultdict(list)\n    by_size[1] = [void]\n    \n    constructors = []\n    # Unary: delta, integrate\n    # Binary: merge, app, eqW\n    # Ternary: recΔ\n    \n    for s in range(2, max_size+1):\n        # delta, integrate of size s-1\n        for t in by_size[s-1]:\n            by_size[s].append(Delta(t))\n            by_size[s].append(Integrate(t))\n        # binary: sizes i + j = s-1, i,j>=1\n        for i in range(1, s):\n            j = s-1 - i\n            if j < 1: continue\n            for t1 in by_size[i]:\n                for t2 in by_size[j]:\n                    by_size[s].append(Merge(t1, t2))\n                    by_size[s].append(App(t1, t2))\n                    by_size[s].append(EqW(t1, t2))\n        # ternary rec: i+j+k = s-1\n        for i in range(1, s):\n            for j in range(1, s-i):\n                k = s-1 - i - j\n                if k < 1: continue\n                for b in by_size[i]:\n                    for ss in by_size[j]:\n                        for n in by_size[k]:\n                            by_size[s].append(RecΔ(b, ss, n))\n    \n    all_t = []\n    for s in range(1, max_size+1):\n        all_t.extend(by_size[s])\n    # unique\n    return list(dict.fromkeys(all_t))\n\nprint(\"Generating small terms...\")\nsmall_terms = generate_terms(5)\nprint(len(small_terms))\nprint(small_terms[:20])  # sample",
+ "outputs": [
+  {
+   "type": "logs",
+   "logs": ""
+  }
+ ]
+}
+[/TOOL]
+
+
+
+[TOOL-CALL code_interpreter_call]
+{
+ "type": "code_interpreter_call",
+ "status": "completed",
+ "code": "# Continue from previous state\n\ndef find_reduction_graph(start: Trace, max_depth: int = 20, max_terms: int = 1000):\n    \"\"\"BFS to explore all reducts, detect cycles or non-term if too deep\"\"\"\n    from collections import deque\n    visited = set()\n    queue = deque([(start, 0, [start])])  # term, depth, path\n    graph = {}  # term -> list of reducts\n    max_d = 0\n    non_term_suspect = False\n    cycle = None\n    \n    while queue:\n        term, depth, path = queue.popleft()\n        if term in visited:\n            continue\n        visited.add(term)\n        if len(visited) > max_terms:\n            non_term_suspect = True\n            break\n        max_d = max(max_d, depth)\n        if depth > max_depth:\n            non_term_suspect = True\n            break\n        \n        reds = one_step_reductions(term)\n        graph[term] = reds\n        for r in reds:\n            if r in path:\n                # cycle\n                cycle = path + [r]\n                return visited, graph, max_d, True, cycle, False\n            if r not in visited:\n                queue.append((r, depth+1, path + [r]))\n    \n    return visited, graph, max_d, False, cycle, non_term_suspect\n\n# Test on some terms, especially those with rec and eqW and merge\nsuspects = []\nfor t in small_terms:\n    if any(isinstance(st, (RecΔ, EqW, Merge, Integrate)) for st in all_subterms(t)):\n        suspects.append(t)\n\nprint(len(suspects))\n\n# Check a few\nresults = []\nfor t in suspects[:50]:  # limit\n    vis, g, md, has_cycle, cyc, suspect = find_reduction_graph(t, max_depth=15, max_terms=200)\n    results.append((t, len(vis), md, has_cycle, suspect))\n    if has_cycle or suspect:\n        print(\"PROBLEM:\", t, has_cycle, suspect, cyc if has_cycle else \"\")\n        break\nelse:\n    print(\"No problems in first 50\")\n\nprint(\"Sample results:\", results[:5])",
+ "outputs": [
+  {
+   "type": "logs",
+   "logs": ""
+  }
+ ]
+}
+[/TOOL]
+
+
+
+[TOOL-CALL code_interpreter_call]
+{
+ "type": "code_interpreter_call",
+ "status": "completed",
+ "code": "# Check all suspects with higher limits, look for any with long chains or cycles\nproblems = []\nmax_visited = 0\nmax_depth_seen = 0\nlong_ones = []\nfor i, t in enumerate(suspects):\n    vis, g, md, has_cycle, cyc, suspect = find_reduction_graph(t, max_depth=30, max_terms=500)\n    max_visited = max(max_visited, len(vis))\n    max_depth_seen = max(max_depth_seen, md)\n    if has_cycle or suspect or md > 20 or len(vis) > 100:\n        problems.append((t, len(vis), md, has_cycle, suspect))\n        long_ones.append(t)\n    if i % 20 == 0:\n        print(i, max_visited, max_depth_seen)\n\nprint(\"Problems found:\", len(problems))\nprint(\"Max visited:\", max_visited, \"Max depth:\", max_depth_seen)\nif problems:\n    print(problems[:5])",
+ "outputs": [
+  {
+   "type": "logs",
+   "logs": ""
+  }
+ ]
+}
+[/TOOL]
+
+
+
+[TOOL-CALL code_interpreter_call]
+{
+ "type": "code_interpreter_call",
+ "status": "completed",
+ "code": "# Manually create terms that might loop or grow\n# e.g. rec with n = delta(delta(...))\ndef make_nat(k):\n    n = void\n    for _ in range(k):\n        n = Delta(n)\n    return n\n\n# recΔ b s n for large k should unfold to app s (app s ... b) length k, finite\nt_rec = RecΔ(void, void, make_nat(5))\nprint(t_rec)\nvis, g, md, has_c, cyc, sus = find_reduction_graph(t_rec, max_depth=20)\nprint(len(vis), md, has_c, sus)\n\n# Now with eqW\nt_eq = EqW(make_nat(3), make_nat(3))\nprint(t_eq)\nvis, g, md, has_c, cyc, sus = find_reduction_graph(t_eq)\nprint(len(vis), md, has_c, sus)\n\nt_eq2 = EqW(make_nat(2), Delta(void))\nvis, g, md, has_c, cyc, sus = find_reduction_graph(t_eq2)\nprint(len(vis), md, has_c, sus)\n\n# merge of equals after red?\n# Is there interaction that recreates redexes infinitely?\n# Note: no rules create Delta or EqW or increase \"potential\" much.",
+ "outputs": [
+  {
+   "type": "logs",
+   "logs": ""
+  }
+ ]
+}
+[/TOOL]
+
+
+
+[TOOL-CALL code_interpreter_call]
+{
+ "type": "code_interpreter_call",
+ "status": "completed",
+ "code": "def can_increase_size(t):\n    reds = one_step_reductions(t)\n    sizes = [(r, size(r)) for r in reds]\n    return [(r,s) for r,s in sizes if s > size(t)], size(t)\n\n# Check for terms where size increases\nincreases = []\nfor t in small_terms + [t_rec, t_eq]:\n    inc, sz = can_increase_size(t)\n    if inc:\n        increases.append((t, sz, inc))\n\nprint(len(increases))\nprint(increases[:10] if increases else \"none\")",
+ "outputs": [
+  {
+   "type": "logs",
+   "logs": ""
+  }
+ ]
+}
+[/TOOL]
+
+
+
+[TOOL-CALL code_interpreter_call]
+{
+ "type": "code_interpreter_call",
+ "status": "completed",
+ "code": "# Example where s has delta, n has delta\ns = Delta(void)\nn = Delta(void)\nb = void\nt = RecΔ(b, s, n)\nprint(t, \"size\", size(t), \"#D approx\", str(t).count(\"delta\"))\nreds = one_step_reductions(t)\nprint(reds)\nfor r in reds:\n    print(r, size(r), str(r).count(\"delta\"))",
+ "outputs": [
+  {
+   "type": "logs",
+   "logs": ""
+  }
+ ]
+}
+[/TOOL]
+
+
+
+[TOOL-CALL code_interpreter_call]
+{
+ "type": "code_interpreter_call",
+ "status": "completed",
+ "code": "# If s has 2 deltas\ns2 = Delta(Delta(void))\nt2 = RecΔ(void, s2, Delta(void))\nprint(\"LHS #delta count:\", str(t2).count(\"delta\"))\nreds = one_step_reductions(t2)\nprint(reds[0], \"RHS count:\", str(reds[0]).count(\"delta\"))",
+ "outputs": [
+  {
+   "type": "logs",
+   "logs": ""
+  }
+ ]
+}
+[/TOOL]
+
+
+
+[TOOL-CALL code_interpreter_call]
+{
+ "type": "code_interpreter_call",
+ "status": "completed",
+ "code": "# Can we get infinite by somehow feeding back?\n# Note no rule creates new RecΔ except the rec_succ which creates a smaller one (on n without the delta)\n# The new rec is on smaller n, and the copied s is in app, not creating new rec positions necessarily.\n# But if b or s has rec, duplicated.\n\n# Suppose s contains a rec that can unfold more thanks to duplicated deltas? But deltas in s are data, the n of that inner rec would need to be reduced.\n\n# Let's see if there's a term that grows forever.\n\n# Perhaps interpret in naturals with weights. \n\n# Maybe use the code to try random or specific terms with nested rec and see if depth exceeds. \n\n# For example, nest rec where s is a rec or something. \n\ndef make_deep_rec(k, s_base=void):\n    # build nested? or just large n\n    return RecΔ(void, s_base, make_nat(k))\n\nt = make_deep_rec(3, Delta(void))\nprint(t)\nvis,_,_,has_c,cyc,sus = find_reduction_graph(t, max_depth=50, max_terms=1000)\nprint(len(vis), has_c, sus)",
+ "outputs": [
+  {
+   "type": "logs",
+   "logs": ""
+  }
+ ]
+}
+[/TOOL]
+
+
+
+[TOOL-CALL code_interpreter_call]
+{
+ "type": "code_interpreter_call",
+ "status": "completed",
+ "code": "# What if we have integrate around, or eqW that creates integrate merge of things with rec.\n# But still finite.\n\n# Perhaps it always terminates because the \"rec-depth\" or the structure of potential recursive calls is based on the original n's which are not growing in a looping way.\n# The created rec is always with the original n stripped of one delta, so the chain of rec creations is finite per original rec.\n\n# To prove SN: we can use a measure based on the multiset of \"rec potential\".\n\n# Since first-order, the TRS is finite rules, we can try to see if it's simply terminating or use RPO with status.\n\n# Let's recall recursive path order: define a precedence on symbols.\n\n# Symbols: void (const), delta/1, integrate/1, merge/2, app/2, recΔ/3, eqW/2\n\n# Rules:\n\n# integrate(delta(t)) → void     so integrate > void, and delta anything\n\n# merge(void,t) → t\n\n# merge(t,void) → t\n\n# merge(t,t) → t     note this is not size decreasing always? Wait it is, removes one t.\n\n# For RPO, merge(t,t) > t easily if merge > \n\n# recΔ(b,s,void) → b\n\n# recΔ(b,s,delta(n)) → app(s, recΔ(b,s,n))\n\n# For this, the key rule: left recΔ( ... delta(n)), right app(s, recΔ(...n))\n\n# So need recΔ > app, and then the recursive call recΔ(b,s,n) < left by the arg delta(n) > n , if we use status lexicographic or something, with rec having multiset or lex on args, and delta > or precedence.\n\n# eqW(a,a) → void\n\n# eqW(a,b) → integrate(merge(a,b))\n\n# So eqW > integrate, merge etc.\n\n# It is known that for such recursor rules, like in Godel system T, but here first-order version of rec on numerals, it is SN, by RPO or by interpretation.\n\n# Standard: yes, the recursor rule is handled by RPO with rec > app, and lexicographic status on the third argument mainly, since delta(n) embeds or > n.\n\n# Yes, recursive path orders orient the primitive recursion rules.\n\n# Also the merge rules are fine, like for AC but here not full, but the cancel is like.\n\n# Since no binders, and finite, yes.\n\n# But is there a problem with the duplication and the eq_diff creating integrate merge, and merge cancel only if equal.\n\n# But I think it is SN.\n\n# Let's see if I can find a non-terminating term by thinking of fixed point like.\n\n# Is there a term t such that t reduces to a context with t?\n\n# For example, using rec to build something that eq or something, but since no creation of eqW or delta from nothing, hard to loop.\n\n# Note that all rules are \"destructor\" like or decreasing in some hierarchy.\n\n# Let's try to use sympy or just reason, but better search if this system is known, but it's custom.\n\n# The names: Trace, delta, integrate, merge, app, recΔ, eqW -- looks like some specific calculus, perhaps from a paper on traces or differential linear logic or something, or rewriting for some equality.\n\n# Perhaps related to \"Witt vectors\" or no.\n\n# Anyway, I need to decide if SN from the calculus alone.\n\n# Possible issue: the R_eq_diff always applies, and if a and b reduce to same, but wait.\n\n# More: since merge t t → t , and if I have integrate (merge a b), if a and b both reduce to same thing, then can cancel.\n\n# But finite.\n\n# Is the system non-overlapping enough? For SN no problem.\n\n# Let's try a term where size grows a lot but check termination with larger.",
+ "outputs": [
+  {
+   "type": "logs",
+   "logs": ""
+  }
+ ]
+}
+[/TOOL]
+
+
+
+[TOOL-CALL code_interpreter_call]
+{
+ "type": "code_interpreter_call",
+ "status": "completed",
+ "code": "# Larger unfold with duplicating s that has structure\ns = Merge(Delta(void), App(void,void))  # sizey\nt = RecΔ(EqW(void,void), s, make_nat(4))\nprint(\"Start size:\", size(t))\nvis, g, md, has_c, cyc, sus = find_reduction_graph(t, max_depth=100, max_terms=5000)\nprint(\"Visited:\", len(vis), \"maxdepth\", md, \"cycle?\", has_c, \"suspect?\", sus)\nif has_c:\n    print(cyc)",
+ "outputs": [
+  {
+   "type": "logs",
+   "logs": ""
+  }
+ ]
+}
+[/TOOL]
+
+
+
+[TOOL-CALL code_interpreter_call]
+{
+ "type": "code_interpreter_call",
+ "status": "completed",
+ "code": "# Check normal forms or if stuck with redexes? But no.\n# Let's see all possible root redexes covered.\n\n# Perhaps prove by giving a weight or interpretation into naturals.\n\n# Simple polynomial interpretation or something for SN.\n\n# Assign to each constructor a function N^k -> N strictly monotone etc, such that for each rule LHS > RHS.\n\n# Common for SN proofs of TRS.\n\n# Let’s try:\n# void = 1 or 2\n# delta(x) = x + 1\n# integrate(x) = x + 1 or 2x\n# merge(x,y) = x + y + 1\n# app(x,y) = x + y + 1 or x*y something\n# recΔ(b,s,n) = ... needs to bound the iteration: typically rec(b,s,n) = b + n * (s + c) or exponential if needed, but since n is like height.\n\n# Since n decreases in the rec arg, but for interpretation, the algebra must satisfy [[rec b s (delta n)]] > [[app s (rec b s n)]]\n\n# So if we set numbers positive ints, functions increasing.\n\n# Let’s use the code to find if simple interp works, or try manually.",
+ "outputs": [
+  {
+   "type": "logs",
+   "logs": ""
+  }
+ ]
+}
+[/TOOL]
+
+
+
+[TOOL-CALL code_interpreter_call]
+{
+ "type": "code_interpreter_call",
+ "status": "completed",
+ "code": "# Try to define an interpretation and check if rules decrease, for small values, but better symbolic with sympy? \nimport sympy as sp\n\n# But for termination, need for all values > .\n\n# Define:\n# Let’s assign:\n# [[void]] = 2\n# [[delta(t)]] = [[t]] + 1\n# [[integrate(t)]] = 2 * [[t]] + 1\n# [[merge(x,y)]] = [[x]] + [[y]] + 1\n# [[app(x,y)]] = [[x]] + [[y]] + 1\n# [[eqW(x,y)]] = [[x]] + [[y]] + 3   # larger\n# For rec: [[rec(b,s,n)]] = [[b]] + [[n]] * ([[s]] + 2)   or something\n\n# Check rules:\n\ndef check_interp():\n    # Use symbols\n    t, b, s, n, a, bb = sp.symbols('t b s n a bb', integer=True, positive=True)\n    # Assume all [[ ]] >=2 say\n    void_v = 2\n    def delta_v(x): return x + 1\n    def int_v(x): return 2*x + 1\n    def merge_v(x,y): return x + y + 1\n    def app_v(x,y): return x + y + 1\n    def eq_v(x,y): return x + y + 4\n    def rec_v(b,s,n): return b + n * (s + 3) + 1   # trial\n    \n    # Rules:\n    # 1. int(delta(t)) > void\n    lhs1 = int_v(delta_v(t))\n    rhs1 = void_v\n    print(\"1:\", lhs1, \">\", rhs1, \"?\", sp.simplify(lhs1 - rhs1) > 0)\n    \n    # 2. merge(void,t) > t\n    lhs2 = merge_v(void_v, t)\n    print(\"2:\", lhs2, \">\", t, \"?\", sp.simplify(lhs2 - t)>0)\n    \n    # 3. merge(t,void)>t\n    lhs3 = merge_v(t, void_v)\n    print(\"3:\", lhs3 > t)\n    \n    # 4. merge(t,t) > t\n    lhs4 = merge_v(t,t)\n    print(\"4:\", lhs4 > t)\n    \n    # 5. rec(b,s,void) > b\n    lhs5 = rec_v(b,s,void_v)\n    print(\"5:\", lhs5, \">\", b, sp.simplify(lhs5-b)>0)\n    \n    # 6. rec(b,s,delta(n)) > app(s, rec(b,s,n))\n    lhs6 = rec_v(b, s, delta_v(n))\n    rhs6 = app_v(s, rec_v(b,s,n))\n    diff6 = sp.simplify(lhs6 - rhs6)\n    print(\"6:\", lhs6, \">\", rhs6, \"diff=\", diff6, \"positive?\", diff6 >0)\n    \n    # 7. eq(a,a) > void\n    lhs7 = eq_v(a,a)\n    print(\"7:\", lhs7 > void_v)\n    \n    # 8. eq(a,b) > int(merge(a,b))\n    lhs8 = eq_v(a,bb)\n    rhs8 = int_v(merge_v(a,bb))\n    diff8 = sp.simplify(lhs8 - rhs8)\n    print(\"8:\", lhs8, \">\", rhs8, \"diff=\", diff8) \n\ncheck_interp()",
+ "outputs": [
+  {
+   "type": "logs",
+   "logs": ""
+  }
+ ]
+}
+[/TOOL]
+
+
+
+[TOOL-CALL code_interpreter_call]
+{
+ "type": "code_interpreter_call",
+ "status": "completed",
+ "code": "def check_interp2():\n    t, b, s, n, a, bb = sp.symbols('t b s n a bb', integer=True, positive=True)\n    void_v = 2\n    def delta_v(x): return x + 1\n    def int_v(x): return 2*x + 2\n    def merge_v(x,y): return x + y \n    def app_v(x,y): return x + y + 1\n    def eq_v(x,y): return 3*x + 3*y + 10  # larger\n    def rec_v(bv,sv,nv): return bv + nv * (sv + 2) + 3   \n    \n    #1 int(delta t) = int(t+1)=2(t+1)+2=2t+4 >2\n    print(\"1 diff\", sp.simplify(int_v(delta_v(t)) - void_v))\n    \n    #2 merge(void,t)= 2 + t  ? if merge x+y , >t : 2+t >t yes\n    print(\"2\", merge_v(void_v,t) - t)\n    \n    #4 merge(t,t)=2t >t yes\n    #5 rec(b,s,2)= b +2*(s+2)+3 =b +2s+4+3=b+2s+7 >b\n    #6: lhs rec(b,s, n+1)= b + (n+1)(s+2)+3 = b + n(s+2) +s+2 +3\n    # rhs app(s, rec(b,s,n))= s + (b +n(s+2)+3) +1 = b + n(s+2) + s +4\n    # diff= (s+2+3) - (s+4) = s+5 -s -4 =1 >0 good\n    lhs6 = rec_v(b,s,delta_v(n))\n    rhs6 = app_v(s, rec_v(b,s,n))\n    print(\"6 diff\", sp.simplify(lhs6 - rhs6))\n    \n    #8: eq(a,bb)=3a+3bb+10 \n    # int(merge a bb)= int(a+bb)=2(a+bb)+2=2a+2bb+2\n    # diff=3a+3bb+10 -2a-2bb-2 = a + bb +8 >0 good!\n    print(\"8 diff\", sp.simplify(eq_v(a,bb) - int_v(merge_v(a,bb))) )\n    \n    # Also need check merge void: if merge=x+y, merge(void,t)=2+t >t : yes +2\n    # But is merge(t,void)>t yes\n    # For congruence, the interpretations need to be strictly monotone in each arg, so that context decreases too.\n    # delta x= x+1 mono strict\n    # int 2x+2 yes\n    # merge x+y : mono non-strict? Wait +0, wait if one arg increases by1, merge +1 yes strict.\n    # Wait x+y increases by1 yes.\n    # app x+y+1 yes\n    # eq 3x+3y+10 yes\n    # rec: b + n*(s+2)+3 : strict mono in b,s,n (since s+2>=3>0, n>=1? wait if n can be 0? but values >=2, yes positive coeffs.\n    # Good.\n    \n    # Wait, one issue: for merge(t,t)→t :  t+t =2t > t yes if t>0\n    # But also, the void=2, etc.\n    # Is void ok, and all [[t]] >=2 yes by induction if start so.\n    \ncheck_interp2()",
+ "outputs": [
+  {
+   "type": "logs",
+   "logs": ""
+  }
+ ]
+}
+[/TOOL]
+
+
+
+[TOOL-CALL code_interpreter_call]
+{
+ "type": "code_interpreter_call",
+ "status": "completed",
+ "code": "def full_check():\n    t, b, s, n, a, bb = sp.symbols('t b s n a bb', integer=True, nonnegative=True)\n    # To be safe, assume >=0, but we'll set constants higher if needed. But since mono and base.\n    void_v = 1  # try smaller\n    def delta_v(x): return x + 1\n    def int_v(x): return 2*x + 1\n    def merge_v(x,y): return x + y + 1\n    def app_v(x,y): return x + 2*y + 1  # maybe adjust if needed\n    def eq_v(x,y): return 2*x + 2*y + 5\n    def rec_v(bv,sv,nv): return bv + (nv + 1) * (sv + 2)   # adjust\n    \n    results = {}\n    #1\n    lhs = int_v(delta_v(t))\n    rhs = void_v\n    results['1'] = sp.simplify(lhs - rhs)\n    #2\n    results['2'] = sp.simplify(merge_v(void_v, t) - t)\n    #3\n    results['3'] = sp.simplify(merge_v(t, void_v) - t)\n    #4\n    results['4'] = sp.simplify(merge_v(t, t) - t)\n    #5\n    results['5'] = sp.simplify(rec_v(b, s, void_v) - b)\n    #6\n    lhs6 = rec_v(b, s, delta_v(n))\n    rhs6 = app_v(s, rec_v(b, s, n))\n    results['6'] = sp.simplify(lhs6 - rhs6)\n    #7\n    results['7'] = sp.simplify(eq_v(a, a) - void_v)\n    #8\n    lhs8 = eq_v(a, bb)\n    rhs8 = int_v(merge_v(a, bb))\n    results['8'] = sp.simplify(lhs8 - rhs8)\n    \n    for k,v in results.items():\n        print(k, v, \"always >0?\", v.is_positive or (v.as_poly().coeffs() and all(c>0 for c in [v] if v.is_number) or True))\n\nfull_check()",
+ "outputs": [
+  {
+   "type": "logs",
+   "logs": ""
+  }
+ ]
+}
+[/TOOL]
+
+
+
+[TOOL-CALL code_interpreter_call]
+{
+ "type": "code_interpreter_call",
+ "status": "completed",
+ "code": "def find_good_interp():\n    # Fix simple shapes, vary coeffs\n    # void = c0 >=1\n    # delta(x) = x + d  d>=1\n    # int(x) = i1 *x + i0   i1>=1\n    # merge(x,y)= m1 x + m2 y + m0\n    # app(x,y)= a1 x + a2 y + a0\n    # eq(x,y)= e1 x + e2 y + e0\n    # rec(b,s,n)= r_b b + r_s s * something wait, better linear? But for rec to handle the copy, usually rec needs to be like exponential in n or linear with large.\n    # Since n decreases by1 (in value +d), need coeff of n large enough vs the app.\n    \n    # From earlier successful almost:\n    # Use:\n    void_v = 2\n    def delta_v(x): return x+1\n    def int_v(x): return 3*x + 1   # larger\n    def merge_v(x,y): return x + y + 1\n    def app_v(x,y): return x + y + 1\n    def eq_v(x,y): return 4*x + 4*y + 2\n    def rec_v(b,s,n): return b + s + n*(s + 3) + 1  # = b + (n+1)s  + 3n +1 wait\n    \n    t,b,s,n,a,bb = sp.symbols('t b s n a bb', positive=True)\n    \n    diffs = {}\n    diffs[1] = int_v(delta_v(t)) - void_v\n    diffs[2] = merge_v(void_v, t) - t\n    diffs[3] = merge_v(t, void_v) - t\n    diffs[4] = merge_v(t,t) - t\n    diffs[5] = rec_v(b,s,void_v) - b\n    lhs6 = rec_v(b,s,delta_v(n))\n    rhs6 = app_v(s , rec_v(b,s,n))\n    diffs[6] = lhs6 - rhs6\n    diffs[7] = eq_v(a,a) - void_v\n    diffs[8] = eq_v(a,bb) - int_v(merge_v(a,bb))\n    \n    for i in range(1,9):\n        d = sp.simplify(diffs[i])\n        print(i, \":\", d, \" >0?\", d.subs({t:1,b:1,s:1,n:1,a:1,bb:1}) >0 )\n\nfind_good_interp()",
+ "outputs": [
+  {
+   "type": "logs",
+   "logs": ""
+  }
+ ]
+}
+[/TOOL]
+
+
+
+[TOOL-CALL code_interpreter_call]
+{
+ "type": "code_interpreter_call",
+ "status": "completed",
+ "code": "def find_good_interp2():\n    void_v = 2\n    def delta_v(x): return x + 1\n    def int_v(x): return 2 * x + 1\n    def merge_v(x,y): return x + y + 1\n    def app_v(x,y): return x + y + 1\n    def eq_v(x,y): return 3 * x + 3 * y + 5\n    def rec_v(b, s, n): return b + (n + 1) * (s + 2)   # lhs for delta: n+1 -> wait delta n value n+1, rec = b + ((n+1)+1)(s+2) = b + (n+2)(s+2)\n    \n    t,b,s,n,a,bb = sp.symbols('t b s n a bb', positive=True, integer=True)\n    \n    print(\"Values at 1:\")\n    diffs = {}\n    diffs[1] = sp.simplify(int_v(delta_v(t)) - void_v)\n    diffs[2] = sp.simplify(merge_v(void_v, t) - t)\n    diffs[3] = sp.simplify(merge_v(t, void_v) - t)\n    diffs[4] = sp.simplify(merge_v(t, t) - t)\n    diffs[5] = sp.simplify(rec_v(b, s, void_v) - b)\n    lhs6 = rec_v(b, s, delta_v(n))\n    rhs6 = app_v(s, rec_v(b, s, n))\n    diffs[6] = sp.simplify(lhs6 - rhs6)\n    diffs[7] = sp.simplify(eq_v(a, a) - void_v)\n    diffs[8] = sp.simplify(eq_v(a, bb) - int_v(merge_v(a, bb)))\n    \n    for i in sorted(diffs):\n        d = diffs[i]\n        val = d.subs({t:1,b:1,s:1,n:1,a:1,bb:1})\n        print(i, \":\", d, \" at1=\", val, \"positive expr?\", all(c >=0 for c in sp.Poly(d).coeffs()) if d.is_polynomial() else \"check\")\n\nfind_good_interp2()",
+ "outputs": [
+  {
+   "type": "logs",
+   "logs": ""
+  }
+ ]
+}
+[/TOOL]
+
+
+
+[TOOL-CALL code_interpreter_call]
+{
+ "type": "code_interpreter_call",
+ "status": "completed",
+ "code": "def find_good_interp3():\n    void_v = 2\n    def delta_v(x): return x + 1\n    def int_v(x): return 2 * x + 1\n    def merge_v(x,y): return x + y + 1\n    def app_v(x,y): return x + y + 1\n    def eq_v(x,y): return 3 * x + 3 * y + 5\n    def rec_v(b, s, n): return b + (n + 1) * (s + 2) \n    \n    t,b,s,n,a,bb = sp.symbols('t b s n a bb', positive=True, integer=True)\n    \n    diffs = {}\n    diffs[1] = sp.simplify(int_v(delta_v(t)) - void_v)\n    diffs[2] = sp.simplify(merge_v(void_v, t) - t)\n    diffs[3] = sp.simplify(merge_v(t, void_v) - t)\n    diffs[4] = sp.simplify(merge_v(t, t) - t)\n    diffs[5] = sp.simplify(rec_v(b, s, void_v) - b)\n    lhs6 = rec_v(b, s, delta_v(n))\n    rhs6 = app_v(s, rec_v(b, s, n))\n    diffs[6] = sp.simplify(lhs6 - rhs6)\n    diffs[7] = sp.simplify(eq_v(a, a) - void_v)\n    diffs[8] = sp.simplify(eq_v(a, bb) - int_v(merge_v(a, bb)))\n    \n    for i in sorted(diffs):\n        d = diffs[i]\n        print(i, \":\", d )\n        # Check if >0 for positive by seeing min\n        # Since linear or, substitute min=1\n        minsub = {t:1,b:1,s:1,n:1,a:1,bb:1}\n        print(\"   at 1's:\", d.subs(minsub), \"  and coeffs positive?\" )\n\nfind_good_interp3()",
+ "outputs": [
+  {
+   "type": "logs",
+   "logs": ""
+  }
+ ]
+}
+[/TOOL]
+
+
+
+[TOOL-CALL code_interpreter_call]
+{
+ "type": "code_interpreter_call",
+ "status": "completed",
+ "code": "def interpret(t: Trace) -> int:\n    if isinstance(t, Void):\n        return 2\n    if isinstance(t, Delta):\n        return interpret(t.t) + 1\n    if isinstance(t, Integrate):\n        return 2 * interpret(t.t) + 1\n    if isinstance(t, Merge):\n        return interpret(t.t1) + interpret(t.t2) + 1\n    if isinstance(t, App):\n        return interpret(t.t1) + interpret(t.t2) + 1\n    if isinstance(t, EqW):\n        return 3 * interpret(t.a) + 3 * interpret(t.b) + 5\n    if isinstance(t, RecΔ):\n        bv = interpret(t.b)\n        sv = interpret(t.s)\n        nv = interpret(t.n)\n        return bv + (nv + 1) * (sv + 2)\n    return 0\n\n# Test a reduction decreases\nt = RecΔ(void, Delta(void), Delta(void))\nprint(t, interpret(t))\nr = one_step_reductions(t)[0]\nprint(r, interpret(r))\nprint(\"Decreased?\", interpret(t) > interpret(r))\n\nt2 = EqW(Delta(void), void)\nprint(t2, interpret(t2))\nrs = one_step_reductions(t2)\nfor rr in rs:\n    print(rr, interpret(rr), interpret(t2)>interpret(rr))",
+ "outputs": [
+  {
+   "type": "logs",
+   "logs": ""
+  }
+ ]
+}
+[/TOOL]
+
+
+
+[TOOL-CALL code_interpreter_call]
+{
+ "type": "code_interpreter_call",
+ "status": "completed",
+ "code": "t3 = Integrate(Delta(Merge(void,void)))\nprint(t3, interpret(t3))\nprint(one_step_reductions(t3))\n# Can reduce inside first: Delta(Merge void void) -> Delta(void) since merge voidvoid->void\n# or root if it was int delta, but here int (delta (merge)), so root: since arg is delta, yes R_int_delta to void\nreds = one_step_reductions(t3)\nfor r in reds:\n    print(r, interpret(r))",
+ "outputs": [
+  {
+   "type": "logs",
+   "logs": ""
+  }
+ ]
+}
+[/TOOL]
+
+The given system is a first-order term rewriting system (TRS) generated by the eight root rules under the compatible/contextual closure (as required for any rewrite calculus). No rules introduce the symbols \(\mathsf{eqW}\) or \(\mathsf{delta}\). The sole duplicating rule is the successor case of \(\mathsf{rec}\Delta\), which copies its second argument while strictly decreasing the third.
+
+A polynomial interpretation into the positive integers proves termination:
+- \([\![\mathsf{void}]\!]=2\)
+- \([\![\mathsf{delta}(t)]\!]=[\![t]\!]+1\)
+- \([\![\mathsf{integrate}(t)]\!]=2\cdot[\![t]\!]+1\)
+- \([\![\mathsf{merge}(u,v)]\!]=[\![u]\!]+[\![v]\!]+1\)
+- \([\![\mathsf{app}(u,v)]\!]=[\![u]\!]+[\![v]\!]+1\)
+- \([\![\mathsf{eqW}(u,v)]\!]=3\cdot[\![u]\!]+3\cdot[\![v]\!]+5\)
+- \([\![\mathsf{rec}\Delta(b,s,n)]\!]=[\![b]\!]+([\![n]\!]+1)\cdot([\![s]\!]+2)\).
+
+Each interpretation function is strictly monotonic in every argument. Direct substitution shows that every root rule strictly decreases the measure; monotonicity immediately lifts the decrease to arbitrary contexts. The interpretation is therefore a well-founded strict order on terms that is compatible with reduction, so every rewrite sequence is finite.
+
+(The same conclusion can be reached by a multiset path order with a suitable precedence and lexicographic status that orients the recursor rule by its third argument, but the interpretation already suffices and is entirely internal to the given signature and rules.)
+
+Thus strong normalisation follows from the presented calculus alone.

@@ -1,0 +1,84 @@
+Looking at this file, I need to complete proofs showing that each primitive step strictly decreases the lexicographic measure `(kappa, mu)`. Let me analyze each case:
+
+**Strategy observations:**
+- `R_int_delta`, `R_rec_zero`, `R_eq_refl`: kappa is non-increasing, mu drops. Need case split on whether kappa ties or drops.
+- `R_rec_succ`: kappa drops strictly (the `+1` from the `delta`-wrapped third arg beats the `app`).
+- `R_eq_diff`: kappa ties exactly, mu drops by 1.
+
+Here are the skeletons (these would replace each `sorry`):
+
+```lean
+-- integrate (delta t) --> void
+-- kappa LHS = kappa t, kappa RHS = 0. mu LHS = 1 + mu t > 0 = mu RHS.
+| _, _, Step.R_int_delta t => by
+    have hmu : mu void < mu (integrate (delta t)) := by
+      simp [mu]; omega
+    have hk_le : kappa void ≤ kappa (integrate (delta t)) := by
+      simp [kappa]; exact Nat.zero_le _
+    rcases Nat.lt_or_eq_of_le hk_le with hk_lt | hk_eq
+    · exact drop_left hk_lt
+    · exact drop_right hmu hk_eq
+
+-- recDelta b s void --> b
+-- kappa LHS = max(kappa b, kappa s), kappa RHS = kappa b.
+-- mu LHS = 3 + mu b + mu s > mu b.
+| _, _, Step.R_rec_zero b s => by
+    have hmu : mu b < mu (recDelta b s void) := by
+      simp [mu]; omega
+    have hk_le : kappa b ≤ kappa (recDelta b s void) := by
+      -- need to collapse max (max κb κs) 0 down to max κb κs
+      simp only [kappa, kappa_void, Nat.max_eq_left]
+      exact le_max_left _ _
+    rcases Nat.lt_or_eq_of_le hk_le with hk_lt | hk_eq
+    · exact drop_left hk_lt
+    · exact drop_right hmu hk_eq
+
+-- recDelta b s (delta n) --> app s (recDelta b s n)
+-- kappa LHS = M + 1, kappa RHS = max(kappa s, M) = M, where
+--   M = max (max (kappa b) (kappa s)) (kappa n). So kappa drops by 1.
+| _, _, Step.R_rec_succ b s n => by
+    have hk_lt : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+      -- Force the equation lemma for the non-delta recDelta arm
+      -- (it has a side condition so simp alone won't fire it on free `n`).
+      unfold kappa
+      -- goal now: max (kappa s) (max (max (kappa b) (kappa s)) (kappa n))
+      --         < max (max (kappa b) (kappa s)) (kappa n) + 1
+      have h1 : kappa s ≤ Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) :=
+        le_trans (le_max_right _ _) (le_max_left _ _)
+      rw [max_eq_right h1]
+      exact Nat.lt_succ_self _
+    exact drop_left hk_lt
+
+-- eqW a a --> void
+-- kappa LHS = kappa a, kappa RHS = 0. mu LHS = 4 + 2*mu a > 0.
+| _, _, Step.R_eq_refl a => by
+    have hmu : mu void < mu (eqW a a) := by
+      simp [mu]; omega
+    have hk_le : kappa void ≤ kappa (eqW a a) := by
+      simp [kappa]; exact Nat.zero_le _
+    rcases Nat.lt_or_eq_of_le hk_le with hk_lt | hk_eq
+    · exact drop_left hk_lt
+    · exact drop_right hmu hk_eq
+
+-- eqW a b --> integrate (merge a b)
+-- kappa LHS = max(kappa a, kappa b) = kappa RHS (integrate/merge are transparent).
+-- mu RHS = 1 + (2 + mu a + mu b) = 3 + mu a + mu b < 4 + mu a + mu b = mu LHS.
+| _, _, Step.R_eq_diff a b => by
+    have hmu : mu (integrate (merge a b)) < mu (eqW a b) := by
+      simp [mu]; omega
+    have hk_eq : kappa (integrate (merge a b)) = kappa (eqW a b) := by
+      simp [kappa]
+    exact drop_right hmu hk_eq
+```
+
+**Key technical notes on why these work:**
+
+1. **`Nat.lt_or_eq_of_le hk_le`**: The crucial disjunction `kappa b < kappa a ∨ kappa b = kappa a` for any `h : kappa b ≤ kappa a`. This lets us use `drop_left` in the strict case and `drop_right` (paired with the always-true `mu` drop) in the tie case.
+
+2. **Why `unfold kappa` is needed for `R_rec_succ`**: The equation lemma for the non-delta arm of `recDelta` has a side condition `¬∃ m, n = delta m` that `simp` cannot discharge when `n` is a free variable. `unfold kappa` ignores those side conditions and reduces the term to the `max` form, after which `le_trans`/`le_max_right`/`le_max_left`/`max_eq_right` finish the goal.
+
+3. **Why `Nat.max_eq_left` is needed in `R_rec_zero`**: After `simp only [kappa, kappa_void]`, we have `max (max κb κs) 0`. The default simp set doesn't always rewrite `max a 0 → a`, so we add `Nat.max_eq_left` explicitly.
+
+4. **The `mu` drops**: In every case the constant added by the constructor strictly exceeds the mu of the destructured subterms being eliminated (`1` for `integrate`, `3` for `recDelta`, `4` for `eqW` in the diff case; `4 + 2·mu a ≥ 4 > 0` for the refl case), which is what `omega` discharges after `simp [mu]`.
+
+5. **For `R_eq_diff`**, both sides of the step have the same `kappa`, so we can go directly with `drop_right` — no case split needed.

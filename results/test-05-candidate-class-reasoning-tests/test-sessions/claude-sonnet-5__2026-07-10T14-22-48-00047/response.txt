@@ -1,0 +1,71 @@
+## Summary
+
+None of the three candidates is a valid termination measure for `Step`. All three correctly orient seven of the eight rules, but **all three fail on `R_rec_succ`** — and they fail for essentially the same structural reason, which is provably unfixable by any measure of this additive shape.
+
+## What a valid measure needs
+
+A measure `mu : Trace -> Nat` certifies termination (via strict descent) only if for every instance of every rule `Step s t`, we have `mu s > mu t`. Let's check this for each rule and each candidate.
+
+## Rules that all three measures handle correctly
+
+For all three measures, writing `V = mu(void) = 0`:
+
+- **R_int_delta**: `mu(integrate(delta t)) = I + D + mu t > 0 = mu(void)`. ✔️ (trivial, since `I, D > 0` for all three)
+- **R_merge_void_left/right**: `mu(merge void t) = M + mu t > mu t` since the merge-constant `M > 0` in all three (`mu1: M=1`, `mu2: M=2`, `mu3: M=1`). ✔️
+- **R_merge_cancel**: `mu(merge t t) = M + 2·mu t > mu t` since `M>0`. ✔️
+- **R_rec_zero**: `mu(recDelta b s void) = A + mu b + mu s > mu b` since `A>0`. ✔️
+- **R_eq_refl**: `mu(eqW a a) = E + 2·mu a > 0`. ✔️
+- **R_eq_diff**: `mu(eqW a b) = E + mu a + mu b` vs `mu(integrate(merge a b)) = I + M + mu a + mu b`. Need `E > I+M`:
+  - `mu1`: `3 > 1+1=2` ✔️
+  - `mu2`: `5 > 2+2=4` ✔️
+  - `mu3`: `4 > 2+1=3` ✔️
+
+So all three were evidently tuned to satisfy this last constraint. This is where the design effort visibly went.
+
+## The fatal rule: `R_rec_succ`
+
+`recDelta b s (delta n) --> app s (recDelta b s n)`
+
+All three measures have the shape:
+```
+mu(delta t)        = D + mu t
+mu(app a b)        = B + mu a + mu b
+mu(recDelta b s n) = A + mu b + mu s + mu n
+```
+for constants `(A,D,B)` = `(1,1,1)` for `mu1`, `(5,1,1)` for `mu2`, `(1,1,2)` for `mu3`.
+
+Computing both sides in general:
+```
+mu(recDelta b s (delta n)) = A + D + mu b + mu s + mu n
+mu(app s (recDelta b s n)) = A + B + mu b + 2·mu s + mu n
+```
+so
+```
+mu(LHS) - mu(RHS) = D - B - mu s.
+```
+
+Since `s` is an arbitrary `Trace`, `mu s` is **unbounded** (e.g. towers of `delta`), so `D - B - mu s` is negative for all sufficiently large `s`, **no matter what constants `D, B` are chosen**. Concretely:
+
+- `mu1`: `D-B = 1-1 = 0`, so `mu1(LHS) - mu1(RHS) = -mu1 s ≤ 0` — never a strict decrease (equality when `s = void`, strict *increase* otherwise).
+- `mu2`: `D-B = 1-1 = 0`, same failure: `-mu2 s ≤ 0`.
+- `mu3`: `D-B = 1-2 = -1`, even worse: `mu3(LHS) - mu3(RHS) = -1 - mu3 s < 0` **always**, regardless of `s`.
+
+So for all three, `R_rec_succ` is either not decreasing or actively increasing the measure, for every instance where `s` is nontrivial (and for `mu3`, for *every* instance whatsoever).
+
+## Why this is not a fixable coefficient issue
+
+This isn't a matter of tuning constants better. Any measure of the schema `mu(recDelta b s n) = A + mu b + mu s + mu n` and `mu(app a b) = B + mu a + mu b` (i.e. counting each immediate child with coefficient exactly 1, as all three candidates do) will produce
+```
+mu(LHS) - mu(RHS) = D - B - mu s,
+```
+which is unbounded below as `mu s → ∞`. Since `Trace` contains terms of arbitrarily large `mu`-value in `s`'s position (nothing constrains what `s` can be in the rule), **no choice of constants can make this rule strictly decreasing**. The genuine problem is that `s` is *duplicated* on the right-hand side (once directly, once nested inside the recursive `recDelta` call), while occurring only once on the left; a linear, coefficient-1 "size" measure inherently cannot compensate for this duplication, since the duplicated subterm's size is unbounded relative to any fixed constant.
+
+A correct termination argument for this rule would need something qualitatively different — e.g., a measure that depends on `s` and `n` *multiplicatively* (so that shrinking `n` by one buys enough "budget" to pay for one more copy of `s`), or a lexicographic/multiset order that treats the count of pending `app`-unfoldings (governed by `n`) as primary and doesn't linearly charge `s`'s size against it. None of `mu1, mu2, mu3` does this — they are all flat sums over the immediate subterms.
+
+## Conclusion
+
+- **`mu1`**: Invalid. Fails to strictly decrease under `R_rec_succ` in general (non-strict, actually equal when `s = void`, and increasing otherwise).
+- **`mu2`**: Invalid, same failure mode as `mu1` (the larger constants for `integrate`/`recDelta`/`eqW` fix nothing relevant to this rule, since `D - B` is still `0`).
+- **`mu3`**: Invalid, and worse than the other two — `mu3(LHS) < mu3(RHS)` unconditionally for *every* instance of `R_rec_succ`, not just for nontrivial `s`.
+
+All three otherwise correctly orient the remaining seven rules (including the somewhat delicate `R_eq_diff` constraint `E > I + M`), which suggests the constants were hand-tuned specifically for `eqW`/`integrate`/`merge` while overlooking the duplication introduced by `R_rec_succ`. As stated, none of the three candidates constitutes a valid termination measure for `Step`.

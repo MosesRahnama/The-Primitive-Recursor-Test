@@ -1,0 +1,59 @@
+## Summary of the issue
+
+Both helper lemmas are **false as stated**, not merely hard to prove. There is a concrete counterexample that can be checked by hand-unfolding the definition of `kappa` (no compiler needed), so neither `sorry` can be honestly discharged.
+
+## Why: the shape of `kappa` on `recDelta`
+
+The defining equations for `kappa` on `recDelta` are:
+
+```
+kappa (recDelta b s (delta n)) = max(max(kappa b, kappa s), kappa n) + 1
+kappa (recDelta b s n)         = max(max(kappa b, kappa s), kappa n)      -- n not of form `delta _`
+```
+
+Crucially, the `+1` fires purely on the **syntactic shape of the immediate third argument** — whether it is literally `delta _`. It is *not* a recursive count of how many `delta`s are nested inside `n`. This matters because `kappa` on plain traces treats `delta` as transparent (`kappa (delta t) = kappa t`, no increment), while `kappa` on `recDelta` gives a bonus `+1` exactly once whenever the immediate argument happens to start with `delta`.
+
+## Counterexample
+
+Take `b = void`, `s = void`, `n = delta void`.
+
+**Computing `kappa (recDelta b s n)`** (i.e. `recDelta void void (delta void)`): the third argument is `delta void`, matching the `delta _` pattern with inner term `void`:
+```
+kappa (recDelta void void (delta void))
+  = max(max(kappa void, kappa void), kappa void) + 1
+  = max(0,0) + 1 = 1
+```
+
+**Computing `kappa (recDelta b s (delta n))`** (i.e. `recDelta void void (delta (delta void))`): the third argument is `delta (delta void)`, matching the pattern with inner term `delta void`:
+```
+kappa (recDelta void void (delta (delta void)))
+  = max(max(kappa void, kappa void), kappa (delta void)) + 1
+  = max(0, kappa void) + 1        -- since kappa (delta void) = kappa void
+  = max(0,0) + 1 = 1
+```
+
+So with this instantiation:
+
+- `kappa (recDelta b s (delta n)) = 1`
+- `kappa (recDelta b s n) = 1`
+
+**`kappa_rec_delta_step`** claims `kappa (recDelta b s (delta n)) = kappa (recDelta b s n) + 1`, i.e. `1 = 1 + 1 = 2`. This is false. The equation only holds when `n` is *not itself* of the form `delta n'`; whenever `n = delta n'`, the outer term gets the same `+1` bonus that `recDelta b s n` already received internally, so the two sides differ by 0, not 1 as claimed (in fact `kappa (recDelta b s (delta n)) = kappa(recDelta b s n)` in that case, since the bonus is “capped” at one application no matter how deep the delta‑nesting of `n` is).
+
+**`kappa_rec_succ_drop`** claims `kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n))`. With the same instantiation:
+```
+kappa (app s (recDelta b s n)) = kappa (app void (recDelta void void (delta void)))
+                               = max(kappa void, kappa (recDelta void void (delta void)))
+                               = max(0, 1) = 1
+kappa (recDelta b s (delta n)) = 1   (computed above)
+```
+So the claim reduces to `1 < 1`, which is false.
+
+## Consequences
+
+- `kappa_rec_delta_step` is not a true statement about `kappa`; it fails whenever the “inner” argument `n` of the recursor is itself headed by `delta`. Hence no proof (in place of the `sorry`) exists — the lemma is unprovable, not just unproven.
+- Since `kappa_rec_succ_drop`’s proof begins by rewriting with this false equation, that rewrite step is illegitimate; moreover the *conclusion itself* is false (as shown, equality rather than strict decrease occurs in the counterexample), so this second `sorry` is also unfillable.
+- The root cause is a genuine flaw in the design of `kappa`: it only detects **one layer** of `delta` immediately under `recDelta`'s third argument, rather than tracking delta-nesting depth consistently. This makes it unsuitable, as currently defined, for proving that the `R_rec_succ` rewrite step (`recDelta b s (delta n) → app s (recDelta b s n)`) strictly decreases the measure — the intended termination/confluence argument built on `kappa` breaks down exactly on inputs where `n` already begins with `delta`.
+
+## Conclusion
+
+The helper theorem strategy is **unsound**. Both `kappa_rec_delta_step` and `kappa_rec_succ_drop` are false in general, with an explicit, easily checked counterexample (`b = s = void`, `n = delta void`). The `sorry`s cannot be replaced by valid proofs; the underlying measure `kappa` needs to be redefined (e.g., to count `delta`-depth recursively rather than only checking the outermost constructor) before any such termination lemma can hold.

@@ -1,0 +1,104 @@
+## Analysis
+
+Before sketching the cases, note the structure of each rule:
+
+| Rule | `mu` change | `kappa` behavior |
+|------|------------|-----------------|
+| `R_int_delta`     | drops by `1 + mu t` (always > 0) | ties iff `kappa t = 0` |
+| `R_rec_zero`      | drops by `3 + mu s` (always > 0) | ties iff `kappa b ≥ kappa s` |
+| `R_rec_succ`      | may go up (extra `app` weight)   | drops **strictly by 1** (the `+1` for `delta`-wrapped rec disappears) |
+| `R_eq_refl`       | drops by `4 + 2·mu a` (always > 0) | ties iff `kappa a = 0` |
+| `R_eq_diff`       | drops by `1` (4 vs 3) | always **ties** (`max(a,b)` on both sides) |
+
+So every rule is provable with `drop_left` or `drop_right`. The four "always decreases in mu" cases need a 2-way `by_cases` on whether `kappa` also decreases; `R_eq_diff` and `R_rec_succ` are cleaner.
+
+## Proof Skeletons
+
+```lean
+-- integrate (delta t) --> void
+-- mu drops by 1+mu t; kappa drops strictly iff kappa t > 0
+| _, _, Step.R_int_delta t => by
+    by_cases hk : kappa t = 0
+    · -- kappa ties: both 0
+      have hk' : kappa void = kappa (integrate (delta t)) := by
+        simp [kappa, hk]
+      have hmu : mu void < mu (integrate (delta t)) := by
+        simp [mu]; omega
+      exact drop_right hmu hk'
+    · -- kappa drops strictly: 0 < kappa t = kappa (integrate (delta t))
+      have hk' : kappa void < kappa (integrate (delta t)) := by
+        simp [kappa]; omega
+      exact drop_left hk'
+
+-- recDelta b s void --> b
+-- mu drops by 3+mu s; kappa ties iff kappa b >= kappa s
+| _, _, Step.R_rec_zero b s => by
+    by_cases hk : kappa b >= kappa s
+    · -- max (kappa b) (kappa s) = kappa b, so kappa ties
+      have hk' : kappa b = kappa (recDelta b s void) := by
+        simp [kappa]; omega
+      have hmu : mu b < mu (recDelta b s void) := by
+        simp [mu]; omega
+      exact drop_right hmu hk'
+    · -- kappa s > kappa b, so the max is kappa s and kappa drops strictly
+      have hk' : kappa b < kappa (recDelta b s void) := by
+        simp [kappa]; omega
+      exact drop_left hk'
+
+-- recDelta b s (delta n) --> app s (recDelta b s n)
+-- The +1 for the delta-wrapped rec argument disappears: kappa drops by 1.
+| _, _, Step.R_rec_succ b s n => by
+    have hk : kappa (app s (recDelta b s n))
+              < kappa (recDelta b s (delta n)) := by
+      simp only [kappa]
+      -- goal: max (kappa s) (max (max (kappa b) (kappa s)) (kappa n))
+      --     < max (max (kappa b) (kappa s)) (kappa n) + 1
+      -- max-assoc + absorption bring LHS to RHS-1; if omega does not
+      -- see through Nat.max, finish with:
+      --   nlinarith [Nat.max_assoc (kappa s) (kappa b) (kappa n),
+      --              le_max_left (kappa s) (max (kappa b) (kappa s))]
+      omega
+    exact drop_left hk
+
+-- eqW a a --> void
+-- mu drops by 4+2*mu a; kappa ties iff kappa a = 0
+| _, _, Step.R_eq_refl a => by
+    by_cases hk : kappa a = 0
+    · -- kappa ties: both 0
+      have hk' : kappa void = kappa (eqW a a) := by
+        simp [kappa, hk]
+      have hmu : mu void < mu (eqW a a) := by
+        simp [mu]; omega
+      exact drop_right hmu hk'
+    · -- kappa drops strictly: 0 < kappa a
+      have hk' : kappa void < kappa (eqW a a) := by
+        simp [kappa]; omega
+      exact drop_left hk'
+
+-- eqW a b --> integrate (merge a b)
+-- kappa ties (both = max (kappa a) (kappa b)); mu drops by 1 (4 vs 3).
+| _, _, Step.R_eq_diff a b => by
+    have hk  : kappa (integrate (merge a b)) = kappa (eqW a b) := by
+      simp [kappa]
+    have hmu : mu (integrate (merge a b)) < mu (eqW a b) := by
+      simp [mu]; omega
+    exact drop_right hmu hk
+```
+
+## Key ideas and notes
+
+1. **`R_rec_succ` is the only "pure" `drop_left` rule.** The strict drop in `kappa` is by *exactly* 1: the `+1` charged to `recDelta _ _ (delta _)` is gone on the right because (a) the new `recDelta` has argument `n`, not `delta n`, and (b) the new outer `app` only takes a `max`, not a `+1`. No `mu` reasoning is needed; `mu` could in fact *increase* for this rule alone, but `kappa` compensates.
+
+2. **The other four rules all drop in `mu` but may tie in `kappa`.** A 2-way `by_cases` on the `kappa` condition is the cleanest, since `kappa` is always one of the two values `0` or `kappa b` (or `kappa a` / `kappa b`) being compared.
+
+3. **Where `omega` may need help with `Nat.max`** — notably `R_rec_succ` after `simp` — fall back to:
+   ```lean
+   nlinarith [Nat.max_assoc (kappa s) (kappa b) (kappa n),
+              le_max_left (kappa s) (max (kappa b) (kappa s)),
+              le_max_right (kappa s) (max (kappa b) (kappa s))]
+   ```
+   This combination lets the solver turn the LHS `max s (max (max b s) n)` into `max (max b s) n` via `max`-absorption (`max x (max x y) = max x y`) and then close the resulting strict inequality `M < M + 1`.
+
+4. **`R_eq_diff` is the tightest `drop_right` case** — `mu` drops by exactly 1 (constructor weights `4` for `eqW` vs. `1 + 2 = 3` for `integrate ∘ merge`), and `kappa` ties because both sides are `max (kappa a) (kappa b)`.
+
+With these five cases filled in, `measure_decreases` becomes a complete proof that every root step of `Step` is strictly decreasing in the lexicographic measure `(kappa, mu)`, and `strong_normalization` follows by the existing `Subrelation.wf` / `InvImage.wf` chain.

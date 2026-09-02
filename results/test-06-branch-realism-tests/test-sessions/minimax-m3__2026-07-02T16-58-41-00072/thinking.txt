@@ -1,0 +1,88 @@
+We need to assess whether the helper strategy is sound. Let me analyze.
+
+The two helper theorems:
+
+1. `kappa_rec_delta_step`: claims `kappa (recDelta b s (delta n)) = kappa (recDelta b s n) + 1`.
+
+2. `kappa_rec_succ_drop`: claims `kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n))`.
+
+The strategy is: first prove `kappa_rec_delta_step`, then use it (via `rw`) in `kappa_rec_succ_drop` to transform the goal into showing `kappa (app s (recDelta b s n)) < kappa (recDelta b s n) + 1`.
+
+Let me check the kappa definition:
+- `kappa (recDelta b s (delta n)) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1`
+- `kappa (recDelta b s n) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)` (when n is not of the form `delta _`)
+
+So `kappa_rec_delta_step` is true, provided n is not itself a delta. Wait—`n` is of type `Trace`, and it could be `delta m` for some m. In that case, the pattern match for `kappa (recDelta b s n)` falls into the second case (the one without `+1` only when n matches `delta n'` constructor), giving `Nat.max (Nat.max (kappa b) (kappa s)) (kappa (delta m))` = `Nat.max (Nat.max (kappa b) (kappa s)) (kappa m)`. And `kappa (recDelta b s (delta (delta m))) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa (delta m)) + 1 = Nat.max (Nat.max (kappa b) (kappa s)) (kappa m) + 1`. So `kappa_rec_delta_step` is still true in this case. Good.
+
+Wait, but `kappa n = kappa (delta m) = kappa m`. So we have:
+- LHS: `kappa (recDelta b s (delta n))` where the outer is `delta n` and inner `n` could be anything. By the first pattern: `Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1`.
+- RHS: `kappa (recDelta b s n) + 1`. The case split depends on n: if n = delta m, then `kappa (recDelta b s (delta m))` = `Nat.max (Nat.max (kappa b) (kappa s)) (kappa m) + 1`, so +1 gives `Nat.max (Nat.max (kappa b) (kappa s)) (kappa m) + 2`. But LHS = `Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1` = `Nat.max (Nat.max (kappa b) (kappa s)) (kappa (delta m)) + 1` = `Nat.max (Nat.max (kappa b) (kappa s)) (kappa m) + 1`.
+
+These are NOT equal! So `kappa_rec_delta_step` is **false** when `n` is itself a `delta _`.
+
+Let me re-examine. Let n = delta m.
+- `kappa (recDelta b s (delta (delta m)))` — here the outer argument of recDelta is `delta (delta m)`, which matches the first pattern (since it's a delta), giving `Nat.max (Nat.max (kappa b) (kappa s)) (kappa (delta m)) + 1` = `Nat.max (Nat.max (kappa b) (kappa s)) (kappa m) + 1`.
+- `kappa (recDelta b s (delta m)) + 1` — `kappa (recDelta b s (delta m))` matches first pattern (since `delta m` is a delta), giving `Nat.max (Nat.max (kappa b) (kappa s)) (kappa m) + 1`. Plus 1 = `Nat.max (Nat.max (kappa b) (kappa s)) (kappa m) + 2`.
+
+So LHS = M + 1, RHS = M + 2, where M = max(max(kb,ks),km). The theorem is false when n is a delta.
+
+Wait, let me re-read more carefully. The variable `n` in the theorem statement — does Lean's pattern matching care about the form of n in `delta n`?
+
+In the theorem `kappa_rec_delta_step (b s n : Trace) : kappa (recDelta b s (delta n)) = kappa (recDelta b s n) + 1`, the `n` is universally quantified over all traces.
+
+So when n = `delta m`:
+- LHS: `kappa (recDelta b s (delta (delta m)))` 
+  - Pattern matches first case (delta n'): `Nat.max (Nat.max (kappa b) (kappa s)) (kappa (delta m)) + 1` = `Nat.max (Nat.max (kappa b) (kappa s)) (kappa m) + 1`
+- RHS: `kappa (recDelta b s (delta m)) + 1`
+  - `kappa (recDelta b s (delta m))` matches first case: `Nat.max (Nat.max (kappa b) (kappa s)) (kappa m) + 1`
+  - Plus 1: `Nat.max (Nat.max (kappa b) (kappa s)) (kappa m) + 2`
+
+Not equal. So the lemma is false in general.
+
+Hmm, but maybe by "delta n" in the pattern it's only matching the outermost constructor being delta. Let me think again. In Lean, `delta n` as a pattern matches any term of the form `Trace.delta n'`, binding n to n'. So when we write `kappa (recDelta b s (delta n))`, the term is `recDelta b s (Trace.delta n)` for some `n`. The kappa definition then matches the first case: `Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1`.
+
+The RHS has `kappa (recDelta b s n) + 1` where n is the same n. This is `kappa (recDelta b s n)` which goes through pattern matching: if n = `Trace.delta m`, then it matches first case giving `Nat.max (Nat.max (kappa b) (kappa s)) (kappa m) + 1`, plus 1 = M+2. LHS = M+1. Discrepancy of 1.
+
+So the theorem is **false** when n is a delta term.
+
+Concrete counterexample: let b = s = void, n = delta void.
+- LHS: `kappa (recDelta void void (delta (delta void)))` = max(max(0,0), kappa (delta void)) + 1 = max(0, 0) + 1 = 1
+- RHS: `kappa (recDelta void void (delta void)) + 1` = (max(max(0,0), kappa void) + 1) + 1 = (0 + 1) + 1 = 2
+
+So 1 ≠ 2. The theorem is false.
+
+Therefore the strategy is unsound. The first helper theorem `kappa_rec_delta_step` is false in general, and any attempt to prove it or use it would either fail or require additional hypotheses.
+
+Now what about `kappa_rec_succ_drop`? It claims `kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n))`.
+
+LHS = max(kappa s, kappa (recDelta b s n)).
+RHS = max(max(kappa b, kappa s), kappa n) + 1.
+
+If n is not a delta, then kappa (recDelta b s n) = max(max(kb,ks),kn), so LHS = max(ks, max(max(kb,ks),kn)) = max(max(kb,ks),kn). Then we need max(max(kb,ks),kn) < max(max(kb,ks),kn) + 1, which is true.
+
+If n is a delta, then kappa (recDelta b s n) = max(max(kb,ks), kn) + 1 (where n here is the inner delta-trace), so LHS = max(ks, max(max(kb,ks),kn) + 1) = max(max(kb,ks),kn) + 1. RHS = max(max(kb,ks),kn) + 1. So LHS = RHS, not strictly less. So the theorem is also false when n is a delta.
+
+Hmm interesting. So both theorems are unsound, but for different reasons. Or wait, let me reconsider.
+
+Actually, the second theorem could be intended to be a proper strict inequality, but it fails when n is a delta. So it's also false in general.
+
+But wait — the key observation: the recursion in `R_rec_succ` is `recDelta b s (delta n) -> app s (recDelta b s n)`. The argument `n` in `delta n` is some arbitrary trace. For the strict decrease to work in a termination argument, we'd need:
+`kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n))`
+
+For this to hold for all n, we'd need LHS < RHS. As shown, when n is a delta, we have equality, not strict inequality. So this strategy is also unsound for the strict inequality.
+
+However, often in termination arguments, one defines kappa on a different recursion variable, e.g., the depth/structure of n. Here, kappa doesn't measure the "delta depth" — it just collapses deltas.
+
+The strategy relies on a property of kappa that's not true in general: that `kappa (recDelta b s (delta n)) = kappa (recDelta b s n) + 1`. This is false in general because nested deltas can collapse multiple "delta wraps" into a single +1 in kappa.
+
+So the assessment: the strategy is **unsound**. The lemma `kappa_rec_delta_step` is false in general (counterexample: n = delta t). The strategy fails to account for the fact that `kappa` is invariant under `delta` wrapping.
+
+Let me verify once more with the concrete counterexample to be sure.
+
+b = void, s = void, n = delta void:
+- kappa (recDelta void void (delta (delta void))) — the argument is `delta (delta void)`, which is a delta. First case: max(max(0,0), kappa (delta void)) + 1 = max(0, kappa void) + 1 = max(0, 0) + 1 = 1.
+- kappa (recDelta void void (delta void)) + 1 — argument is `delta void`, first case: max(max(0,0), kappa void) + 1 = 0 + 1 = 1. Plus 1 = 2.
+
+1 ≠ 2. Confirmed.
+
+Conclusion: the strategy is unsound because `kappa_rec_delta_step` is false in general, with a counterexample when n is itself of the form `delta t`.

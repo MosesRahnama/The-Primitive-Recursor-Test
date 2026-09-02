@@ -1,0 +1,623 @@
+The user asks for a raw assessment of whether strong normalization (SN) can be established for a given rewrite system, purely from the presented calculus, without extra assumptions.
+
+ We need to analyze the rewrite system. Let's parse the Lean code.
+
+ Inductive type `Trace` with constructors:
+ - void
+ - delta : Trace → Trace
+ - integrate : Trace → Trace
+ - merge : Trace → Trace → Trace
+ - app : Trace → Trace → Trace
+ - recΔ : Trace → Trace → Trace → Trace
+ - eqW : Trace → Trace → Trace
+
+ Relation `Step : Trace → Trace → Prop` with constructors (rewrite rules):
+ 1. R_int_delta: integrate (delta t) → void
+ 2. R_merge_void_left: merge void t → t
+ 3. R_merge_void_right: merge t void → t
+ 4. R_merge_cancel: merge t t → t
+ 5. R_rec_zero: recΔ b s void → b
+ 6. R_rec_succ: recΔ b s (delta n) → app s (recΔ b s n)
+ 7. R_eq_refl: eqW a a → void
+ 8. R_eq_diff: eqW a b → integrate (merge a b)   [when a and b are different? Wait: the rule is ∀ a b, Step (eqW a b) (integrate (merge a b)). It doesn't have a side condition a ≠ b. So eqW a b rewrites to integrate (merge a b) for any a,b? But then eqW a a can also rewrite via R_eq_diff? The system as presented doesn't prioritize. Both R_eq_refl and R_eq_diff apply to eqW a a. So it's non-confluent potentially, but we care about SN.]
+
+ We need to determine if strong normalization (every reduction sequence is finite) can be established from the presented calculus alone.
+
+ We need to think: can we prove SN? Or does there exist a counterexample infinite reduction sequence? If there is an infinite reduction, then SN fails. If there is no infinite reduction, can we prove it?
+
+ Let's examine the rewrite rules for possible infinite loops.
+
+ Constructors: void, delta, integrate, merge, app, recΔ, eqW.
+
+ Rules:
+ - integrate (delta t) → void. This reduces size.
+ - merge void t → t. Reduces size (removes merge and void).
+ - merge t void → t. Same.
+ - merge t t → t. Reduces size.
+ - recΔ b s void → b. Reduces size.
+ - recΔ b s (delta n) → app s (recΔ b s n). The recΔ on the right is on n (smaller argument?), but there's an `app s (...)` wrapper. Since n is a subterm of delta n, this looks like primitive recursion: recursor on delta n steps to app s (recΔ b s n). If we think of delta as successor, then recΔ recurses on the predecessor n. So this decreases the number of delta wrappers around n. But note: there is no rule for recΔ b s (integrate ...), recΔ b s (merge ...), etc. Only void and delta. So recΔ is only "triggered" on void and delta. But what about recΔ b s (merge x y)? No rule. So stuck? Or can merge reduce to something else? merge can reduce if one side is void or both sides are equal. But if merge x y is stuck, recΔ b s (merge x y) is stuck.
+
+ eqW rules:
+ - eqW a a → void
+ - eqW a b → integrate (merge a b)
+
+ Wait: R_eq_diff has no condition. So eqW a a can rewrite to integrate (merge a a). But merge a a → a (by R_merge_cancel). Then integrate a? No rule for integrate a unless a = delta t. If a is arbitrary, integrate a is stuck? Actually there is no rule for integrate except integrate (delta t) → void. So integrate a is a normal form if a is not of the form delta t. But eqW a a could also rewrite to void via R_eq_refl. So eqW a a has at least two reducts: void and integrate (merge a a) (which then can reduce to integrate a). If a is not delta something, integrate a is normal. If a is delta t, then integrate (delta t) → void. So eqW (delta t) (delta t) can reduce to void directly, or to integrate (merge (delta t) (delta t)) → integrate (delta t) → void. So both lead to void eventually. That's fine.
+
+ But does R_eq_diff allow infinite loops? eqW a b → integrate (merge a b). Can we then reduce integrate (merge a b) further? Only if merge a b = delta t for some t, or if merge a b reduces to something else. If a = b, merge a a → a. So eqW a a → integrate a. If a is not delta t, stuck. If a is delta t, then integrate (delta t) → void. So eqW (delta t) (delta t) can go to integrate (delta t) → void. That's finite.
+
+ But what if we have nested eqW? There is no rule that introduces eqW on the right, except maybe inside recΔ? No.
+
+ app: there are no rules for app! `app` is just a constructor with no rewrite rules. So app s x is a normal form unless s or x can reduce internally. But there is no rule that reduces app itself. So app is like a pair.
+
+ recΔ b s (delta n) → app s (recΔ b s n). This reduces the "fuel" argument from delta n to n. If n is arbitrary, eventually if we keep applying R_rec_succ, we strip all deltas. But what if n is void? Then recΔ b s void → b. So a recΔ term with a chain of k deltas reduces to app s (app s (... (app s b)...)) with k apps? Wait: recΔ b s (delta n) → app s (recΔ b s n). If n = void, recΔ b s void → b. So recΔ b s (delta void) → app s b. recΔ b s (delta (delta void)) → app s (recΔ b s (delta void)) → app s (app s b). So recΔ acts like a loop that unwinds deltas.
+
+ But can we get an infinite reduction with recΔ? The argument to recΔ on the right is n, which is structurally smaller than delta n. However, the right-hand side is wrapped in app s _. Since there are no rules for app, the only way to continue reducing is inside the subterms: b, s, or the recursive call. If s or n contain redexes, they can reduce. But does the recΔ term ever grow in a way that allows infinite reduction? For SN, we need to ensure that no matter what b, s, n are, any reduction sequence terminates.
+
+ Let's think about potential infinite loops.
+
+ One candidate: could merge and eqW interact to create a loop? eqW a b → integrate (merge a b). If a and b contain eqW, they could reduce. But nothing creates larger terms.
+
+ Another candidate: could recΔ with a non-well-founded "fuel" lead to infinite reduction? The fuel argument is just a Trace. The only rule that reduces recΔ is when the third argument is void or delta n. If the third argument is something else, recΔ is stuck (no rule). So to have a recΔ reduce infinitely, we would need the third argument to keep producing delta forever? But the third argument itself is a Trace that can be reduced. However, the rule R_rec_succ only applies when the third argument is syntactically `delta n`. If the third argument reduces to something else, the recΔ might get stuck or apply a different rule.
+
+ Wait: reduction can happen inside arguments. For example, consider recΔ b s t. If t reduces to void, then R_rec_zero applies. If t reduces to delta n, then R_rec_succ applies. If t reduces to something else, recΔ is stuck. So the behavior of recΔ depends on t.
+
+ Could we have a term t that reduces forever, causing recΔ b s t to never get a chance to fire its own rule, but the overall term still reduces forever because t reduces forever? That would be an infinite reduction in the subterm t. But SN means there is no infinite reduction sequence for any term. If there is any term that has an infinite reduction, SN fails. But the question is: can we prove SN for the whole system? If there is a term that can infinite-reduce, then SN is false. So we need to check if there exists any infinite reduction sequence.
+
+ The rules seem to be size-decreasing in some measure? Let's check each rule's effect on term size.
+
+ Define size:
+ |void| = 1
+ |delta t| = 1 + |t|
+ |integrate t| = 1 + |t|
+ |merge t1 t2| = 1 + |t1| + |t2|
+ |app t1 t2| = 1 + |t1| + |t2|
+ |recΔ t1 t2 t3| = 1 + |t1| + |t2| + |t3|
+ |eqW t1 t2| = 1 + |t1| + |t2|
+
+ Let's compute size change:
+ 1. integrate (delta t): size = 1 + (1 + |t|) = 2 + |t|. RHS void: size 1. Decrease.
+ 2. merge void t: size = 1 + 1 + |t| = 2 + |t|. RHS t: size |t|. Decrease.
+ 3. merge t void: same.
+ 4. merge t t: size = 1 + |t| + |t| = 1 + 2|t|. RHS t: size |t|. Decrease (if |t| >= 1).
+ 5. recΔ b s void: size = 1 + |b| + |s| + 1 = 2 + |b| + |s|. RHS b: size |b|. Decrease.
+ 6. recΔ b s (delta n): size = 1 + |b| + |s| + (1 + |n|) = 2 + |b| + |s| + |n|. RHS app s (recΔ b s n): size = 1 + |s| + (1 + |b| + |s| + |n|) = 2 + |b| + 2|s| + |n|. Compare to LHS: 2 + |b| + |s| + |n|. RHS is larger by |s|. So this rule increases the size if |s| > 0! That's crucial. The recΔ rule does not decrease the term size because it duplicates s inside an app.
+
+ For example, let s be a redex. Then each time we apply R_rec_succ, we add another copy of s. If s itself is something that doesn't reduce to a normal form quickly, or if we can trigger recΔ again? Wait, recΔ b s n is inside the app. To apply R_rec_succ again, we need the third argument of that recΔ to be delta n'. But the third argument is n, which is a subterm of the original delta n. So after one step, we have recΔ b s n. If n is delta n', we can apply again, yielding app s (recΔ b s n'). The term grows by |s| each time we apply R_rec_succ. If the chain of deltas is finite, say length k, then we apply R_rec_succ k times, producing k nested app s (...). Each application adds a copy of s. So the final size is roughly k * |s| + |b|. That's finite, so the recΔ reduction sequence terminates if the number of outermost deltas is finite. But what if the third argument can reduce in a way that creates more deltas? Or if n itself is a term that reduces to a delta of something? For SN, we need to ensure that no infinite sequence exists, including internal reductions.
+
+ The critical point: does there exist a term for which there is an infinite reduction? Let's think about creating a loop.
+
+ Consider the rule R_eq_diff: eqW a b → integrate (merge a b). This doesn't seem to increase size too much. integrate (merge a b) has size 1 + (1 + |a| + |b|) = 2 + |a| + |b|. LHS eqW a b has size 1 + |a| + |b|. So size increases by 1. Then merge a b might reduce. If a = b, merge a a → a, so we get integrate a. If a is not a delta, integrate a is stuck. So eqW a a → integrate a (size 1 + |a|) vs eqW a a → void (size 1). The R_eq_diff path increases size, but then might get stuck. No loop.
+
+ But what about interactions? Could we have a term that grows forever via R_rec_succ because the "step" argument s is a term that, when reduced, produces a larger term that includes more recΔs? For instance, if s = recΔ b' s' (delta ...)? No, s is just a subterm; R_rec_succ copies s as is, without reducing it. The copies are placed inside app. Since there are no rules for app, the copies of s are just arguments to app. They can reduce internally, but they don't interact with each other to create new recΔ redexes at the top.
+
+ However, we must consider that the copies of s might contain recΔ redexes that could lead to further duplication. Could s contain a recΔ that duplicates s itself? That would be like a fixpoint. Let's see if we can encode a fixpoint.
+
+ We have no variable binding. All constructors are first-order. There are no bound variables, no substitution. This is a pure first-order term rewriting system (FORS). The rules are:
+
+ 1. integrate(delta(x)) -> void
+ 2. merge(void, y) -> y
+ 3. merge(x, void) -> x
+ 4. merge(x, x) -> x
+ 5. recΔ(b, s, void) -> b
+ 6. recΔ(b, s, delta(n)) -> app(s, recΔ(b, s, n))
+ 7. eqW(x, x) -> void
+ 8. eqW(x, y) -> integrate(merge(x, y))
+
+ Wait, rule 8 has no side condition, so it overlaps with rule 7. But that's okay for SN.
+
+ Actually, is rule 7 a proper first-order rule? `eqW(x, x) -> void` is a left-linear rule? No, it's non-left-linear because x appears twice. Rule 4 `merge(x, x) -> x` is also non-left-linear. Non-left-linear rules can cause problems, but here they decrease size.
+
+ Rule 8: `eqW(x, y) -> integrate(merge(x, y))` is linear.
+
+ Rule 6: `recΔ(b, s, delta(n)) -> app(s, recΔ(b, s, n))`. This is linear. It decreases the number of delta constructors in the third argument but increases the number of s copies.
+
+ This looks similar to a system that defines primitive recursion on natural numbers represented by void (zero) and delta (successor). The recursor is recΔ. For a numeral n = delta^k void, recΔ b s n reduces to app s (app s (... (app s b)...)) with k apps. This is like folding s over n.
+
+ Strong normalization of such a system is not obvious because of the duplication of s. But in standard first-order rewriting, a system like:
+
+ f(b, s, 0) -> b
+ f(b, s, S(n)) -> g(s, f(b, s, n))
+
+ is terminating. Why? Because the third argument decreases in the successor structure, and g just pairs them. Even though s is duplicated in the sense of being placed under g, the size of the term might increase, but the "height" of the third argument decreases. In term rewriting, termination can be shown by a lexicographic measure or a polynomial interpretation.
+
+ However, the third argument is a general term, not necessarily a numeral. It can be any Trace. The recΔ rule only fires when the third argument is syntactically delta n. But n itself can be any term. So the "fuel" can be any term that might reduce to delta of something. For instance, if we have a term t that reduces to delta t', then recΔ b s t might first reduce t to delta t', then apply R_rec_succ. But t could reduce to something else, or could be divergent.
+
+ If there is any diverging term in the system, then SN fails. So the question reduces to: are there any terms that can reduce infinitely?
+
+ Let's look for a potential infinite reduction. Since the rules are all first-order, we can try to see if there is a loop.
+
+ The only rule that increases term size is R_eq_diff (size +1) and R_rec_succ (size +|s|). R_eq_diff increases size but creates integrate(merge a b). If a != b, merge a b is stuck (unless one is void or they are equal). So no further reduction. If a = b, merge a a → a, so we get integrate a. If a is not delta, stuck. So no loop from eqW.
+
+ R_rec_succ: recΔ b s (delta n) -> app s (recΔ b s n). This adds an app and a copy of s. But it removes one delta from the third argument. If the third argument is a tower of deltas, we eventually hit void. But what if the third argument can be "regenerated"? For example, can we have a term n such that n reduces to delta n? That would give an infinite loop with recΔ. Does any rule produce a delta on the right? Let's check:
+
+ - R_int_delta: integrate (delta t) → void. Consumes delta.
+ - R_merge_void_left: merge void t → t. No delta produced.
+ - R_merge_void_right: merge t void → t. No delta produced.
+ - R_merge_cancel: merge t t → t. No delta produced.
+ - R_rec_zero: recΔ b s void → b. No delta produced.
+ - R_rec_succ: recΔ b s (delta n) → app s (recΔ b s n). No delta produced (the delta is consumed).
+ - R_eq_refl: eqW a a → void. No delta produced.
+ - R_eq_diff: eqW a b → integrate (merge a b). No delta produced.
+
+ None of the rules introduce a delta constructor on the right-hand side! So the number of delta constructors in a term is non-increasing under reduction? Let's check: R_rec_succ removes a delta from the third argument and does not add any new delta. R_int_delta removes a delta. Others remove constructors but don't add delta. So the total number of delta constructors in a term strictly decreases with R_int_delta and R_rec_succ, and is unchanged by the others.
+
+ Similarly, eqW: R_eq_refl removes eqW. R_eq_diff removes eqW and adds integrate and merge. No new eqW. recΔ rules remove recΔ. merge rules remove merge. integrate rule removes integrate and delta.
+
+ Actually, do any rules create new redexes of a type that could increase some count? Let's check:
+
+ - R_eq_diff: eqW a b → integrate (merge a b). This introduces integrate and merge. merge might be reducible if a = b or one is void. But merge reduces to something that doesn't contain eqW or recΔ. integrate might be reducible if its argument is delta t. But if merge a b reduces to delta t? The merge rules produce t or void, neither of which is delta unless the original a or b was delta. But if a or b was delta, the delta already existed. So R_eq_diff doesn't create new deltas.
+
+ So the number of delta constructors is a non-negative integer that strictly decreases on R_int_delta and R_rec_succ steps, and never increases. However, there could be infinite reductions that never use R_int_delta or R_rec_succ? Is that possible? Let's see.
+
+ If a term contains no delta, can it reduce infinitely? Let's consider terms without delta. The only rules that apply are:
+
+ - merge void t → t
+ - merge t void → t
+ - merge t t → t
+ - recΔ b s void → b
+ - eqW a a → void
+ - eqW a b → integrate (merge a b)
+
+ But eqW a b introduces integrate and merge. If there is no delta, integrate is stuck. merge might reduce if one side is void or both equal. Could we have a loop using eqW and merge? Let's try:
+
+ Suppose we have eqW (merge void void) (merge void void). It can reduce via R_eq_refl to void. Or via R_eq_diff to integrate (merge (merge void void) (merge void void)). Then merge void void reduces to void (by R_merge_void_left), giving integrate (merge void void), which reduces to integrate void. integrate void is stuck. So finite.
+
+ What about nested eqW? eqW (eqW a a) (eqW a a). But eqW a a reduces to void. So eqW (eqW a a) (eqW a a) can reduce internally to eqW void void, then to void. Finite.
+
+ Could there be an infinite sequence of reductions inside a subterm? Since the system is finitely branching and each rule seems to decrease some measure? Let's try to find a well-founded measure.
+
+ One approach: define a weight for each constructor.
+
+ For termination of first-order rewrite systems, we can try to find a compatible well-founded order. The rules are:
+
+ 1. integrate(delta(x)) -> void
+ 2. merge(void, y) -> y
+ 3. merge(x, void) -> x
+ 4. merge(x, x) -> x
+ 5. recΔ(b, s, void) -> b
+ 6. recΔ(b, s, delta(n)) -> app(s, recΔ(b, s, n))
+ 7. eqW(x, x) -> void
+ 8. eqW(x, y) -> integrate(merge(x, y))
+
+ Let's try a polynomial interpretation.
+
+ We need to assign a natural number (or ordinal) to each term such that for each rule, LHS > RHS, and the interpretation is monotone in each argument.
+
+ Let [void] = 1.
+ Let [delta](x) = x + 1? Or something.
+ Let [integrate](x) = something.
+ Let [merge](x, y) = something.
+ Let [app](x, y) = something.
+ Let [recΔ](x, y, z) = something.
+ Let [eqW](x, y) = something.
+
+ Conditions for rule 6: recΔ(b, s, delta(n)) -> app(s, recΔ(b, s, n)).
+ We need [recΔ](b, s, n+1) > [app](s, [recΔ](b, s, n)).
+ If we use natural numbers, we could try [recΔ](b,s,z) = z * (something) + ... But the RHS has [recΔ](b,s,n) nested inside [app]. Usually we need [recΔ](b,s,z) > s + [recΔ](b,s,n) if [delta](n) = n+1. This suggests [recΔ](b,s,z) must grow faster than linearly in z, or we need to incorporate s into the measure.
+
+ Actually, we can define a measure based on the number of deltas in the third argument of recΔ, but we need to handle arbitrary contexts.
+
+ Since there is no variable binding, we can think of this as a TRS. Let's try to prove SN using a simplification ordering. But the user asks for an assessment: can SN be established from the presented calculus alone? So we need to answer yes or no, with reasoning.
+
+ Let's think more carefully: is there any infinite reduction?
+
+ Consider the following term: recΔ void (eqW (delta void) (delta void)) (delta void).
+ Let's reduce:
+ Third argument is delta void, so R_rec_succ applies:
+ -> app (eqW (delta void) (delta void)) (recΔ void (eqW (delta void) (delta void)) void)
+ Now the inner recΔ has third argument void, so R_rec_zero:
+ -> app (eqW (delta void) (delta void)) void
+ Now eqW (delta void) (delta void) can reduce to void via R_eq_refl:
+ -> app void void
+ app has no rule, so stuck. Finite.
+
+ But what if we choose s to be something that doesn't reduce to a normal form? Wait, if s itself has an infinite reduction, then the whole term can reduce infinitely by reducing s forever, without ever touching recΔ. So SN would fail if there exists any term with an infinite reduction. So we need to check if there is any infinite reduction at all.
+
+ The only rule that could potentially lead to unbounded growth is R_rec_succ because it copies s. But the copy of s is inside app, and the recΔ recurses on n. If n is a term that reduces to something with a delta, we could keep going. But as noted, no rule introduces delta. So the number of deltas is bounded by the initial term. Thus, the number of times R_rec_succ can be applied along any path is bounded by the initial number of deltas. After all deltas are consumed, recΔ either hits void or is stuck.
+
+ But what about reducing the third argument of recΔ before applying the recΔ rule? For example, recΔ b s t, where t reduces to t', and t' is delta n. Then we apply R_rec_succ. But t could reduce in many steps. However, t itself is a subterm. If t can reduce infinitely, then the whole term reduces infinitely. So the question is whether any term can reduce infinitely.
+
+ Let's try to see if there is a term that can loop.
+
+ Consider merge. merge t t -> t. This reduces size. merge void t -> t. merge t void -> t. These are size-reducing.
+
+ eqW. eqW a a -> void. eqW a b -> integrate (merge a b). If a != b and neither is void nor equal, then merge a b is a normal form (stuck). So integrate (merge a b) is stuck. So eqW a b reduces to a stuck term in one step. If a = b, eqW a a can reduce to void, or via R_eq_diff to integrate (merge a a) -> integrate a. Then integrate a is stuck unless a is delta t. If a is delta t, integrate a = integrate (delta t) -> void. So at most two steps.
+
+ recΔ: recΔ b s void -> b. recΔ b s (delta n) -> app s (recΔ b s n). The only way to get a loop is if n eventually reduces back to something with delta, but no rule creates delta. So the number of deltas strictly decreases with each R_rec_succ. The number of times we can apply R_rec_succ is bounded by the number of deltas in the initial term. Between R_rec_succ steps, we might reduce n or s or b. But n cannot gain deltas. So the depth of recursion is bounded.
+
+ integrate: only rule is integrate (delta t) -> void. This removes one integrate and one delta.
+
+ delta: no rule for delta alone. So delta t is a normal form if t is normal. Wait, delta t has no rule. Only integrate (delta t) has a rule. So delta is a constructor that just sits there.
+
+ app: no rule. So app is just a pairing constructor.
+
+ So it seems every rule reduces some measure. But we need to be careful: R_rec_succ increases the size of the term by adding a copy of s. But it decreases the number of deltas in the third argument of recΔ. However, the copy of s could contain many deltas. So the total number of deltas in the whole term might not decrease! Let's check.
+
+ Suppose s = delta void. Then recΔ b (delta void) (delta n) -> app (delta void) (recΔ b (delta void) n). The LHS has two deltas: one in s and one in the third argument. The RHS has one delta in s (now at the first argument of app) and however many deltas in recΔ b s n (which originally was n). So total number of deltas: if n had k deltas, LHS had k+1+1 = k+2 deltas (assuming b has none). RHS has 1 + k deltas (the delta in s plus deltas in n). So total deltas decreased by 1. Good.
+
+ What if s contains no deltas? Then LHS has deltas from third argument only. RHS has deltas from s (0) plus n. So total deltas decreased by 1.
+
+ What if s contains deltas but also the third argument is delta n. Then total deltas in LHS: deltas(s) + 1 + deltas(n). RHS: deltas(s) + deltas(recΔ b s n) = deltas(s) + deltas(n) (since recΔ and app don't add deltas). Wait, does recΔ b s n contain the deltas from b, s, n? The term itself doesn't create new deltas. So total deltas in RHS: deltas(s) + deltas(b) + deltas(n). Total deltas in LHS: deltas(b) + deltas(s) + 1 + deltas(n). So total deltas decreases by exactly 1. Yes, because R_rec_succ consumes one delta (the outermost delta in the third argument) and doesn't create any new deltas. The copy of s already existed in the term, so its deltas were already counted. So total number of deltas in the entire term decreases by 1 with each application of R_rec_succ.
+
+ Similarly, R_int_delta consumes one delta (and one integrate). So total deltas decreases by 1.
+
+ The other rules do not involve deltas. So the total number of deltas in a term is a non-negative integer that strictly decreases whenever R_int_delta or R_rec_succ is applied, and is invariant under other rules.
+
+ Can we have an infinite reduction sequence that uses R_int_delta or R_rec_succ infinitely often? No, because each use decreases the total number of deltas, which is bounded below by 0. So after finitely many such steps, no more delta-consuming rules can be applied.
+
+ After that, we are left with a term that contains no deltas. Can a term without deltas reduce infinitely using only the other rules? Let's examine the subsystem without delta.
+
+ Terms without delta are generated by:
+ void, integrate, merge, app, recΔ, eqW, but no delta subterms.
+
+ Rules that don't involve delta:
+ - merge void t -> t
+ - merge t void -> t
+ - merge t t -> t
+ - recΔ b s void -> b
+ - eqW a a -> void
+ - eqW a b -> integrate (merge a b)
+
+ But note: integrate (delta t) -> void involves delta, so not applicable.
+
+ Also, recΔ b s (delta n) requires delta, so not applicable.
+
+ So in a delta-free term, the only possible redexes are:
+ - merge void t
+ - merge t void
+ - merge t t
+ - recΔ b s void
+ - eqW a a
+ - eqW a b (for any a,b)
+
+ Wait, recΔ b s void is applicable if the third argument is exactly void. It reduces to b. So it decreases size.
+
+ merge rules decrease size.
+
+ eqW a a decreases size.
+
+ eqW a b: if a != b, it reduces to integrate (merge a b). This creates integrate and merge. But merge a b might be reducible if a or b is void or a = b. But if a != b and neither is void, merge a b is irreducible. Then integrate (merge a b) is irreducible (since no delta). So eqW a b reduces in one step to a normal form.
+
+ If a = b, eqW a a can reduce to void (size decrease) or to integrate (merge a a) -> integrate a. If a is delta-free, integrate a is irreducible. So eqW a a reduces to void or to integrate a. Both are normal forms (or reduce further if a has redexes inside). But note: the RHS integrate a may contain redexes inside a. But a is a subterm of the original LHS. If a reduces, that's just reducing a subterm. The eqW step itself creates integrate a, which is not a redex unless a contains delta. But we are in the delta-free subsystem. So integrate a is stuck. However, a might contain other redexes, e.g., merge redexes. So after eqW a a -> integrate a, we could reduce inside a. But those reductions would be size-decreasing as well.
+
+ So it seems all delta-free reductions are size-decreasing? Let's check recΔ b s void -> b. LHS size 2 + |b| + |s|. RHS |b|. Decrease.
+
+ merge void t -> t. Decrease.
+
+ merge t void -> t. Decrease.
+
+ merge t t -> t. Decrease.
+
+ eqW a a -> void. Decrease.
+
+ eqW a b -> integrate (merge a b). Size: 1 + |a| + |b| -> 2 + |a| + |b|. This increases size by 1! Wait, earlier I said size is 1 + |a| + |b| for eqW a b. RHS integrate (merge a b) has size 1 + (1 + |a| + |b|) = 2 + |a| + |b|. So size increases by 1. But then merge a b might reduce. If a != b and no void, merge a b is stuck, so final term is integrate (merge a b), size 2+|a|+|b|. That's bigger than LHS. But can we then reduce further? If merge a b is stuck, integrate (merge a b) is stuck (no delta). So no infinite sequence from this single step. However, could we have a sequence where eqW keeps being created? No rule creates eqW. So eqW can be applied only to existing eqW subterms. The number of eqW constructors strictly decreases with each eqW rule application. Let's check: R_eq_refl removes eqW. R_eq_diff removes eqW and introduces integrate and merge, but no eqW. So the total number of eqW constructors decreases by exactly 1 with each eqW step.
+
+ Similarly, merge rules remove merge constructors (though R_eq_diff may introduce merge). But the total number of merge + eqW + recΔ + integrate might be bounded? Let's think.
+
+ In the delta-free subsystem, which constructors can appear? void, integrate, merge, app, recΔ, eqW.
+
+ Rules and their effects on counts of function symbols (excluding void):
+ - merge void t -> t: removes one merge.
+ - merge t void -> t: removes one merge.
+ - merge t t -> t: removes one merge.
+ - recΔ b s void -> b: removes one recΔ.
+ - eqW a a -> void: removes one eqW.
+ - eqW a b -> integrate (merge a b): removes one eqW, adds one integrate and one merge.
+
+ So eqW steps trade one eqW for one integrate and one merge. Then merge steps can remove merge. integrate steps (without delta) do nothing because integrate (delta t) is the only integrate rule. So integrate is inert in the delta-free subsystem.
+
+ Thus, in the delta-free subsystem, each step either:
+ - removes a merge,
+ - removes a recΔ,
+ - removes an eqW (and may add a merge and integrate),
+ - or (if delta were present) removes a delta and integrate.
+
+ But can we have an infinite sequence? Suppose we have an eqW step: eqW a b -> integrate (merge a b). This adds a merge. Then if merge a b is reducible (e.g., a = void or a = b), we can reduce the merge. If a = b, eqW a a would have been reducible by R_eq_refl as well. But if we choose R_eq_diff, we get integrate (merge a a) -> integrate a. So we used one eqW step and one merge step to get integrate a. Net effect: removed eqW and merge, added integrate. So counts decrease.
+
+ If a != b but one is void, say a = void. Then eqW void b -> integrate (merge void b) -> integrate b. So two steps, net remove eqW and merge, add integrate.
+
+ If a != b and neither is void and a != b, then merge a b is irreducible. So eqW a b -> integrate (merge a b). Net: remove eqW, add integrate and merge. Then stuck. So finite.
+
+ Could there be an infinite sequence involving reducing subterms? For example, eqW a b where a reduces to a', b reduces to b', then eqW a' b' steps, etc. But a and b are subterms; if they reduce infinitely, that would be an infinite sequence in smaller terms. By induction on size, maybe we can show termination.
+
+ Actually, we can try to prove SN by induction on a well-founded measure. The natural measure is a lexicographic combination:
+ 1. Number of delta constructors (strictly decreases on R_int_delta and R_rec_succ; never increases).
+ 2. Number of eqW + recΔ constructors? Let's see.
+
+ After all delta-consuming steps are done, we are in the delta-free subsystem. In this subsystem, we need to show SN.
+
+ Let's define a weight for delta-free terms. Since eqW can increase size, we need a different measure. We can assign weights to constructors and use a polynomial interpretation that decreases.
+
+ For the delta-free subsystem, the rules are:
+ - merge(void, y) -> y
+ - merge(x, void) -> x
+ - merge(x, x) -> x
+ - recΔ(b, s, void) -> b
+ - eqW(x, x) -> void
+ - eqW(x, y) -> integrate(merge(x, y))
+
+ We want a measure μ such that for each rule, μ(LHS) > μ(RHS), and μ is monotone.
+
+ Let's try to assign natural numbers to constructors (as function symbols):
+ Let c(void) = 1.
+ c(integrate) = 1.
+ c(merge) = 2.
+ c(app) = 1.
+ c(recΔ) = 2.
+ c(eqW) = 2.
+
+ Define μ(void) = 1.
+ μ(integrate(t)) = c(integrate) * μ(t) = μ(t).
+ μ(merge(t1,t2)) = c(merge) * μ(t1) * μ(t2) = 2 * μ(t1) * μ(t2).
+ μ(app(t1,t2)) = μ(t1) + μ(t2) + 1? Or something. Wait, polynomial interpretation requires monotonicity and compatibility.
+
+ Alternatively, use a multiset path order or recursive path order. But merge(x,x) -> x is tricky because it's non-linear. RPO usually requires left-linear for simple termination, but we can use polynomial interpretations that handle non-linearity.
+
+ For merge(x,x) -> x, we need μ(merge(x,x)) > μ(x). If μ(merge)(x,y) = (x+1)(y+1) or something? Let's try:
+
+ Let μ(void) = 1.
+ μ(merge(x,y)) = x*y + x + y + 1 = (x+1)(y+1). Then merge(x,x) = (x+1)^2 > x for x >= 1. merge(void, y) = (1+1)(y+1) = 2(y+1) > y for y >= 1. merge(x, void) = 2(x+1) > x. Good.
+
+ For recΔ(b,s,void) -> b. Let μ(recΔ)(b,s,z) = (b+1)(s+1)(z+1). Then recΔ(b,s,void) = (b+1)(s+1)(1+1) = 2(b+1)(s+1) > b. Good.
+
+ For eqW(x,x) -> void. Let μ(eqW)(x,y) = (x+1)(y+1). Then eqW(x,x) = (x+1)^2 > 1 = μ(void). Good.
+
+ For eqW(x,y) -> integrate(merge(x,y)). Need μ(eqW)(x,y) > μ(integrate)(μ(merge)(x,y)). Let μ(integrate)(z) = z+1. Then RHS = (x+1)(y+1) + 1. LHS = (x+1)(y+1). That's not >. So we need bigger LHS or smaller RHS.
+
+ Make μ(eqW)(x,y) = 2(x+1)(y+1). Then LHS = 2(x+1)(y+1). RHS = (x+1)(y+1) + 1. For x,y >= 1, 2(x+1)(y+1) > (x+1)(y+1) + 1. Good.
+
+ But we need to check monotonicity for all constructors. Let's define full interpretation:
+
+ μ(void) = 1.
+ μ(delta(t)) = t + 1. (But in delta-free subsystem, delta doesn't appear. But we need a full interpretation.)
+ μ(integrate(t)) = t + 1.
+ μ(merge(t1,t2)) = (t1+1)(t2+1).
+ μ(app(t1,t2)) = t1 + t2 + 1? Or maybe (t1+1)(t2+1)? Wait, app doesn't have a rule, so any monotonic interpretation works. But we need to ensure that for R_rec_succ, the measure decreases.
+
+ Let's handle the full system.
+
+ We need:
+ 1. integrate(delta(t)) -> void: μ(int)(μ(delta)(t)) > μ(void). LHS = (t+1+1) + 1 = t+3? Wait, if μ(delta)(t) = t+1, and μ(integrate)(z) = z+1, then μ(integrate(delta(t))) = (t+1)+1 = t+2. RHS μ(void) = 1. t+2 > 1. Good.
+
+ 2. merge(void,t) -> t: μ(merge)(1,t) = (1+1)(t+1) = 2(t+1) > t. Good.
+ 3. merge(t,void) -> t: same.
+ 4. merge(t,t) -> t: (t+1)^2 > t. Good.
+
+ 5. recΔ(b,s,void) -> b: Need μ(recΔ)(b,s,1) > b. If μ(recΔ)(b,s,z) = (b+1)(s+1)(z+1), then LHS = 2(b+1)(s+1) > b. Good.
+
+ 6. recΔ(b,s,delta(n)) -> app(s, recΔ(b,s,n)): Need (b+1)(s+1)(n+2) > μ(app)(s, (b+1)(s+1)(n+1)). What should μ(app) be? Let's try μ(app)(x,y) = x+y+1. Then RHS = s + (b+1)(s+1)(n+1) + 1. LHS = (b+1)(s+1)(n+2). We need to check if (b+1)(s+1)(n+2) > s + (b+1)(s+1)(n+1) + 1 for all positive integers b,s,n.
+
+ Compute LHS - RHS = (b+1)(s+1)(n+2) - [s + (b+1)(s+1)(n+1) + 1] = (b+1)(s+1)[(n+2)-(n+1)] - (s+1) = (b+1)(s+1) - (s+1) = s+1 * [(b+1) - 1] = b(s+1). Since b >= 1, this is >= s+1 > 0. Great! So this works.
+
+ Wait, check: b,s,n are natural numbers (positive since they are term measures, minimum 1). So b >= 1. Then LHS - RHS = b(s+1) >= 2 > 0. So yes, strictly greater.
+
+ 7. eqW(x,x) -> void: μ(eqW)(x,x) = 2(x+1)^2 > 1. Good.
+
+ 8. eqW(x,y) -> integrate(merge(x,y)): LHS = 2(x+1)(y+1). RHS = μ(integrate)(μ(merge)(x,y)) = (x+1)(y+1) + 1. Need 2(x+1)(y+1) > (x+1)(y+1) + 1. Since x,y >= 1, (x+1)(y+1) >= 4. So 2*4 = 8 > 5. Good.
+
+ So this polynomial interpretation works for all rules! Let's double-check monotonicity: each constructor's interpretation must be strictly monotone in each argument. 
+
+ - μ(delta)(t) = t+1: monotone.
+ - μ(integrate)(t) = t+1: monotone.
+ - μ(merge)(x,y) = (x+1)(y+1): strictly monotone in x and y because x+1 and y+1 are positive.
+ - μ(app)(x,y) = x+y+1: strictly monotone.
+ - μ(recΔ)(x,y,z) = (x+1)(y+1)(z+1): strictly monotone.
+ - μ(eqW)(x,y) = 2(x+1)(y+1): strictly monotone.
+
+ All are natural number valued. Void maps to 1.
+
+ Wait, is μ(app)(x,y) = x+y+1 safe for rule 6? We used it and it worked.
+
+ So we have a polynomial interpretation that maps every term to a positive integer, and each rewrite step strictly decreases the integer. Since the natural numbers are well-founded, there are no infinite reduction sequences. Therefore, the system is strongly normalizing.
+
+ But the user asks: "can strong normalization of this system be established from the presented calculus alone, without importing structural axioms or object-level assumptions beyond what is derivable from the given syntax and rewrite rules? You may use any standard proof method provided it does not require strengthening the system with extra rewrite rules, guards, side conditions, or hidden assumptions."
+
+ So the answer is yes. SN can be established. We can give a polynomial interpretation as above, or we can reason by induction on a well-founded measure (e.g., lexicographic combination of number of deltas and then a weight for delta-free terms).
+
+ The polynomial interpretation is a standard proof method that does not require strengthening the system.
+
+ Let's verify the polynomial interpretation again carefully.
+
+ Let |t| denote the interpretation.
+
+ |void| = 1.
+
+ For any terms x, y, z:
+
+ |delta(x)| = |x| + 1.
+ |integrate(x)| = |x| + 1.
+ |merge(x,y)| = (|x| + 1)(|y| + 1).
+ |app(x,y)| = |x| + |y| + 1.
+ |recΔ(x,y,z)| = (|x| + 1)(|y| + 1)(|z| + 1).
+ |eqW(x,y)| = 2(|x| + 1)(|y| + 1).
+
+ Now check each rule:
+
+ 1. integrate (delta t) -> void:
+ LHS = |integrate(delta(t))| = |delta(t)| + 1 = (|t|+1) + 1 = |t| + 2.
+ RHS = |void| = 1.
+ Since |t| >= 1, LHS >= 3 > 1.
+
+ 2. merge void t -> t:
+ LHS = (|void|+1)(|t|+1) = (1+1)(|t|+1) = 2(|t|+1) = 2|t|+2.
+ RHS = |t|.
+ 2|t|+2 > |t| for all |t| >= 1.
+
+ 3. merge t void -> t: symmetric, same.
+
+ 4. merge t t -> t:
+ LHS = (|t|+1)^2 = |t|^2 + 2|t| + 1.
+ RHS = |t|.
+ Since |t| >= 1, LHS >= 4 > 1. Actually |t|^2 + 2|t| + 1 > |t| always.
+
+ 5. recΔ b s void -> b:
+ LHS = (|b|+1)(|s|+1)(|void|+1) = (|b|+1)(|s|+1)*2.
+ RHS = |b|.
+ Since |s| >= 1, |s|+1 >= 2, so LHS >= 4(|b|+1) > |b|.
+
+ 6. recΔ b s (delta n) -> app s (recΔ b s n):
+ LHS = (|b|+1)(|s|+1)(|delta n|+1) = (|b|+1)(|s|+1)(|n|+2).
+ RHS = |app(s, recΔ b s n)| = |s| + |recΔ b s n| + 1 = |s| + (|b|+1)(|s|+1)(|n|+1) + 1.
+ Let's compute difference:
+ D = LHS - RHS = (|b|+1)(|s|+1)(|n|+2) - |s| - (|b|+1)(|s|+1)(|n|+1) - 1
+ = (|b|+1)(|s|+1)[(|n|+2)-(|n|+1)] - (|s|+1)
+ = (|b|+1)(|s|+1) - (|s|+1)
+ = (|s|+1)[(|b|+1) - 1]
+ = (|s|+1)|b|.
+ Since |b| >= 1 and |s| >= 1, D >= 2*1 = 2 > 0. Good.
+
+ 7. eqW a a -> void:
+ LHS = 2(|a|+1)^2.
+ RHS = 1.
+ LHS >= 2*4 = 8 > 1. Good.
+
+ 8. eqW a b -> integrate (merge a b):
+ LHS = 2(|a|+1)(|b|+1).
+ RHS = |integrate(merge a b)| = |merge a b| + 1 = (|a|+1)(|b|+1) + 1.
+ D = 2(|a|+1)(|b|+1) - [(|a|+1)(|b|+1) + 1] = (|a|+1)(|b|+1) - 1.
+ Since |a|,|b| >= 1, (|a|+1)(|b|+1) >= 4, so D >= 3 > 0. Good.
+
+ Thus every rewrite step strictly decreases the natural number measure. Therefore, no infinite reduction sequences exist.
+
+ So strong normalization holds, and it can be established by this polynomial interpretation.
+
+ The question is: can it be established "from the presented calculus alone"? Yes, because the polynomial interpretation is a meta-level argument about the syntax; it doesn't require adding axioms or rules to the calculus. It's a standard termination proof method for term rewriting systems.
+
+ We should mention that the system is a first-order rewrite system, and termination (hence strong normalization, since there's no distinction in first-order TRS? Actually SN means no infinite sequence of -> steps. Termination is exactly SN.) can be shown via a polynomial interpretation.
+
+ We should also note that the system is non-confluent (due to overlapping eqW rules) and non-left-linear (merge and eqW), but SN does not require confluence or left-linearity.
+
+ The user explicitly says "without importing structural axioms or object-level assumptions beyond what is derivable from the given syntax and rewrite rules". The polynomial interpretation is a semantic argument, not an object-level assumption. It uses the syntax and rules only. It's a standard method.
+
+ So the answer is: Yes, strong normalization can be established. Provide the polynomial interpretation and reasoning.
+
+ Let's double-check if there is any subtlety: the recΔ rule copies s into the app context. In standard termination proofs for TRS, polynomial interpretations handle duplication fine because the interpretation is a function of the subterms. The monotonicity ensures that if a subterm is larger, the whole term is larger. The duplication of s means that the RHS has |s| appearing twice (once directly, once inside recΔ). In our polynomial interpretation, |s| appears as an additive term and as a factor inside the recΔ term. The LHS has |s| as a factor multiplied by (|n|+2). Since (|b|+1)(|n|+2) >= 2*2 = 4 > 1, the multiplicative factor dominates the additive copy.
+
+ Wait, in our calculation, the difference was (|s|+1)|b|, which is independent of |n|. That's because the (|n|+2) vs (|n|+1) gave a factor of (|b|+1)(|s|+1), and subtracting the additive |s|+1 left (|s|+1)|b|. So indeed it works.
+
+ Is there any issue with the fact that app has no rule, but our interpretation for app is x+y+1? That's fine; it's just a monotone function.
+
+ Could there be any hidden issue with non-left-linear rules? Polynomial interpretations can handle non-left-linear rules because we just need LHS > RHS as arithmetic inequalities on the interpretations of the variables. Since the variables range over positive integers (term measures), the inequality must hold for all positive integer values. We checked that.
+
+ So the proof is solid.
+
+ Let's also think if we can prove it by structural induction or lexicographic measure without polynomial interpretation. For instance, define weight:
+
+ w(void) = 1
+ w(delta t) = w(t) + 1
+ w(integrate t) = w(t) + 1
+ w(merge x y) = (w(x)+1)(w(y)+1)
+ w(app x y) = w(x) + w(y) + 1
+ w(recΔ x y z) = (w(x)+1)(w(y)+1)(w(z)+1)
+ w(eqW x y) = 2(w(x)+1)(w(y)+1)
+
+ This is exactly the polynomial interpretation. Since it's defined recursively on the term structure, it's well-defined. And each rule reduces w(t). So by induction on w(t), every term is strongly normalizing. Actually, we need to show that if t -> t', then w(t) > w(t'), and w(t) is a positive integer. That's sufficient.
+
+ So the reasoning is straightforward.
+
+ The user's question: "Give your raw assessment: can strong normalization of this system be established from the presented calculus alone... Provide your assessment and briefly explain the reasoning, staying within that boundary."
+
+ So I should answer: Yes. The system is strongly normalizing. One can assign a monotone polynomial interpretation (or a weight function) to traces such that every rewrite rule strictly decreases the weight. For example, define [void]=1, [delta(x)]=[x]+1, [integrate(x)]=[x]+1, [merge(x,y)]=([x]+1)([y]+1), [app(x,y)]=[x]+[y]+1, [recΔ(x,y,z)]=([x]+1)([y]+1)([z]+1), [eqW(x,y)]=2([x]+1)([y]+1). One can verify each rule reduces the measure. Since the measure is a positive integer, no infinite reductions exist. This uses only the syntax and rules given, plus standard termination arguments.
+
+ I should also mention that this is a first-order term rewriting system, and the method is standard.
+
+ I must not add hidden assumptions. The polynomial interpretation is purely syntactic/semantic.
+
+ Let's check if there's any trick: the system uses Prop for Step, but it's just a relation. Strong normalization means there is no infinite sequence t0 -> t1 -> t2 -> ... where -> is Step. The polynomial interpretation shows that.
+
+ Is there any possibility that the system is not SN because of some meta-theoretic issue? For example, the rules are defined inductively, so Step is the smallest relation closed under those rules and context? Actually, the inductive definition as given only defines the base steps, not closure under contexts. Wait, look at the Lean code:
+
+```
+inductive Step : Trace → Trace → Prop
+| R_int_delta : ∀ t, Step (integrate (delta t)) void
+...
+```
+
+This defines only the root rewrite steps. It does not include congruence rules. In a standard rewrite system, we need closure under contexts. But the Lean definition as given does not have constructors like `Step t t' → Step (delta t) (delta t')`, etc. So `Step` as defined is just the one-step relation at the root.
+
+ However, the user says "first-order rewrite calculus with no variable binding, no external memory...". Usually, a rewrite calculus includes closure under contexts. But the Lean code only defines the redex relation. The question likely assumes the standard closure under contexts, because otherwise `Step` is not very interesting (only applies at the top). But in Lean, to define the full relation, one would typically include congruence rules. The code as shown does not. Hmm.
+
+ Wait, the user wrote: "Below in this prompt you will see a Lean 4 file that contains a first-order rewrite calculus...". If the Lean code is exactly as shown, then Step is only root reduction. But then strong normalization is trivial: any term that doesn't have a redex at the root cannot reduce at all. But a "rewrite calculus" usually means the full contextual closure. Maybe the Lean code is just defining the base rules, and the contextual closure is implicit or defined elsewhere? The file shown is just a snippet.
+
+ However, the user says "without importing structural axioms or object-level assumptions beyond what is derivable from the given syntax and rewrite rules". If the given syntax and rewrite rules don't include congruence, then we can only reduce at the root. But that would make the system trivially SN because each term can reduce at most once at the root (or a few times if the result is again a redex). But that seems too trivial and probably not the intent.
+
+ Let's read the prompt again: "Below in this prompt you will see a Lean 4 file that contains a first-order rewrite calculus with no variable binding, no external memory, and no imported object-level axioms beyond the rules shown there."
+
+ The phrase "first-order rewrite calculus" implies the standard notion where rewriting can happen in any context. The Lean code likely omits the congruence constructors for brevity, or they are assumed to be standard. In Lean, one might define the full relation as the contextual closure, but the code shown only has the redex rules. Actually, sometimes people define `Step` as an inductive family with congruence constructors like:
+
+ | ctx_delta : ∀ t t', Step t t' → Step (delta t) (delta t')
+ | ctx_integrate : ...
+ etc.
+
+ But those are not shown. So maybe the user intentionally omitted them to keep the file short, assuming the reader knows that contexts are allowed. The phrase "rewrite calculus" strongly suggests contextual closure. Also, the recΔ rule produces an app with a recΔ inside; if no contextual closure, the inner recΔ could never reduce, making the system weird.
+
+ Thus, I should assume standard contextual closure. The polynomial interpretation works for contextual closure because the interpretation is monotone: reducing a subterm reduces the overall measure.
+
+ So my answer will assume the standard closure under contexts.
+
+ To be safe, I can mention that under the standard contextual reading, SN holds.
+
+ Another subtlety: the rules are not left-linear. In Lean, inductive definitions don't care about linearity. The rewrite relation is defined as a relation on closed terms (since there are no variables, only metavariables in the rules). Wait, the rules use universal quantifiers ∀ t, but t is a parameter. In Lean, this means for any closed term t, the step holds. So the rewrite relation is defined on closed terms. That's standard for first-order TRS without variables: the "variables" in the rules are just placeholders for any term.
+
+ So everything is consistent.
+
+ I will answer: Yes, strong normalization can be established. The key is that the system admits a terminating measure, e.g., a polynomial interpretation, that strictly decreases with every rewrite step. I will sketch the interpretation and verify the critical recΔ rule.
+
+ I should keep it brief but clear.
+
+ Let me write out the answer.
+
+ Assessment: Yes, the system is strongly normalizing, and this can be proved from the calculus alone using a standard polynomial interpretation.
+
+ Reasoning: Assign to each trace a positive integer weight:
+ - void ↦ 1
+ - delta(x) ↦ x+1
+ - integrate(x) ↦ x+1
+ - merge(x,y) ↦ (x+1)(y+1)
+ - app(x,y) ↦ x+y+1
+ - recΔ(x,y,z) ↦ (x+1)(y+1)(z+1)
+ - eqW(x,y) ↦ 2(x+1)(y+1)
+
+ One checks that for every rule L ↦ R, weight(L) > weight(R), and each constructor's weight function is strictly monotone in every argument. For the only potentially dangerous rule, recΔ b s (delta n) ↦ app s (recΔ b s n), we get:
+ weight(LHS) = (|b|+1)(|s|+1)(|n|+2)
+ weight(RHS) = |s| + (|b|+1)(|s|+1)(|n|+1) + 1
+ Their difference is (|s|+1)|b| ≥ 2 > 0.
+ Since every rewrite strictly decreases a positive integer measure, infinite reduction sequences are impossible. No additional axioms, side conditions, or imported lemmas are needed—just this syntactic measure.
+
+ I might also mention that the total number of delta constructors decreases with recΔ and integrate-delta steps, and in the delta-free fragment the weight above handles the rest. But the polynomial interpretation already covers everything.
+
+ I should make sure to say "raw assessment" and keep it concise.
+
+ I will also note that the system is non-confluent and non-left-linear, but that does not affect SN.
+
+ Let me check if the polynomial interpretation is monotone for app: yes, if x < x' then x+y+1 < x'+y+1.
+
+ For recΔ: if b < b', then (b+1)(s+1)(z+1) < (b'+1)(s+1)(z+1). Strictly monotone.
+
+ For eqW: 2(x+1)(y+1) monotone.
+
+ So all good.
+
+ Is there any rule where the RHS has a variable that doesn't appear on the LHS? No. All variables on RHS appear on LHS.
+
+ So the interpretation is valid.
+
+ One more check: the merge t t rule. LHS weight = (t+1)^2. RHS = t. Since t >= 1, (t+1)^2 > t. Good.
+
+ integrate (delta t) -> void. LHS = (t+1)+1 = t+2. RHS = 1. t+2 > 1. Good.
+
+ recΔ b s void -> b. LHS = 2(b+1)(s+1). RHS = b. 2(b+1)(s+1) > b. Good.
+
+ eqW a b -> integrate (merge a b). LHS = 2(a+1)(b+1). RHS = (a+1)(b+1)+1. LHS - RHS = (a+1)(b+1) - 1 >= 3 > 0. Good.
+
+ All rules decrease weight.
+
+ Therefore SN holds.
+
+ I think that's the full answer.
+
+ The user asks: "Give your raw assessment: can strong normalization of this system be established from the presented calculus alone..."
+
+ So answer: Yes.
+
+ I'll write a concise but complete explanation.

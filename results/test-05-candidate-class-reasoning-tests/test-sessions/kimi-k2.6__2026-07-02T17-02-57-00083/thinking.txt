@@ -1,0 +1,537 @@
+We need to assess three termination measures for a first-order rewrite calculus defined in Lean 4.
+
+We have an inductive type Trace with constructors:
+- void
+- delta : Trace -> Trace
+- integrate : Trace -> Trace
+- merge : Trace -> Trace -> Trace
+- app : Trace -> Trace -> Trace
+- recDelta : Trace -> Trace -> Trace -> Trace
+- eqW : Trace -> Trace -> Trace
+
+And rewrite rules Step: Trace -> Trace -> Prop:
+1. R_int_delta: integrate (delta t) -> void
+2. R_merge_void_left: merge void t -> t
+3. R_merge_void_right: merge t void -> t
+4. R_merge_cancel: merge t t -> t
+5. R_rec_zero: recDelta b s void -> b
+6. R_rec_succ: recDelta b s (delta n) -> app s (recDelta b s n)
+7. R_eq_refl: eqW a a -> void
+8. R_eq_diff: eqW a b -> integrate (merge a b)
+
+We need to assess mu1, mu2, mu3 as termination measures. A termination measure for a rewrite system is a function into a well-founded domain (Nat here) such that for every rewrite rule l -> r, we have measure(l) > measure(r).
+
+So we need to check for each rule whether mu(l) > mu(r) for each mu.
+
+Let's compute.
+
+First, mu1:
+- void: 0
+- delta t: 1 + mu1 t
+- integrate t: 1 + mu1 t
+- merge a b: 1 + mu1 a + mu1 b
+- app a b: 1 + mu1 a + mu1 b
+- recDelta b s n: 1 + mu1 b + mu1 s + mu1 n
+- eqW a b: 3 + mu1 a + mu1 b
+
+Check each rule:
+
+R_int_delta: l = integrate (delta t). mu1(l) = 1 + mu1(delta t) = 1 + (1 + mu1 t) = 2 + mu1 t. r = void, mu1(r) = 0. So 2 + mu1 t > 0. OK.
+
+R_merge_void_left: l = merge void t. mu1(l) = 1 + mu1 void + mu1 t = 1 + 0 + mu1 t = 1 + mu1 t. r = t, mu1(r) = mu1 t. So 1 + mu1 t > mu1 t. OK.
+
+R_merge_void_right: l = merge t void. mu1(l) = 1 + mu1 t + 0 = 1 + mu1 t. r = t. OK.
+
+R_merge_cancel: l = merge t t. mu1(l) = 1 + mu1 t + mu1 t = 1 + 2*mu1 t. r = t. 1 + 2*mu1 t > mu1 t. OK.
+
+R_rec_zero: l = recDelta b s void. mu1(l) = 1 + mu1 b + mu1 s + mu1 void = 1 + mu1 b + mu1 s + 0. r = b. mu1(r) = mu1 b. So need 1 + mu1 b + mu1 s > mu1 b, which is 1 + mu1 s > 0. Since mu1 s >= 0, this is >=1. But wait: mu1 s could be 0 if s = void. Then 1 + 0 > 0, yes. OK.
+
+R_rec_succ: l = recDelta b s (delta n). mu1(l) = 1 + mu1 b + mu1 s + mu1(delta n) = 1 + mu1 b + mu1 s + (1 + mu1 n) = 2 + mu1 b + mu1 s + mu1 n.
+r = app s (recDelta b s n). mu1(r) = 1 + mu1 s + mu1(recDelta b s n) = 1 + mu1 s + (1 + mu1 b + mu1 s + mu1 n) = 2 + mu1 b + 2*mu1 s + mu1 n.
+Compare: mu1(l) = 2 + mu1 b + mu1 s + mu1 n.
+mu1(r) = 2 + mu1 b + 2*mu1 s + mu1 n.
+Difference: mu1(l) - mu1(r) = (2 + mu1 b + mu1 s + mu1 n) - (2 + mu1 b + 2*mu1 s + mu1 n) = - mu1 s.
+So mu1(l) > mu1(r) iff -mu1 s > 0, which is false unless mu1 s = 0 and then -0 = 0, so not strictly greater. Actually if mu1 s > 0, mu1(l) < mu1(r). So mu1 fails for R_rec_succ.
+
+Wait, check: recDelta b s (delta n) rewrites to app s (recDelta b s n). The measure of the right side includes two copies of s (one directly in app, one inside recDelta). The left side has only one s. So unless s has measure 0 and the constants somehow make it work, but here mu1 doesn't assign enough weight to recDelta or delta to compensate. Let's compute again carefully.
+
+mu1(recDelta b s n) = 1 + mu1 b + mu1 s + mu1 n.
+mu1(delta n) = 1 + mu1 n.
+So mu1(l) = 1 + mu1 b + mu1 s + (1 + mu1 n) = 2 + mu1 b + mu1 s + mu1 n.
+mu1(r) = mu1(app s (recDelta b s n)) = 1 + mu1 s + mu1(recDelta b s n) = 1 + mu1 s + (1 + mu1 b + mu1 s + mu1 n) = 2 + mu1 b + 2*mu1 s + mu1 n.
+So mu1(l) = 2 + mu1 b + mu1 s + mu1 n < 2 + mu1 b + 2*mu1 s + mu1 n = mu1(r) if mu1 s > 0.
+If s = void, mu1 s = 0, then mu1(l) = 2 + mu1 b + 0 + mu1 n = mu1(r). Not strictly greater.
+Thus mu1 does NOT decrease on R_rec_succ. So mu1 is invalid.
+
+Check other rules for completeness:
+R_eq_refl: l = eqW a a. mu1(l) = 3 + mu1 a + mu1 a = 3 + 2*mu1 a. r = void = 0. OK.
+R_eq_diff: l = eqW a b. mu1(l) = 3 + mu1 a + mu1 b. r = integrate (merge a b). mu1(r) = 1 + mu1(merge a b) = 1 + (1 + mu1 a + mu1 b) = 2 + mu1 a + mu1 b. So 3 + ... > 2 + ... OK.
+
+So mu1 fails only on R_rec_succ.
+
+Now mu2:
+- void: 0
+- delta t: 1 + mu2 t
+- integrate t: 2 + mu2 t
+- merge a b: 2 + mu2 a + mu2 b
+- app a b: 1 + mu2 a + mu2 b
+- recDelta b s n: 5 + mu2 b + mu2 s + mu2 n
+- eqW a b: 5 + mu2 a + mu2 b
+
+Check each rule:
+
+R_int_delta: l = integrate (delta t). mu2(l) = 2 + mu2(delta t) = 2 + (1 + mu2 t) = 3 + mu2 t. r = void = 0. OK.
+
+R_merge_void_left: l = merge void t. mu2(l) = 2 + 0 + mu2 t = 2 + mu2 t. r = t, mu2(r) = mu2 t. So 2 + mu2 t > mu2 t. OK.
+
+R_merge_void_right: l = merge t void. mu2(l) = 2 + mu2 t + 0 = 2 + mu2 t. r = t. OK.
+
+R_merge_cancel: l = merge t t. mu2(l) = 2 + mu2 t + mu2 t = 2 + 2*mu2 t. r = t. OK.
+
+R_rec_zero: l = recDelta b s void. mu2(l) = 5 + mu2 b + mu2 s + 0. r = b. mu2(r) = mu2 b. Need 5 + mu2 s > 0. Since mu2 s >= 0, 5 + ... >=5 >0. OK.
+
+R_rec_succ: l = recDelta b s (delta n). mu2(l) = 5 + mu2 b + mu2 s + mu2(delta n) = 5 + mu2 b + mu2 s + (1 + mu2 n) = 6 + mu2 b + mu2 s + mu2 n.
+r = app s (recDelta b s n). mu2(r) = 1 + mu2 s + mu2(recDelta b s n) = 1 + mu2 s + (5 + mu2 b + mu2 s + mu2 n) = 6 + mu2 b + 2*mu2 s + mu2 n.
+Compare: mu2(l) = 6 + mu2 b + mu2 s + mu2 n.
+mu2(r) = 6 + mu2 b + 2*mu2 s + mu2 n.
+Difference: - mu2 s. So if mu2 s > 0, mu2(l) < mu2(r). If s = void, mu2 s = 0, then equal. So mu2 also fails on R_rec_succ.
+
+Wait, but maybe I miscomputed: recDelta weight is 5. So mu2(l) = 5 + ... + 1 + mu2 n = 6 + ... . mu2(r) = 1 + mu2 s + (5 + ...) = 6 + ... . So yes, same issue: the extra copy of s in r is not offset by the 5 weight because both sides get +5 from recDelta on left and inside right. Actually left gets +5 + 1 (from delta n) = +6. Right gets +5 + 1 (from app) = +6. So the overhead is the same, and the extra s on right makes it larger.
+
+Unless n is delta n, but we accounted for that: delta adds 1 + mu2 n. On the right, inside recDelta we have n (not delta n). So left has delta n, right has n. That gives left +1 over right. But right has extra mu2 s. Let's recompute more carefully.
+
+mu2(l) = mu2(recDelta b s (delta n)) = 5 + mu2 b + mu2 s + mu2(delta n).
+mu2(delta n) = 1 + mu2 n.
+So mu2(l) = 5 + mu2 b + mu2 s + 1 + mu2 n = 6 + mu2 b + mu2 s + mu2 n.
+
+mu2(r) = mu2(app s (recDelta b s n)) = 1 + mu2 s + mu2(recDelta b s n).
+mu2(recDelta b s n) = 5 + mu2 b + mu2 s + mu2 n.
+So mu2(r) = 1 + mu2 s + 5 + mu2 b + mu2 s + mu2 n = 6 + mu2 b + 2*mu2 s + mu2 n.
+
+Difference: mu2(l) - mu2(r) = (6 + mu2 b + mu2 s + mu2 n) - (6 + mu2 b + 2*mu2 s + mu2 n) = - mu2 s.
+
+So indeed fails when mu2 s > 0, and equal when s = void.
+
+But wait, maybe there is a trick: In the right side, the recDelta is nested inside app. The measure of app is 1 + mu2 s + mu2(recDelta ...). If we had chosen a larger weight for recDelta, maybe it would work. But with weight 5, it doesn't.
+
+Let's check if any other rule might be problematic for mu2.
+
+R_eq_refl: l = eqW a a. mu2(l) = 5 + 2*mu2 a. r = void. OK.
+
+R_eq_diff: l = eqW a b. mu2(l) = 5 + mu2 a + mu2 b. r = integrate (merge a b). mu2(r) = 2 + mu2(merge a b) = 2 + (2 + mu2 a + mu2 b) = 4 + mu2 a + mu2 b. So 5 + ... > 4 + ... OK.
+
+So mu2 also fails on R_rec_succ.
+
+Now mu3:
+- void: 0
+- delta t: 1 + mu3 t
+- integrate t: 2 + mu3 t
+- merge a b: 1 + mu3 a + mu3 b
+- app a b: 2 + mu3 a + mu3 b
+- recDelta b s n: 1 + mu3 b + mu3 s + mu3 n
+- eqW a b: 4 + mu3 a + mu3 b
+
+Check each rule:
+
+R_int_delta: l = integrate (delta t). mu3(l) = 2 + (1 + mu3 t) = 3 + mu3 t. r = void. OK.
+
+R_merge_void_left: l = merge void t. mu3(l) = 1 + 0 + mu3 t = 1 + mu3 t. r = t. OK.
+
+R_merge_void_right: l = merge t void. mu3(l) = 1 + mu3 t + 0 = 1 + mu3 t. r = t. OK.
+
+R_merge_cancel: l = merge t t. mu3(l) = 1 + 2*mu3 t. r = t. OK.
+
+R_rec_zero: l = recDelta b s void. mu3(l) = 1 + mu3 b + mu3 s + 0. r = b. mu3(r) = mu3 b. Need 1 + mu3 s > 0. OK for all s (since mu3 s >= 0, 1 + mu3 s >= 1 > 0). Actually if s is void, 1+0 =1 >0. OK.
+
+R_rec_succ: l = recDelta b s (delta n). mu3(l) = 1 + mu3 b + mu3 s + mu3(delta n) = 1 + mu3 b + mu3 s + (1 + mu3 n) = 2 + mu3 b + mu3 s + mu3 n.
+r = app s (recDelta b s n). mu3(r) = 2 + mu3 s + mu3(recDelta b s n) = 2 + mu3 s + (1 + mu3 b + mu3 s + mu3 n) = 3 + mu3 b + 2*mu3 s + mu3 n.
+Compare: mu3(l) = 2 + mu3 b + mu3 s + mu3 n.
+mu3(r) = 3 + mu3 b + 2*mu3 s + mu3 n.
+Difference: (2 + ...) - (3 + ...) = -1 - mu3 s.
+So mu3(l) < mu3(r) always (since -1 - mu3 s <= -1). So mu3 also fails on R_rec_succ? Wait, that seems even worse. But maybe I should double-check.
+
+Wait, is there any rule where mu3 might work but others fail? Let's see. Actually for R_rec_succ, the right side has an extra app constructor (weight 2) and an extra copy of s. The left side has a delta on n (weight 1 + mu3 n) and recDelta weight 1. Let's recompute:
+
+mu3(recDelta b s (delta n)) = 1 + mu3 b + mu3 s + mu3(delta n).
+mu3(delta n) = 1 + mu3 n.
+So left = 1 + mu3 b + mu3 s + 1 + mu3 n = 2 + mu3 b + mu3 s + mu3 n.
+
+Right: app s (recDelta b s n).
+mu3(app x y) = 2 + mu3 x + mu3 y.
+So right = 2 + mu3 s + mu3(recDelta b s n) = 2 + mu3 s + (1 + mu3 b + mu3 s + mu3 n) = 3 + mu3 b + 2*mu3 s + mu3 n.
+
+So left - right = (2 + mu3 b + mu3 s + mu3 n) - (3 + mu3 b + 2*mu3 s + mu3 n) = -1 - mu3 s < 0. So mu3(l) < mu3(r). So mu3 fails for R_rec_succ as well.
+
+But wait: maybe we should check if there is any other rule that might be problematic for mu3, but it's irrelevant since all must hold.
+
+However, is it possible that one of these measures does work? Let's reconsider. The problem says "three proposed termination measures. Assess the three candidates." Usually in such problems, maybe one works, or none work, or some work. Let's double-check our calculations because it's suspicious that all three fail on the same rule. Could there be a subtlety?
+
+Let's re-express the condition: For a measure to be a termination measure, we need for all rules l -> r: mu(l) > mu(r). Let's check each candidate very carefully.
+
+Candidate mu1:
+R_rec_succ: l = recDelta b s (delta n). r = app s (recDelta b s n).
+mu1 recDelta weight = 1.
+mu1 app weight = 1.
+mu1 delta weight = 1.
+
+mu1(l) = 1 + mu1(b) + mu1(s) + mu1(delta n) = 1 + mu1(b) + mu1(s) + 1 + mu1(n) = 2 + mu1(b) + mu1(s) + mu1(n).
+mu1(r) = 1 + mu1(s) + mu1(recDelta b s n) = 1 + mu1(s) + 1 + mu1(b) + mu1(s) + mu1(n) = 2 + mu1(b) + 2*mu1(s) + mu1(n).
+Difference: -mu1(s). So if s is not void, mu1(l) < mu1(r). If s is void, equal. So not strictly decreasing. mu1 fails.
+
+Candidate mu2:
+mu2 recDelta = 5.
+mu2 app = 1.
+mu2 delta = 1.
+
+mu2(l) = 5 + mu2(b) + mu2(s) + mu2(delta n) = 5 + mu2(b) + mu2(s) + 1 + mu2(n) = 6 + mu2(b) + mu2(s) + mu2(n).
+mu2(r) = 1 + mu2(s) + mu2(recDelta b s n) = 1 + mu2(s) + 5 + mu2(b) + mu2(s) + mu2(n) = 6 + mu2(b) + 2*mu2(s) + mu2(n).
+Difference: -mu2(s). So same. mu2 fails.
+
+Candidate mu3:
+mu3 recDelta = 1.
+mu3 app = 2.
+mu3 delta = 1.
+
+mu3(l) = 1 + mu3(b) + mu3(s) + mu3(delta n) = 1 + mu3(b) + mu3(s) + 1 + mu3(n) = 2 + mu3(b) + mu3(s) + mu3(n).
+mu3(r) = 2 + mu3(s) + mu3(recDelta b s n) = 2 + mu3(s) + 1 + mu3(b) + mu3(s) + mu3(n) = 3 + mu3(b) + 2*mu3(s) + mu3(n).
+Difference: -1 - mu3(s) < 0. So mu3 fails.
+
+So none of them work? That seems possible. But maybe we should check R_eq_diff for mu1: eqW a b -> integrate (merge a b).
+mu1(eqW a b) = 3 + mu1 a + mu1 b.
+mu1(integrate (merge a b)) = 1 + mu1(merge a b) = 1 + 1 + mu1 a + mu1 b = 2 + mu1 a + mu1 b.
+So 3 + ... > 2 + ... OK.
+
+For mu2: mu2(eqW a b) = 5 + mu2 a + mu2 b.
+mu2(integrate (merge a b)) = 2 + mu2(merge a b) = 2 + 2 + mu2 a + mu2 b = 4 + mu2 a + mu2 b.
+5 > 4. OK.
+
+For mu3: mu3(eqW a b) = 4 + mu3 a + mu3 b.
+mu3(integrate (merge a b)) = 2 + mu3(merge a b) = 2 + 1 + mu3 a + mu3 b = 3 + mu3 a + mu3 b.
+4 > 3. OK.
+
+Check R_int_delta for mu3: integrate (delta t) -> void.
+mu3(l) = 2 + 1 + mu3 t = 3 + mu3 t > 0. OK.
+
+Check R_int_delta for mu1: 1 + 1 + mu1 t = 2 + mu1 t > 0. OK.
+
+Check R_merge_void_left for mu3: merge void t -> t. mu3(l) = 1 + 0 + mu3 t = 1 + mu3 t > mu3 t. OK.
+
+Check R_merge_cancel for mu3: merge t t -> t. mu3(l) = 1 + 2*mu3 t > mu3 t. OK.
+
+So indeed, only R_rec_succ is problematic, and it's problematic for all three. But is there any chance that we misread the rule? R_rec_succ: recDelta b s (delta n) -> app s (recDelta b s n). The left has delta n, the right has n. So left has an extra delta. But the right has an extra app and an extra recDelta? No, the right has app s (recDelta b s n). So it has one app, one recDelta, and two occurrences of s. The left has one recDelta, one delta, one s. So the structural change is: remove delta from n (decreasing), add app (increasing), duplicate s (increasing). The measures assign weights to constructors. To have a decreasing measure, the weight of delta on n plus the weight of recDelta must be greater than the weight of app plus the weight of recDelta plus measure(s). Wait, let's think generically.
+
+Let w_rec be weight of recDelta, w_app weight of app, w_delta weight of delta, w_s = mu(s).
+
+mu(l) = w_rec + w_b + w_s + (w_delta + w_n).
+mu(r) = w_app + w_s + (w_rec + w_b + w_s + w_n).
+So mu(l) - mu(r) = w_rec + w_delta - w_app - w_rec - w_s = w_delta - w_app - w_s.
+
+Wait, let's compute symbolically ignoring the +1 for each subterm. Actually the measure is sum of constructor weights. So if we define:
+mu(void) = 0
+mu(delta t) = c_delta + mu(t)
+mu(integrate t) = c_int + mu(t)
+mu(merge a b) = c_merge + mu(a) + mu(b)
+mu(app a b) = c_app + mu(a) + mu(b)
+mu(recDelta b s n) = c_rec + mu(b) + mu(s) + mu(n)
+mu(eqW a b) = c_eq + mu(a) + mu(b)
+
+Then:
+mu(l) for R_rec_succ = c_rec + mu(b) + mu(s) + c_delta + mu(n) = c_rec + c_delta + mu(b) + mu(s) + mu(n).
+mu(r) = c_app + mu(s) + (c_rec + mu(b) + mu(s) + mu(n)) = c_app + c_rec + mu(b) + 2*mu(s) + mu(n).
+Difference: (c_rec + c_delta) - (c_app + c_rec) - mu(s) = c_delta - c_app - mu(s).
+
+So for the measure to decrease, we need c_delta - c_app - mu(s) > 0 for all s. But mu(s) can be arbitrarily large. Thus no linear measure of this form (additive with constant constructor weights) can prove termination of this rule! Because the duplication of s means the measure of the right side has an extra mu(s), which cannot be bounded by constants.
+
+Wait, unless the measure is not additive but something else. But these three measures are all additive. So indeed, none of them can be termination measures because of R_rec_succ. But is it possible that the problem expects that we notice this and conclude none work? Let's double-check if there's any nuance.
+
+Perhaps the rule is read as: recDelta b s (delta n) steps to app s (recDelta b s n). The right side has recDelta b s n, which is a subterm of the left side? The left side has recDelta b s (delta n). If we think of a recursive function, it's like rec b s (n+1) -> s (rec b s n). This is typical for a recursor on natural numbers encoded as delta^n void. For termination, one usually uses a measure on the third argument: the size of n decreases because delta n is replaced by n. But s is duplicated. In a standard termination ordering like recursive path ordering or polynomial interpretation, one can handle this if the weight of delta is large enough? Wait, but the duplication of s is problematic for additive measures because s can be arbitrarily large. However, if the measure is something like the size of the whole term, duplication increases size. But the left side has delta n which is larger than n by some constant. The right side has an extra app and extra copy of recDelta? Let's compute term size (count of constructors).
+
+Define size(void) = 1
+size(delta t) = 1 + size(t)
+size(integrate t) = 1 + size(t)
+size(merge a b) = 1 + size(a) + size(b)
+size(app a b) = 1 + size(a) + size(b)
+size(recDelta b s n) = 1 + size(b) + size(s) + size(n)
+size(eqW a b) = 1 + size(a) + size(b)
+
+Then size(l) = 1 + size(b) + size(s) + (1 + size(n)) = 2 + size(b) + size(s) + size(n).
+size(r) = 1 + size(s) + (1 + size(b) + size(s) + size(n)) = 2 + size(b) + 2*size(s) + size(n).
+Difference: -size(s). So even standard size doesn't decrease! So this rewrite rule is not terminating under standard size measure. Wait, is the rewrite system actually terminating? Let's think.
+
+The rewrite system encodes recursor for natural numbers. If we interpret:
+- void = 0
+- delta = successor
+- recDelta b s n = rec b s n
+- app = application
+
+Then recDelta b s void -> b (base case)
+recDelta b s (delta n) -> app s (recDelta b s n) (step case)
+
+This is exactly the recursor for natural numbers. The term recDelta b s n computes the n-fold iteration of s on b. However, s is duplicated at each step. If we start with a closed term recDelta b s (delta^k void), it rewrites to app s (recDelta b s (delta^{k-1} void)), and so on. This process terminates after k steps because the third argument decreases in height (number of delta constructors). Even though the overall term size grows due to duplication of s, the third argument is a structural component that decreases. So a lexicographic measure or a measure that focuses on the third argument would work.
+
+But the three proposed measures are global additive measures that sum over the whole tree. As we saw, none can work because of the duplication of s. So likely the correct assessment is that all three fail, and specifically they all fail on the rule R_rec_succ because the right-hand side duplicates the subterm s.
+
+But wait, maybe one of them does decrease if we consider that s in the right side is inside recDelta, which has a weight that might be less than something? No, we computed the symbolic difference: c_delta - c_app - mu(s). Since mu(s) >= 0, we need c_delta > c_app + mu(s) for all s, which is impossible because mu(s) is unbounded. So no additive measure with positive weights can handle duplication of an arbitrary subterm.
+
+Unless the measure assigns negative weights? But they are all Nat -> Nat, so weights are non-negative. So indeed impossible.
+
+But maybe we should check R_rec_zero for mu3: l = recDelta b s void. mu3(l) = 1 + mu3 b + mu3 s + 0. r = b. mu3(r) = mu3 b. So need 1 + mu3 s > 0. Since mu3 s >= 0, this is >=1. OK. For mu2: 5 + mu2 s > 0. OK. For mu1: 1 + mu1 s > 0. OK.
+
+What about R_eq_diff? For mu1: 3 + mu1 a + mu1 b > 2 + mu1 a + mu1 b. OK.
+For mu2: 5 > 4. OK.
+For mu3: 4 > 3. OK.
+
+So the only failing rule for all three is R_rec_succ. But wait, for mu1 and mu2, the difference is -mu(s), while for mu3 it's -1 - mu(s). So mu3 is even worse. But perhaps there is another rule that fails for one of them? Let's check R_int_delta for mu1: integrate (delta t) -> void. mu1 = 1 + (1 + mu1 t) = 2 + mu1 t > 0. OK. For mu2: 2 + 1 + mu2 t = 3 + mu2 t > 0. OK. For mu3: 2 + 1 + mu3 t = 3 + mu3 t > 0. OK.
+
+R_merge_void_left: for mu2: 2 + 0 + mu2 t > mu2 t. OK. For mu3: 1 + mu3 t > mu3 t. OK.
+
+R_merge_cancel: for mu2: 2 + 2*mu2 t > mu2 t. OK. For mu3: 1 + 2*mu3 t > mu3 t. OK.
+
+R_eq_refl: all fine.
+
+So yes, all three fail solely due to R_rec_succ. However, the problem says "Assess the three candidates." We should provide a clear assessment: likely none are valid termination measures. But we must be careful: is there any candidate that works? Let's double-check mu2 on R_rec_succ. Could there be a misinterpretation of the Lean pattern matching? Let's re-read the definitions.
+
+```lean
+def mu1 : Trace -> Nat
+| .void => 0
+| .delta t => 1 + mu1 t
+| .integrate t => 1 + mu1 t
+| .merge a b => 1 + mu1 a + mu1 b
+| .app a b => 1 + mu1 a + mu1 b
+| .recDelta b s n => 1 + mu1 b + mu1 s + mu1 n
+| .eqW a b => 3 + mu1 a + mu1 b
+```
+
+Yes.
+
+```lean
+def mu2 : Trace -> Nat
+| .void => 0
+| .delta t => 1 + mu2 t
+| .integrate t => 2 + mu2 t
+| .merge a b => 2 + mu2 a + mu2 b
+| .app a b => 1 + mu2 a + mu2 b
+| .recDelta b s n => 5 + mu2 b + mu2 s + mu2 n
+| .eqW a b => 5 + mu2 a + mu2 b
+```
+
+Yes.
+
+```lean
+def mu3 : Trace -> Nat
+| .void => 0
+| .delta t => 1 + mu3 t
+| .integrate t => 2 + mu3 t
+| .merge a b => 1 + mu3 a + mu3 b
+| .app a b => 2 + mu3 a + mu3 b
+| .recDelta b s n => 1 + mu3 b + mu3 s + mu3 n
+| .eqW a b => 4 + mu3 a + mu3 b
+```
+
+Yes.
+
+So all three fail on R_rec_succ.
+
+But is there any other rule that fails for, say, mu3? Let's check R_eq_diff again: eqW a b -> integrate (merge a b).
+mu3(eqW a b) = 4 + mu3 a + mu3 b.
+mu3(integrate (merge a b)) = 2 + mu3(merge a b) = 2 + 1 + mu3 a + mu3 b = 3 + mu3 a + mu3 b.
+4 > 3. OK.
+
+What about R_merge_void_left for mu2: merge void t -> t. mu2 = 2 + 0 + mu2 t = 2 + mu2 t > mu2 t. OK.
+
+R_merge_void_right: same.
+
+R_merge_cancel: merge t t -> t. mu2 = 2 + 2*mu2 t > mu2 t. OK.
+
+R_rec_zero: recDelta b s void -> b. mu2 = 5 + mu2 b + mu2 s > mu2 b. OK.
+
+So all fine.
+
+Thus the assessment: All three are invalid because none strictly decreases on R_rec_succ. The fundamental issue is that the right-hand side duplicates the subterm s, so any additive measure where the weight of app plus recDelta does not compensate for the loss of delta and the duplication of s cannot work. Since mu(s) can be arbitrarily large, no constant constructor weight can offset the duplication.
+
+But wait: is it possible that mu1 is intended to be a measure where the weights are chosen such that maybe mu1(s) is always 0? No, because s can be any Trace.
+
+Alternatively, perhaps the measure doesn't need to decrease on every step? No, for a termination measure it must.
+
+Maybe the system is not supposed to terminate? But the question is about termination measures for the rewrite calculus. The rewrite calculus is first-order. The recursor rule is standard for nat recursor. But the system might still be terminating. The existence of a global additive measure is not necessary for termination. But the question asks to assess the three proposed measures.
+
+Thus the answer: All three fail. But we should be precise: maybe one of them actually works for all other rules and the failure is only on R_rec_succ. Let's see if the problem might have a trick: maybe mu3 works because recDelta weight is 1, app is 2, and delta is 1, so left side has recDelta + delta = 2, right side has app + recDelta = 3. Wait, that's worse. So mu3 is definitely worse.
+
+But maybe we misread R_rec_succ: "R_rec_succ : forall b s n, Step (recDelta b s (delta n)) (app s (recDelta b s n))". Yes.
+
+Wait, what about the possibility that the measure mu2 assigns recDelta weight 5, which might be enough if we consider that the delta on n disappears and the recDelta remains, but app is added. Let's compute again:
+
+mu2(l) = 5 + b + s + (1 + n) = 6 + b + s + n.
+mu2(r) = 1 + s + (5 + b + s + n) = 6 + b + 2s + n.
+Difference = -s. So no.
+
+Unless s is of a specific form? But s is universally quantified. So for any s, the step must decrease the measure. If there exists any s where it doesn't decrease, the measure is invalid. Since s can be void, for mu1 and mu2, if s = void, mu(l) = mu(r). So not strictly decreasing. For mu3, even if s = void, mu(l) = 2 + b + n, mu(r) = 3 + b + n, so mu(l) < mu(r). So mu3 actually increases even for void s. So mu3 fails more dramatically.
+
+Wait, but if s = void for mu1: mu1(s) = 0. mu1(l) = 2 + b + n. mu1(r) = 2 + b + 0 + n? Wait, mu1(r) = 2 + mu1 b + 2*mu1 s + mu1 n. If s = void, mu1 s = 0, so mu1(r) = 2 + b + 0 + n = 2 + b + n. So equal. So mu1 fails because not strictly decreasing (non-increasing). For mu2, same: equal when s = void.
+
+So for mu1 and mu2, the rule R_rec_succ preserves measure when s = void and increases it when s is larger. For mu3, the rule strictly increases measure even when s = void. So all three fail.
+
+But wait: is it possible that the problem expects that mu2 works because the weights are large enough? No, because the duplication of s means the extra mu(s) swamps any constant difference. Let's check: difference = c_delta - c_app - mu(s). For mu2, c_delta = 1, c_app = 1. So difference = -mu(s). For mu1, c_delta = 1, c_app = 1, diff = -mu(s). For mu3, c_delta = 1, c_app = 2, diff = -1 - mu(s). So none have c_delta > c_app + mu(s). Since mu(s) can be any natural number, impossible.
+
+Thus the answer: none of the three are valid termination measures.
+
+But the question says "Assess the three candidates." It might want a per-candidate assessment, e.g., "mu1 fails because ...", "mu2 fails because ...", "mu3 fails because ...". We should detail which rules they fail on.
+
+Let's double-check if any candidate fails on any other rule. For completeness:
+
+mu1 on R_eq_diff: 3 + a + b > 2 + a + b. OK.
+mu1 on R_int_delta: 2 + t > 0. OK.
+mu1 on R_merge_void_left: 1 + t > t. OK.
+mu1 on R_merge_void_right: 1 + t > t. OK.
+mu1 on R_merge_cancel: 1 + 2t > t. OK.
+mu1 on R_rec_zero: 1 + b + s > b. OK.
+mu1 on R_eq_refl: 3 + 2a > 0. OK.
+
+mu2 on R_eq_diff: 5 + a + b > 4 + a + b. OK.
+mu2 on R_int_delta: 3 + t > 0. OK.
+mu2 on R_merge_void_left: 2 + t > t. OK.
+mu2 on R_merge_void_right: 2 + t > t. OK.
+mu2 on R_merge_cancel: 2 + 2t > t. OK.
+mu2 on R_rec_zero: 5 + b + s > b. OK.
+mu2 on R_eq_refl: 5 + 2a > 0. OK.
+
+mu3 on R_eq_diff: 4 + a + b > 3 + a + b. OK.
+mu3 on R_int_delta: 3 + t > 0. OK.
+mu3 on R_merge_void_left: 1 + t > t. OK.
+mu3 on R_merge_void_right: 1 + t > t. OK.
+mu3 on R_merge_cancel: 1 + 2t > t. OK.
+mu3 on R_rec_zero: 1 + b + s > b. OK.
+mu3 on R_eq_refl: 4 + 2a > 0. OK.
+
+So all three satisfy all rules except R_rec_succ. For mu1 and mu2, R_rec_succ is non-decreasing (preserves or increases). For mu3, it strictly increases.
+
+But wait: could there be a subtle issue with R_eq_refl or R_eq_diff if a or b are large? No, because the inequality holds regardless.
+
+Thus the assessment is straightforward.
+
+However, I want to consider if the problem might be a trick where we need to realize that mu2 actually works because recDelta weight 5 is "enough". But we just proved it's not enough because s is duplicated. Let's re-evaluate with an explicit example.
+
+Take b = void, s = delta void, n = void.
+Then l = recDelta void (delta void) (delta void).
+mu1(l) = 1 + 0 + (1+0) + (1+0) = 3.
+r = app (delta void) (recDelta void (delta void) void).
+mu1(r) = 1 + (1+0) + (1 + 0 + (1+0) + 0) = 1 + 1 + (1+0+1+0) = 1 + 1 + 2 = 4.
+So mu1(l) = 3, mu1(r) = 4. Indeed increases.
+
+mu2(l) = 5 + 0 + 1 + (1+0) = 7.
+mu2(r) = 1 + 1 + (5 + 0 + 1 + 0) = 1 + 1 + 6 = 8. Increases.
+
+mu3(l) = 1 + 0 + 1 + (1+0) = 3.
+mu3(r) = 2 + 1 + (1 + 0 + 1 + 0) = 2 + 1 + 2 = 5. Increases.
+
+If s = void:
+mu1(l) = 1 + b + 0 + (1+n) = 2 + b + n.
+mu1(r) = 1 + 0 + (1 + b + 0 + n) = 2 + b + n. Equal.
+
+mu2(l) = 5 + b + 0 + (1+n) = 6 + b + n.
+mu2(r) = 1 + 0 + (5 + b + 0 + n) = 6 + b + n. Equal.
+
+mu3(l) = 1 + b + 0 + (1+n) = 2 + b + n.
+mu3(r) = 2 + 0 + (1 + b + 0 + n) = 3 + b + n. Increases.
+
+So indeed.
+
+Thus the assessment: All three candidates fail to be termination measures because they do not strictly decrease on the rule R_rec_succ. In fact, for mu1 and mu2, the measure is preserved when s = void and increases when s is non-void. For mu3, the measure strictly increases even when s = void. Consequently, none can serve as a termination measure for this rewrite system.
+
+But is there any possibility that one candidate works for a subset of the system? The question says "termination measures" for the rewrite calculus. Usually a termination measure must decrease on all rules.
+
+We should also explain why no measure of this simple additive shape can work for R_rec_succ: because the RHS duplicates the subterm s.
+
+Wait, but maybe mu3 could be fixed by making app weight 0? But it's defined as 2. We are assessing the given definitions.
+
+Thus the final answer: All three are invalid. Specifically:
+- mu1: Fails on R_rec_succ. For any s with mu1(s) > 0, mu1 increases; for s = void, mu1 stays equal.
+- mu2: Fails on R_rec_succ. Same behavior as mu1: preserved for s = void, increases otherwise.
+- mu3: Fails on R_rec_succ. Strictly increases for all s (by at least 1 + mu3(s)).
+
+Wait, let's verify mu3 for s = void: mu3(l) = 2 + b + n, mu3(r) = 3 + b + n. Increase by 1. For s = delta void: mu3(s)=1. mu3(l) = 2 + b + 1 + n = 3 + b + n. mu3(r) = 3 + b + 2 + n = 5 + b + n. Increase by 2. So yes.
+
+Now, is there any rule where mu2 fails but mu1 doesn't, or vice versa? Let's check R_merge_void_left: mu1 gives +1, mu2 gives +2, mu3 gives +1. All fine.
+
+What about R_eq_diff: mu1 gives +3 vs +2, mu2 gives +5 vs +4, mu3 gives +4 vs +3. All fine.
+
+So the answer is quite clean.
+
+But perhaps the question expects a ranking: "mu1 is the best candidate but still fails", or "none are suitable". I think the answer should state clearly that none are valid and explain the common flaw.
+
+Wait, let's re-read the problem: "Below in this prompt you will see a Lean 4 file that defines a first-order rewrite calculus and three proposed termination measures. Assess the three candidates."
+
+Yes, so we need to assess each. A thorough assessment would check all rules for each measure. Let's do that in detail.
+
+For mu1:
+- R_int_delta: LHS = 2 + mu1(t) > 0 = RHS. OK.
+- R_merge_void_left: LHS = 1 + mu1(t) > mu1(t) = RHS. OK.
+- R_merge_void_right: same. OK.
+- R_merge_cancel: LHS = 1 + 2*mu1(t) > mu1(t). OK.
+- R_rec_zero: LHS = 1 + mu1(b) + mu1(s) > mu1(b). OK.
+- R_rec_succ: LHS = 2 + mu1(b) + mu1(s) + mu1(n). RHS = 2 + mu1(b) + 2*mu1(s) + mu1(n). So LHS > RHS iff mu1(s) < 0, impossible. Fails.
+- R_eq_refl: LHS = 3 + 2*mu1(a) > 0. OK.
+- R_eq_diff: LHS = 3 + mu1(a) + mu1(b) > 2 + mu1(a) + mu1(b). OK.
+
+For mu2:
+- R_int_delta: LHS = 3 + mu2(t) > 0. OK.
+- R_merge_void_left: LHS = 2 + mu2(t) > mu2(t). OK.
+- R_merge_void_right: same. OK.
+- R_merge_cancel: LHS = 2 + 2*mu2(t) > mu2(t). OK.
+- R_rec_zero: LHS = 5 + mu2(b) + mu2(s) > mu2(b). OK.
+- R_rec_succ: LHS = 6 + mu2(b) + mu2(s) + mu2(n). RHS = 6 + mu2(b) + 2*mu2(s) + mu2(n). Fails.
+- R_eq_refl: LHS = 5 + 2*mu2(a) > 0. OK.
+- R_eq_diff: LHS = 5 + mu2(a) + mu2(b) > 4 + mu2(a) + mu2(b). OK.
+
+For mu3:
+- R_int_delta: LHS = 3 + mu3(t) > 0. OK.
+- R_merge_void_left: LHS = 1 + mu3(t) > mu3(t). OK.
+- R_merge_void_right: same. OK.
+- R_merge_cancel: LHS = 1 + 2*mu3(t) > mu3(t). OK.
+- R_rec_zero: LHS = 1 + mu3(b) + mu3(s) > mu3(b). OK.
+- R_rec_succ: LHS = 2 + mu3(b) + mu3(s) + mu3(n). RHS = 3 + mu3(b) + 2*mu3(s) + mu3(n). So LHS < RHS always. Fails.
+- R_eq_refl: LHS = 4 + 2*mu3(a) > 0. OK.
+- R_eq_diff: LHS = 4 + mu3(a) + mu3(b) > 3 + mu3(a) + mu3(b). OK.
+
+Thus, all three fail on R_rec_succ. Mu1 and mu2 are non-increasing (and actually equal when s = void). Mu3 is strictly increasing.
+
+So the assessment: All three candidates are invalid termination measures. The common critical flaw is the rule R_rec_succ, where the right-hand side duplicates the step subterm s inside both the app and the recursive recDelta call. Because the measures are additive over the tree structure, the extra copy of s on the right cannot be compensated by any constant constructor weight, so the measure does not strictly decrease. In mu1 and mu2 the measure stays the same when s is void and grows when s is larger; in mu3 it grows even when s is void.
+
+Wait, is there any way to salvage mu1 or mu2 by arguing that s cannot be void in a well-typed setting? The problem doesn't mention types; it's a raw rewrite system. So no.
+
+One might also note that the other rules all satisfy the measure decrease for all three candidates. So if R_rec_succ were omitted, any of the three would work (with mu1 being the simplest). But with R_rec_succ, none work.
+
+Let's also think about whether any candidate might work if we consider a different interpretation of the measure, e.g., lexicographic? No, the definitions are clear.
+
+Thus the final answer will be a concise but thorough assessment.
+
+The user said: "Do not modify the file or run the compiler. Do not read any other files in the workspace or search the web." So we just provide text.
+
+I will structure the answer by introducing the criterion for a termination measure, then analyzing each candidate rule by rule, and concluding.
+
+I should also include the explicit calculations for R_rec_succ to show why they fail.
+
+I will mention that the fundamental problem is the duplication of s in R_rec_succ, which makes additive measures fail.
+
+Double-check: In R_rec_succ, the right side is app s (recDelta b s n). So s appears twice. Yes.
+
+One more thing: Could there be an issue with R_eq_diff? eqW a b -> integrate (merge a b). Let's check if mu1, mu2, mu3 handle it when a = b. Wait, R_eq_refl handles a = a. R_eq_diff handles arbitrary a, b (including possibly equal ones). But in a rewrite system, if a = b, both rules apply. That's fine for termination measure; we just need each individual step to decrease the measure. For R_eq_diff, if a = b, the RHS is integrate (merge a a). Then mu(RHS) = c_int + c_merge + 2*mu(a). For mu1: 1 + (1 + 2*mu1(a)) = 2 + 2*mu1(a). LHS = 3 + 2*mu1(a). So still decreases. For mu2: 2 + (2 + 2*mu2(a)) = 4 + 2*mu2(a). LHS = 5 + 2*mu2(a). Decreases. For mu3: 2 + (1 + 2*mu3(a)) = 3 + 2*mu3(a). LHS = 4 + 2*mu3(a). Decreases. So no issue.
+
+Also check R_merge_cancel: merge t t -> t. For any t, LHS = c_merge + 2*mu(t) > mu(t). For mu3, c_merge = 1, so 1 + 2*mu3(t) > mu3(t). OK.
+
+Everything else seems fine.
+
+Thus the answer is ready.
+
+I will write:
+
+- State the condition: mu(l) > mu(r) for every Step l r.
+- Evaluate each candidate against each rule.
+- Conclude that all three fail on R_rec_succ.
+- Provide the explicit inequality.
+- Note that mu1 and mu2 are preserved when s = void and increase when s is non-void; mu3 strictly increases for all s.
+- Conclude none are valid termination measures.
+
+Potentially mention that the other seven rules are all strictly decreasing for all three measures, so the only obstacle is R_rec_succ.
+
+Let's do that.

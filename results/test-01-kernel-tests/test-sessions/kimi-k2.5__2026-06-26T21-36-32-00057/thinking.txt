@@ -1,0 +1,1067 @@
+The user wants me to assess whether a given rewrite system (presented as a Lean 4 file) is strongly normalizing based solely on the rules provided.
+
+ Let me analyze the system.
+
+ The system defines:
+ 1. A type `Trace` with constructors:
+    - `void`
+    - `delta : Trace → Trace`
+    - `integrate : Trace → Trace`
+    - `merge : Trace → Trace → Trace`
+    - `app : Trace → Trace → Trace`
+    - `recΔ : Trace → Trace → Trace → Trace`
+    - `eqW : Trace → Trace → Trace`
+
+ 2. A reduction relation `Step` with rules:
+    - `R_int_delta`: `integrate (delta t) → void`
+    - `R_merge_void_left`: `merge void t → t`
+    - `R_merge_void_right`: `merge t void → t`
+    - `R_merge_cancel`: `merge t t → t`
+    - `R_rec_zero`: `recΔ b s void → b`
+    - `R_rec_succ`: `recΔ b s (delta n) → app s (recΔ b s n)`
+    - `R_eq_refl`: `eqW a a → void`
+    - `R_eq_diff`: `eqW a b → integrate (merge a b)`
+
+ The question is: can we establish strong normalization from these rules alone?
+
+ First, let me look for potential sources of non-termination:
+
+ 1. **Recursive definitions**: `recΔ` with `R_rec_succ` looks like a recursion operator. It reduces `recΔ b s (delta n)` to `app s (recΔ b s n)`. This is structurally recursive on the third argument (if we view `delta` as a successor), but `app` is just a binary constructor with no reduction rules defined for it.
+
+ Wait, looking carefully: there are no reduction rules for `app`. So `app s (recΔ b s n)` is a normal form if `recΔ b s n` is a normal form.
+
+ But actually, let me check: `R_rec_succ` replaces `recΔ b s (delta n)` with `app s (recΔ b s n)`. The new term contains `recΔ b s n`, which is "smaller" in the sense that `n` is a subterm of `delta n`. So this looks like structural recursion.
+
+ 2. **The `eqW` rule**: `R_eq_diff` says `eqW a b → integrate (merge a b)`.
+    - `merge a b` can reduce via various rules.
+    - If `a = b`, then `merge a a → a` (by `R_merge_cancel`).
+    - Then `integrate a` - but there's no rule for `integrate` except when its argument is `delta t`.
+    - So `integrate a` is stuck unless `a` is of the form `delta t`.
+
+ Wait, `R_int_delta` only applies when we have `integrate (delta t)`.
+
+ So if we have `eqW a b` where `a ≠ b` (syntactically), we get `integrate (merge a b)`.
+
+ Now, `merge a b` might reduce:
+ - If `a = void`, we get `b`
+ - If `b = void`, we get `a`
+ - If `a = b` (syntactically), we get `a`
+
+ But what if `a` and `b` are arbitrary complex terms? Then `merge a b` is stuck (no rules apply), so `integrate (merge a b)` is stuck.
+
+ However, the issue is: can we construct a term that loops?
+
+ Let me look for cycles or infinite descending chains.
+
+ Potential issue: The `recΔ` rule seems to be primitive recursion. It requires the third argument to be of the form `delta n` or `void`. If the third argument is something else (like `app x y` or `merge x y` or `integrate x`), then `recΔ` is stuck.
+
+ So `recΔ` only reduces when its third argument is `void` or `delta n`.
+
+ This looks like it's encoding natural numbers with `void` as 0 and `delta` as successor.
+
+ So `recΔ b s n` is recursion on natural number `n`.
+
+ The step `recΔ b s (delta n) → app s (recΔ b s n)` applies the step function `s` to the recursive call.
+
+ Since `n` is structurally smaller than `delta n`, this terminates.
+
+ 3. **The `eqW` rules**:
+    - `eqW a a → void`
+    - `eqW a b → integrate (merge a b)` when `a ≠ b` (or always? The rule `R_eq_diff` doesn't have a side condition `a ≠ b`, so it applies even when `a = b`. Wait, that's a problem!)
+
+ Wait, looking at the Lean code:
+ ```lean
+ | R_eq_refl : ∀ a, Step (eqW a a) void
+ | R_eq_diff : ∀ a b, Step (eqW a b) (integrate (merge a b))
+ ```
+
+ These rules overlap. When we have `eqW t t`, both rules apply:
+ - `R_eq_refl` gives `void`
+ - `R_eq_diff` gives `integrate (merge t t)`
+
+ If we apply `R_eq_diff` to `eqW t t`, we get `integrate (merge t t)`.
+ Then `merge t t → t` by `R_merge_cancel`.
+ So we get `integrate t`.
+
+ If `t` is not of the form `delta u`, then `integrate t` is stuck.
+ If `t = delta u`, then `integrate (delta u) → void`.
+
+ So from `eqW t t`, we could go:
+ 1. Directly to `void` via `R_eq_refl`, or
+ 2. To `integrate (merge t t) → integrate t` (and then possibly to `void` if `t = delta u`).
+
+ This is confluence issue, not necessarily non-termination.
+
+ But is there a way to loop?
+
+ Let me try to construct a diverging term.
+
+ Suppose we have a term that can grow. Do any rules increase the size?
+
+ Let's measure size as the number of constructors.
+
+ - `integrate (delta t) → void`: size decreases by 2 (remove integrate and delta, add void)
+ - `merge void t → t`: size decreases (remove merge and void)
+ - `merge t void → t`: size decreases
+ - `merge t t → t`: size decreases (merge two identical terms into one)
+ - `recΔ b s void → b`: size might decrease or increase depending on `b` vs `recΔ...`, but generally `recΔ` is replaced by `b`
+ - `recΔ b s (delta n) → app s (recΔ b s n)`: 
+   - LHS: `recΔ` + `delta` + `b` + `s` + `n`
+   - RHS: `app` + `s` + `recΔ` + `b` + `s` + `n`
+   - Size change: remove `delta`, add `app`. So size is preserved or slightly changes depending on counting.
+   - Actually: `recΔ` (1) + arguments. Let's count nodes:
+     - LHS: 1 (recΔ) + size(b) + size(s) + 1 (delta) + size(n)
+     - RHS: 1 (app) + size(s) + 1 (recΔ) + size(b) + size(s) + size(n)
+     - Wait, `app` takes two arguments: `s` and `recΔ b s n`
+     - So RHS = 1 (app) + size(s) + (1 (recΔ) + size(b) + size(s) + size(n))
+     - LHS = 1 (recΔ) + size(b) + size(s) + 1 (delta) + size(n)
+     - Difference: RHS has extra `app` and extra `size(s)` compared to LHS which has `delta`.
+     - So size increases by: 1 (app) + size(s) - 1 (delta) = size(s).
+     - If `s` is large, this increases the size!
+
+ This is crucial. The rule `R_rec_succ` duplicates `s` (the step function).
+
+ Specifically:
+ - LHS: `recΔ b s (delta n)`
+ - RHS: `app s (recΔ b s n)`
+
+ The `s` appears once in the LHS (as an argument to recΔ) and once in the RHS (as first argument to app), but also inside the recursive call `recΔ b s n` in the RHS.
+
+ Wait, in the RHS, `s` appears:
+ 1. As the first argument to `app`: `s`
+ 2. Inside the recursive call: `recΔ b s n` contains `s`
+
+ So `s` is duplicated!
+
+ Let's verify:
+ - In `recΔ b s (delta n)`, the subterm `s` appears once.
+ - In `app s (recΔ b s n)`, the subterm `s` appears twice: once directly, and once inside `recΔ`.
+
+ So the size can grow if we apply `R_rec_succ`.
+
+ However, we also decrease the "height" of the third argument (from `delta n` to `n`). 
+
+ If we think of the third argument as a natural number, each step reduces the number by 1 (removes one `delta`), but duplicates `s`.
+
+ So if we start with `recΔ b s (delta^k void)` (i.e., `k` successors of zero), we get:
+ - Step 1: `app s (recΔ b s (delta^{k-1} void))`
+ - Step 2: `app s (app s (recΔ b s (delta^{k-2} void)))`
+ - ...
+ - Step k: `app s (app s (... (app s b)...))` with `k` copies of `app s`
+
+ So the size grows linearly with `k`, but the process terminates after `k` steps.
+
+ So this is still terminating.
+
+ But can we create a cycle?
+
+ We need to see if we can have infinite rewriting.
+
+ The only rule that increases size is `R_rec_succ`, but it decreases the "natural number" argument.
+
+ What about the `eqW` rules?
+
+ `eqW a b` can go to `integrate (merge a b)`.
+
+ Then `merge a b` can reduce if `a` or `b` is `void` or if `a = b`.
+
+ But after that, we have `integrate` of something.
+
+ If that something is `delta t`, we get `void`.
+ Otherwise, we're stuck.
+
+ So `eqW` doesn't seem to create loops.
+
+ Is there any interaction between rules that could create a loop?
+
+ Let me think about the structure.
+
+ The critical observation is that `R_rec_succ` is the only rule that doesn't obviously decrease some measure, but it decreases the depth of the third argument in `recΔ`.
+
+ We can define a well-founded measure:
+
+ For strong normalization, we need to show there are no infinite reduction sequences.
+
+ Let's try to define a weight function `w : Trace → Nat` that decreases with each step.
+
+ Candidates:
+ 1. Simple size (number of constructors): Fails for `R_rec_succ` because `s` is duplicated.
+    - `w(recΔ b s (delta n))` vs `w(app s (recΔ b s n))`
+    - If `w(t)` is size, then:
+      - LHS: 1 + w(b) + w(s) + 1 + w(n) = 2 + w(b) + w(s) + w(n)
+      - RHS: 1 + w(s) + (1 + w(b) + w(s) + w(n)) = 2 + w(b) + 2*w(s) + w(n)
+    - So RHS is larger by `w(s)`.
+    - This increases if `w(s) > 0`.
+
+ 2. We need a more sophisticated measure.
+
+ For `recΔ`, we can use lexicographic ordering or a weighted sum where the third argument has high weight.
+
+ Let's think of the third argument of `recΔ` as a natural number (with `void` = 0, `delta` = succ).
+
+ Define `nat_depth`:
+ - `nat_depth(void) = 0`
+ - `nat_depth(delta t) = 1 + nat_depth(t)`
+ - `nat_depth(other) = ∞` or some large number, but actually `recΔ` only reduces when third arg is `void` or `delta t`.
+
+ Actually, `recΔ` is stuck if the third argument is not `void` and not `delta` of something.
+
+ So we only need to consider cases where the third argument is a "natural number" (built from `void` and `delta`).
+
+ Define a measure:
+ - For `recΔ b s n`, use lexicographic order on `(nat_depth(n), complexity)`
+
+ where `complexity` could be size, but we need to handle the duplication of `s`.
+
+ When we apply `R_rec_succ`:
+ - `nat_depth` decreases by 1 (from `delta n` to `n`)
+ - The size increases by adding an `app` and duplicating `s`
+
+ But since `nat_depth` decreases, we can use lexicographic order: `(nat_depth(n), size)` with lexicographic ordering.
+
+ For other rules:
+ - `R_int_delta`: removes `integrate` and `delta`, so size decreases.
+ - `R_merge_*`: size decreases (removes `merge` and one argument).
+ - `R_rec_zero`: removes `recΔ`, `void`, replaces with `b`. Size might decrease or increase? 
+   - LHS: `recΔ b s void` has size 1 + size(b) + size(s) + 1 = 2 + size(b) + size(s)
+   - RHS: `b` has size size(b)
+   - So size decreases by 2 + size(s) ≥ 2.
+ - `R_eq_refl`: `eqW a a` (size 1 + 2*size(a)) → `void` (size 1). Decrease.
+ - `R_eq_diff`: `eqW a b` (size 1 + size(a) + size(b)) → `integrate (merge a b)` (size 1 + 1 + size(a) + size(b) = 2 + size(a) + size(b)). This increases size by 1!
+
+ Wait, `R_eq_diff` increases size!
+
+ `eqW a b` has size: 1 + size(a) + size(b)
+ `integrate (merge a b)` has size: 1 + (1 + size(a) + size(b)) = 2 + size(a) + size(b)
+
+ So size increases by 1.
+
+ Then `merge a b` might reduce:
+ - If `a = void`: `merge void b` → `b`, so we get `integrate b`.
+   - Size: from `eqW void b` (1 + 1 + size(b) = 2 + size(b)) to `integrate b` (1 + size(b)).
+   - Decrease by 1.
+ - If `b = void`: similar.
+ - If `a = b`: `merge a a` → `a`, so we get `integrate a`.
+   - Size: from `eqW a a` (1 + 2*size(a)) to `integrate a` (1 + size(a)).
+   - Decrease by size(a).
+
+ But if `a` and `b` are such that `merge a b` doesn't reduce (e.g., `a = delta void`, `b = void` - wait, that reduces), or `a = app x y`, `b = app z w` and they are different...
+
+ Actually, if `a` and `b` are arbitrary and distinct, and neither is `void`, and they are not syntactically equal, then `merge a b` is stuck.
+
+ So from `eqW a b` with distinct `a, b` not `void`, we go to `integrate (merge a b)` which is stuck (normal form).
+
+ So the size increase from `eqW a b` to `integrate (merge a b)` is not a problem for termination because we don't create a loop.
+
+ But we need to check if we can create a loop using `eqW`.
+
+ For example, can we have:
+ `eqW a b → integrate (merge a b) → ... → eqW a b` again?
+
+ For that, we would need `integrate (merge a b)` to reduce to something that eventually becomes `eqW a b` again.
+
+ But `integrate` only reduces when its argument is `delta t`.
+ `merge` reduces only in specific cases.
+
+ So `integrate (merge a b)` only reduces further if `merge a b` reduces to `delta t` for some `t`.
+
+ Can `merge a b` reduce to `delta t`?
+ - `merge void t` → `t`, so if `t = delta u`, we get `delta u`.
+ - `merge t void` → `t`, so if `t = delta u`, we get `delta u`.
+ - `merge t t` → `t`, so if `t = delta u`, we get `delta u`.
+
+ So yes, possible.
+
+ Example:
+ `eqW void (delta t)` → `integrate (merge void (delta t))` → `integrate (delta t)` → `void`.
+
+ This terminates.
+
+ Example:
+ `eqW (delta t) (delta t)` → `integrate (merge (delta t) (delta t))` → `integrate (delta t)` → `void`.
+
+ Or alternatively: `eqW (delta t) (delta t)` → `void` directly via `R_eq_refl`.
+
+ So no loop there.
+
+ Is there any way to get from `void` back to `eqW a b`?
+
+ The rules don't allow increasing "complexity" in a way that could loop, except for the `R_rec_succ` which we handled with lexicographic ordering.
+
+ But wait, `R_eq_diff` creates an `integrate` node. Could `integrate` somehow lead back to `eqW`?
+
+ No, there's no rule with `integrate` on the LHS except `R_int_delta`, which requires the argument to be `delta t`.
+
+ So `integrate` is "inert" unless its argument is `delta t`.
+
+ Similarly, `merge` is inert unless one argument is `void` or both are equal.
+
+ `app` is always inert (no rules).
+
+ `recΔ` is active only when third arg is `void` or `delta t`.
+
+ `eqW` is active always.
+
+ `delta` is inert.
+
+ `void` is inert.
+
+ So the only "active" constructors are: `integrate` (when arg is `delta`), `merge` (when args are `void` or equal), `recΔ` (when third arg is `void` or `delta`), and `eqW` (always).
+
+ Now, to prove strong normalization, we need to show every reduction sequence terminates.
+
+ We can try to define a well-founded measure.
+
+ Let's define weight function `W`:
+
+ For `recΔ`, we need to ensure that `R_rec_succ` decreases the measure even though it duplicates `s`.
+
+ Idea: Use a pair `(d, s)` where `d` is the "depth" of the natural number argument, and `s` is a size measure that handles the duplication.
+
+ Actually, since `s` is duplicated, but the recursion depth decreases, we can use:
+ `W(recΔ b s n) = (nat_depth(n), 1 + W(b) + W(s) * (nat_depth(n) + 1))` or something similar?
+
+ Wait, when we unfold `recΔ b s (delta^k void)`, we get a tree of `app` nodes with roughly k copies of `s` in the leaves.
+
+ Specifically:
+ - `recΔ b s void` → `b`
+ - `recΔ b s (delta void)` → `app s b`
+ - `recΔ b s (delta (delta void))` → `app s (app s b)`
+ - `recΔ b s (delta^k void)` → `app s (app s (... (app s b)...))` with k `app s` prefixes.
+
+ So the final size is roughly k * size(s) + size(b).
+
+ During reduction, we create intermediate terms with `recΔ` inside.
+
+ The measure `nat_depth(n)` decreases at each step, regardless of the growth of the term.
+
+ So we can use lexicographic order: first compare `nat_depth` of the `recΔ` argument, and if equal, compare something else.
+
+ But `R_rec_succ` is the only rule that affects `recΔ` with `delta` argument.
+
+ Actually, we can define a measure on traces:
+
+ Let `|t|` be the number of `delta` constructors in `t` that are in "recursive position" for `recΔ`.
+
+ Better: Define a measure based on the maximum "nesting depth" of certain patterns.
+
+ Standard approach for primitive recursion: Show that each reduction step decreases a measure based on the structure.
+
+ Let's try to assign ordinals or natural numbers.
+
+ Since this is first-order and no variable binding, and the only "recursion" is structural on the third arg of `recΔ`, and `eqW` doesn't create cycles, it should be strongly normalizing.
+
+ But I need to be careful.
+
+ The main challenge is `R_rec_succ` which duplicates `s`.
+
+ But since it decreases the depth of recursion, we can define:
+
+ For a term `t`, define `M(t)` as follows:
+ - `M(void) = 0`
+ - `M(delta t) = M(t) + 1`
+ - `M(integrate t) = M(t) + 1` (or some weight)
+ - `M(merge t1 t2) = M(t1) + M(t2) + 1`
+ - `M(app t1 t2) = M(t1) + M(t2) + 1`
+ - `M(recΔ b s n) = ω * M(n) + |t|` where `|t|` is the size, or something?
+
+ Actually, since `nat_depth` is a natural number and we need to embed into well-founded ordering, we can use lexicographic product.
+
+ Define `M(t)` as a pair `(d, s)` where:
+ - `d` is the sum of "pending recursion depths" in the term
+ - `s` is the size
+
+ But `R_rec_succ` replaces `recΔ b s (delta n)` with `app s (recΔ b s n)`.
+
+ In the LHS, we have contribution from `recΔ`: `(1 + depth(n), ...)`
+ In the RHS, we have `recΔ b s n` with depth `depth(n)`, and also `s` appears outside.
+
+ Specifically:
+ LHS has: depth = 1 + depth(n) for this recΔ
+ RHS has: depth = depth(n) for the inner recΔ, plus 0 for the outer app.
+
+ So the total "pending recursion depth" decreases by 1.
+
+ Even though we add an extra copy of `s` (increasing size), the depth decreases.
+
+ So we can use lexicographic order: `(total_rec_depth, size)`
+
+ Where `total_rec_depth` is the sum over all `recΔ` subterms of the depth of their third argument.
+
+ Let's verify all rules:
+
+ 1. `R_int_delta`: `integrate (delta t)` → `void`
+    - Removes one `delta`, removes `integrate`.
+    - `total_rec_depth`: unchanged (no recΔ involved).
+    - Size decreases.
+    - So lex order: size decreases, OK.
+
+ 2. `R_merge_void_left`: `merge void t` → `t`
+    - Size decreases.
+    - OK.
+
+ 3. `R_merge_void_right`: `merge t void` → `t`
+    - Size decreases.
+    - OK.
+
+ 4. `R_merge_cancel`: `merge t t` → `t`
+    - Size decreases.
+    - OK.
+
+ 5. `R_rec_zero`: `recΔ b s void` → `b`
+    - Removes a `recΔ` with depth 0.
+    - `total_rec_depth` decreases (removes 0, but wait: depth is 0, so we remove 0 from sum? Actually, `void` has depth 0, so the contribution was 0. We remove this recΔ, so sum decreases by 0? No, we need to be careful.)
+
+    Define `rec_depth(recΔ b s n) = 1 + nat_depth(n)` if `n` is a "natural number" (built from void/delta), or 0 if `n` is not? Actually, if `n` is not a natural number, `recΔ` is stuck and contributes 0 to the "active" depth.
+
+    Actually, better: `total_rec_depth` is the sum over all `recΔ` subterms that are redexes (i.e., third arg is `void` or `delta t`) of `nat_depth(n)`.
+
+    For `recΔ b s void`: contributes `0`.
+    When reduced to `b`, this contribution is removed (decrease by 0, so same).
+    But size decreases significantly.
+    So lex order: if first component same, second decreases.
+
+    Actually, `nat_depth(void) = 0`, so contribution is 0.
+    When we remove `recΔ`, we might decrease the "potential" for future reductions, but for the measure, we need it to strictly decrease.
+
+    Alternative: Use the sum of `2^{nat_depth(n)}` for all recΔ subterms.
+
+    For `recΔ b s (delta n)`: contributes `2^{1+nat_depth(n)}`
+    RHS `app s (recΔ b s n)`: contributes `2^{nat_depth(n)}` from the inner recΔ.
+    Difference: `2^{k+1}` vs `2^k`. Decrease by `2^k`.
+
+    And we add `app s`, which adds size but no rec_depth.
+    So measure decreases.
+
+    For `recΔ b s void`: contributes `2^0 = 1`.
+    RHS `b`: contributes 0.
+    Decrease by 1.
+
+    This works!
+
+    Let's check:
+    - `R_rec_succ`: LHS has recΔ with depth k+1, contributes 2^{k+1}. RHS has recΔ with depth k, contributes 2^k. Decrease by 2^k ≥ 1.
+    - `R_rec_zero`: LHS contributes 1, RHS contributes 0. Decrease by 1.
+
+    For other rules, rec_depth sum is unchanged (no recΔ involved, or recΔ not reduced), but size decreases.
+
+    Wait, `R_eq_diff` increases size, but doesn't affect rec_depth.
+    However, after `R_eq_diff`, we might have `merge` reductions that decrease size, or we might get stuck.
+
+    But we need every step to decrease the measure!
+
+    So if we apply `R_eq_diff`, measure must decrease.
+    But `R_eq_diff` increases size and doesn't change rec_depth.
+    So if we use `(rec_depth_sum, size)` with lex order, this step increases second component while first stays same → violates decreasing measure.
+
+    Problem.
+
+    We need to handle `eqW` as well.
+
+    `eqW a b` → `integrate (merge a b)`
+
+    This creates new structure.
+
+    Then `merge` might reduce, eventually leading to something.
+
+    But `eqW` is a redex. We need the measure of `eqW a b` to be greater than the measure of the result of any reduction from it.
+
+    If we apply `R_eq_refl`: `eqW a a` → `void`.
+    Size decreases: `1 + 2|a|` → `1`.
+
+    If we apply `R_eq_diff`: `eqW a b` → `integrate (merge a b)`.
+    Size increases.
+
+    So we need the measure to decrease even for this step.
+
+    Idea: `eqW` is "heavier" than `integrate (merge a b)`.
+
+    We can assign weights to constructors:
+    - `eqW`: very heavy
+    - `integrate`: medium
+    - `merge`: light
+    - etc.
+
+    Specifically, assign to each node a weight that depends on the constructor.
+
+    Let `W(t)` be the sum of weights of all nodes in `t`.
+
+    Choose weights such that:
+    - `W(eqW) > W(integrate) + W(merge)` (to handle R_eq_diff)
+    - `W(recΔ) + W(delta) > W(app) + W(recΔ)` for the succ case, i.e., `W(delta) > W(app)` and also account for duplication of `s`...
+
+    Wait, for `R_rec_succ`: 
+    LHS: `recΔ` node + `delta` node + contents.
+    RHS: `app` node + `recΔ` node + contents, with `s` appearing twice in RHS (once in app, once in recΔ) vs once in LHS.
+
+    Actually, in the LHS of `R_rec_succ`, the subterm `s` appears once (as child of recΔ).
+    In the RHS, `s` appears twice: as left child of `app`, and as middle child of the inner `recΔ`.
+
+    So we have an extra copy of `s`.
+
+    So we need: `W(recΔ) + W(delta) > W(app) + W(recΔ) + W(s)` for all `s`? 
+    That's impossible since `W(s)` can be arbitrarily large.
+
+    So simple additive weights don't work for `R_rec_succ`.
+
+    We need something like the ordinal measure mentioned before.
+
+    For `R_rec_succ`, we need the measure to decrease despite the duplication.
+
+    This suggests we need to use the depth of recursion.
+
+    Let's define a measure `μ(t)` that maps to ordinals (or pairs).
+
+    Define `μ(t)` recursively:
+
+    - `μ(void) = 0`
+    - `μ(delta t) = μ(t) + 1`
+    - `μ(integrate t) = μ(t) + 1`  (assuming weight 1)
+    - `μ(merge t1 t2) = μ(t1) + μ(t2) + 1`
+    - `μ(app t1 t2) = μ(t1) + μ(t2) + 1`
+    - `μ(recΔ b s n) = ω^{μ(n)+1} + μ(b) + μ(s) * (μ(n)+1)`  ?
+
+    Actually, since `n` is treated as a natural number with depth `k`, and we unfold `k` times duplicating `s` each time, the final "size" is roughly `|b| + k*|s|`.
+
+    The process takes `k` steps, each increasing the size by roughly `|s|`.
+
+    We can use: `μ(recΔ b s n) = (μ(n), μ(b), μ(s))` with lex order and special handling?
+
+    Or: `μ(recΔ b s n) = ω * (μ(n)+1) + |t|_s` where `|t|_s` is some size.
+
+    Let's think combinatorially.
+
+    Each `recΔ b s n` can be seen as a computation that will expand to a tree of height `nat_depth(n)` with branching factor related to `app`.
+
+    Actually, the result is a linear chain of `app`s: `app s (app s (... (app s b)...))`.
+
+    So the final normal form has size `nat_depth(n) * (1 + size(s)) + size(b)`.
+
+    During reduction, we have a partially expanded term.
+
+    We can define `μ(recΔ b s n) = (nat_depth(n), size(b) + size(s) * (nat_depth(n) + 1))` as a pair ordered lexicographically.
+
+    Check `R_rec_succ`:
+    LHS: `(k+1, size(b) + size(s) * (k+2))`
+    RHS: `(k, size(b) + size(s) * (k+1) + 1 + size(s))` 
+         = `(k, size(b) + size(s) * (k+2) + 1)`
+    Wait, size(RHS) = size(app s (recΔ b s n))
+    = 1 + size(s) + (1 + size(b) + size(s) + size(n))
+    = 2 + size(b) + 2*size(s) + size(n)
+
+    LHS size = 1 + size(b) + size(s) + 1 + size(n) = 2 + size(b) + size(s) + size(n)
+
+    So size increases by `size(s)`.
+
+    With the pair `(nat_depth, size)`:
+    LHS: `(k+1, ...)`
+    RHS: `(k, ...)`
+    Since `k+1 > k`, lex order makes LHS > RHS. Good.
+
+    Check `R_rec_zero`:
+    LHS: `(0, size(b) + size(s) * 1)` for the recΔ part, plus size of surrounding.
+    Actually, for `recΔ b s void`: nat_depth(void) = 0, so pair is `(0, size(b) + size(s))`.
+    RHS: `b` with size `size(b)`.
+    `(0, size(b) + size(s)) > (0, size(b))` in lex order? 
+    First components equal (0), second: `size(b)+size(s) > size(b)` since `size(s) ≥ 1` (assuming s is non-empty, but s could be `void` with size 1?).
+    
+    Wait, `size(void) = 1`? Usually size counts constructors.
+    Let's say `|void| = 1`, `|delta t| = 1 + |t|`, etc.
+
+    Then `|recΔ b s void| = 1 + |b| + |s| + 1 = 2 + |b| + |s|`.
+    `|b| = |b|`.
+    So size decreases from `2+|b|+|s|` to `|b|`.
+    So `(0, 2+|b|+|s|) > (0, |b|)`. Good.
+
+    Now for other rules that don't involve recΔ, we need the measure to decrease.
+
+    For `R_int_delta`: `integrate (delta t)` → `void`.
+    `nat_depth` not relevant (no recΔ).
+    Size: `|integrate (delta t)| = 1 + 1 + |t| = 2 + |t|`.
+    `|void| = 1`.
+    Decrease.
+
+    For merge rules: size decreases.
+
+    For `R_eq_refl`: `eqW a a` → `void`.
+    Size decreases.
+
+    For `R_eq_diff`: `eqW a b` → `integrate (merge a b)`.
+    LHS size: `1 + |a| + |b|`.
+    RHS size: `1 + (1 + |a| + |b|) = 2 + |a| + |b|`.
+    Size increases by 1.
+
+    But `nat_depth` is same (0 for both, assuming no recΔ inside).
+    
+    So if we use `(total_nat_depth, total_size)`, this step increases second component while first stays same. Not good.
+
+    We need to assign a weight to `eqW` that is higher than the weight of `integrate (merge ...)`.
+
+    Idea: Include the constructor type in the weight.
+
+    Assign to each term an ordinal or a complex measure.
+
+    For `eqW`, since it can create `integrate (merge ...)`, we need:
+    `μ(eqW a b) > μ(integrate (merge a b))` even though the latter is larger in raw size.
+
+    We can define:
+    `μ(eqW a b) = (1, |a| + |b|)`
+    `μ(integrate t) = (0, 1 + |t|)`  // first component 0 means "inert" or "lower rank"
+    `μ(merge a b) = |a| + |b|` (just size)
+
+    Then `μ(integrate (merge a b)) = (0, 1 + |a| + |b|)`.
+    Compare `(1, |a|+|b|)` vs `(0, ...)`: first component 1 > 0, so LHS > RHS. Good.
+
+    For `R_eq_refl`: `(1, 2|a|)` vs `|void| = (0, 1)` or just `1` if we map void to `(0,1)`.
+    `(1, ...)` > `(0, ...)`, but we need LHS > RHS for the measure to decrease.
+    Actually, reduction should go from larger to smaller measure.
+    So if `t → t'`, we need `μ(t) > μ(t')`.
+
+    `eqW a a` → `void`.
+    `μ(eqW a a) = (1, 2|a|)`.
+    `μ(void) = (0, 1)`.
+    `(1, 2|a|) > (0, 1)` lexicographically. Good.
+
+    Now for recΔ terms:
+    `μ(recΔ b s n) = (0, ω * (nat_depth(n)+1) + size_without_recΔ + ...)`? 
+    Wait, we need to fit into the pair ordering.
+
+    Actually, we can use a triple: `(eqW_count, rec_depth, size)` or something.
+
+    Better: Use a tuple where the first component counts "heavy" constructors like `eqW`.
+
+    Define `h(t)` = number of `eqW` constructors in `t`.
+    Define `r(t)` = sum of `2^{nat_depth(n)}` for all `recΔ b s n` subterms in `t` that are active (i.e., n is void or delta...).
+    Actually, all recΔ are potentially active if we consider that n might reduce to void/delta, but n doesn't reduce on its own unless it's part of a recΔ redex.
+
+    Wait, `n` in `recΔ b s n` is just a subterm. It can be reduced only if it contains redexes.
+    But `recΔ` is stuck unless `n` is `void` or `delta t`.
+
+    So for the measure, we care about the current shape.
+
+    Let's define:
+    `μ(t) = (h(t), r(t), s(t))` ordered lexicographically, where:
+    - `h(t)` = number of `eqW` nodes in `t`
+    - `r(t)` = sum over all `recΔ` nodes of `f(n)` where `f(void) = 1`, `f(delta n) = 2 * f(n)`, i.e., `f(n) = 2^{nat_depth(n)}` if n is a nat, else 0? 
+      Actually, if `n` is not a nat, `recΔ` is stuck, so contributes 0 to `r(t)`.
+    - `s(t)` = total size (number of constructors)
+
+    Check `R_eq_diff`: `eqW a b` → `integrate (merge a b)`
+    - `h` decreases by 1 (remove eqW, no new eqW created).
+    - So first component decreases. Good.
+
+    Check `R_eq_refl`: `eqW a a` → `void`
+    - `h` decreases by 1. Good.
+
+    Check `R_rec_succ`: `recΔ b s (delta n)` → `app s (recΔ b s n)`
+    - `h`: unchanged (no eqW involved).
+    - `r`: LHS has contribution `2^{k+1}` where `k = nat_depth(n)`.
+      RHS has contribution `2^k` from the inner recΔ.
+      So `r` decreases by `2^k`. Good.
+    - `s`: may increase, but `r` already decreased, so lex order OK.
+
+    Check `R_rec_zero`: `recΔ b s void` → `b`
+    - `h`: unchanged.
+    - `r`: LHS contributes `2^0 = 1`, RHS contributes 0 (assuming `b` has no recΔ, or if it does, it's already counted).
+      Actually, `b` might contain recΔ, but those were already there in the LHS as part of `b`.
+      Wait, `r(t)` is sum over all recΔ subterms.
+      LHS: `recΔ b s void` has this recΔ plus any in `b`, `s`, `void`.
+      RHS: `b` has its recΔs.
+      So we remove the outer recΔ, which contributed 1.
+      So `r` decreases by 1. Good.
+
+    Check other rules:
+    `R_int_delta`, `R_merge_*`: 
+    - `h` unchanged (no eqW).
+    - `r` unchanged (no recΔ redexes created or destroyed? 
+      Wait, `integrate (delta t)` → `void`.
+      If `t` contains recΔ, those are preserved.
+      The `delta` is removed, but `delta` by itself doesn't contribute to `r`.
+      `r` only cares about recΔ nodes.
+      So `r` unchanged.
+    - `s` decreases.
+    So OK.
+
+    `R_merge_cancel`: `merge t t` → `t`.
+    - `h`, `r` unchanged.
+    - `s` decreases.
+
+    So the measure `(h(t), r(t), s(t))` with lexicographic ordering works!
+
+    - `h(t)` = number of `eqW` constructors in `t` (natural number)
+    - `r(t)` = sum over all `recΔ b s n` subterms of `2^{depth(n)}` where `depth(void)=0`, `depth(delta t)=1+depth(t)`, and `depth(other)=∞` or treat non-nat as 0? 
+      Actually, if `n` is not `void` or `delta`, the recΔ is not a redex, so it contributes 0 to `r`.
+      We can define: if `n` is a "nat" (built from void/delta), contribute `2^{nat_depth(n)}`, else 0.
+    - `s(t)` = total size (number of constructors).
+
+    Since `h`, `r`, `s` are natural numbers (with `r` being finite sum of finite powers), and each step decreases the lexicographic triple, the system is strongly normalizing.
+
+    Wait, is `r(t)` always finite? Yes, finite term.
+    Is it decreased by `R_rec_succ`? Yes, from `2^{k+1}` to `2^k` for that subterm.
+    Is it decreased by `R_rec_zero`? From `1` to `0`.
+
+    And `eqW` rules decrease `h`.
+
+    So yes, this measure works.
+
+    Therefore, the system is strongly normalizable.
+
+    But wait, is there any subtlety?
+
+    One issue: `R_eq_diff` applies to any `eqW a b`, even when `a = b`.
+    But if `a = b`, we have two possible reductions:
+    - `R_eq_refl`: to `void`
+    - `R_eq_diff`: to `integrate (merge a a)` → `integrate a`
+
+    In the second case, `h` decreases (from 1 to 0), so measure decreases.
+    Then we have `integrate a`.
+    If `a` contains `eqW`, those are still there, but the outer `eqW` is gone.
+
+    So no problem.
+
+    Another issue: can `merge` create new `recΔ` redexes? No, `merge` doesn't create recΔ.
+    Can it create new `eqW`? No.
+
+    Can `integrate` create redexes? Only if it reduces to `void` via `R_int_delta`.
+    But `integrate` only reduces if argument is `delta t`.
+    `merge a b` could be `delta t` if, say, `a = void` and `b = delta t`.
+    Then `eqW void (delta t)` → `integrate (merge void (delta t))` → `integrate (delta t)` → `void`.
+    Measure:
+    - Start: `h=1, r=0, s=...`
+    - After R_eq_diff: `h=0, r=0, s=...` (h decreased)
+    - After R_merge: `h=0, r=0, s=...` (s decreased)
+    - After R_int_delta: `h=0, r=0, s=...` (s decreased)
+    Good.
+
+    So the system is strongly normalizing.
+
+    But the question asks: "can strong normalization of this system be established from the presented calculus alone, without importing structural axioms or object-level assumptions beyond what is derivable from the given syntax and rewrite rules?"
+
+    The answer is yes, using the measure described above.
+
+    However, I should check if there are any hidden issues.
+
+    One potential issue: the `app` constructor.
+    `app s (recΔ b s n)` - is there any rule for `app`? No.
+    So `app` is just a binary operator that holds the result.
+
+    In the measure `s(t)`, we count all constructors, so `app` contributes to size.
+
+    Is there any interaction where `s` inside `recΔ` could be a redex that creates more `recΔ` or something?
+    Yes, `s` could contain `recΔ` or `eqW`.
+
+    But in our measure `r(t)`, we sum over ALL `recΔ` subterms in the entire term.
+    So if `s` contains a `recΔ`, it contributes to `r(t)` both in the LHS and RHS of `R_rec_succ`.
+
+    In LHS: `recΔ b s (delta n)` - the `s` inside contributes its `r(s)`.
+    In RHS: `app s (recΔ b s n)` - the first `s` contributes `r(s)`, the second `s` inside `recΔ` contributes `r(s)`.
+    Wait, this is a problem!
+
+    In LHS, `s` appears once, so `r(s)` is added once to the total sum.
+    In RHS, `s` appears twice: as left child of `app`, and as middle child of the inner `recΔ`.
+    So `r(s)` is added twice!
+
+    So `r(RHS) = r(app) + r(s) + r(recΔ b s n) + ...` 
+    Actually, `r` is defined as sum over recΔ nodes.
+    If `s` contains recΔ nodes, say with total contribution `R_s`, then:
+    - LHS: `r(recΔ b s (delta n))` includes `R_s` from the `s` argument, plus the contribution from this recΔ node itself.
+    - RHS: `r(app s (...))` includes `r(s)` (which is `R_s`) from the first `s`, plus `r(recΔ b s n)` which includes `R_s` from the inner `s`, plus contribution from the inner recΔ.
+
+    So `r(RHS) = R_s (from outer s) + R_s (from inner s) + 2^k (from inner recΔ) + ...`
+
+    While `r(LHS) = R_s (from s) + 2^{k+1} (from outer recΔ) + ...`
+
+    So the change in `r` is: we lose `2^{k+1}` and gain `2^k`, but we gain an extra `R_s`.
+
+    Net change: `-2^k + R_s`.
+
+    If `R_s` (the sum of 2^{depth} for recΔs inside `s`) is greater than `2^k`, then `r` increases!
+
+    Example: let `s` be a term with a large `r(s)`.
+    Then `R_s > 2^k` for small `k`.
+
+    So `r` can increase!
+
+    This breaks the measure.
+
+    We need a different measure.
+
+    The issue is that `s` is duplicated, and if `s` contains recΔ, we get more recΔs in the term.
+
+    But notice: the duplicated `s` in the RHS of `R_rec_succ` is placed in different positions.
+    One is at the root of the app, one is inside the recΔ.
+
+    The one inside the recΔ has the same `nat_depth` as the original `s` had in the original recΔ? No.
+
+    Let's trace:
+    Original: `recΔ b s (delta n)`
+    The `s` here is the step function.
+
+    New: `app s (recΔ b s n)`
+    The first `s` is just sitting there, not inside any recΔ.
+    The second `s` is inside `recΔ b s n`, with the same `n` as before but without the `delta`.
+
+    Wait, `nat_depth(n)` is `k`.
+    `nat_depth(delta n)` is `k+1`.
+
+    The inner recΔ has third arg `n` with depth `k`.
+    The outer had third arg `delta n` with depth `k+1`.
+
+    The `s` inside the inner recΔ is the same `s`.
+
+    So yes, we have two copies of `s`.
+
+    If `s` contains recΔ subterms, we duplicate them.
+
+    This is a well-known issue with primitive recursion: the step function might contain recursive calls, but here `s` is just data.
+
+    However, for strong normalization, we need to ensure termination despite this duplication.
+
+    The standard solution is to use an ordinal measure where the weight of `recΔ b s n` is large enough to dominate any possible `s` duplication.
+
+    Specifically, we can use: `μ(recΔ b s n) = ω^{μ(n)+1} + μ(b) + μ(s)`.
+
+    Then for `R_rec_succ`:
+    LHS: `ω^{k+2} + μ(b) + μ(s)`
+    RHS: `μ(app s (recΔ b s n)) = 1 + μ(s) + ω^{k+1} + μ(b) + μ(s) = ω^{k+1} + μ(b) + 2*μ(s) + 1` (roughly)
+
+    For this to decrease, we need `ω^{k+2} > ω^{k+1} + μ(s)`.
+
+    Since `ω^{k+2}` is a limit ordinal much larger than any finite sum involving `μ(s)` (assuming `μ(s)` is an ordinal < ω^ω), this works if we bound `μ(s)`.
+
+    But `μ(s)` could be arbitrarily large, e.g., if `s` itself contains recΔ with large n.
+
+    However, `μ(s)` is some ordinal < ε_0.
+    `ω^{k+2}` is greater than `ω^{k+1} + α` for any `α < ω^{k+2}`.
+
+    Specifically, `ω^{k+2} = ω^{k+1} * ω`.
+    Any finite sum of smaller ordinals is still less than `ω^{k+2}`.
+
+    But `μ(s)` could be `ω^{k+2}` itself if `s` contains a recΔ with depth k+1.
+
+    Then `ω^{k+2} + μ(b) + μ(s)` vs `ω^{k+1} + μ(b) + 2*μ(s)`.
+    If `μ(s) = ω^{k+2}`, then LHS ≈ `ω^{k+2} + ω^{k+2} = ω^{k+2} * 2`.
+    RHS ≈ `2 * ω^{k+2} = ω^{k+2} * 2` (since `2 * ω^{k+2} = ω^{k+2}` for k≥0? No!)
+
+    Ordinal arithmetic:
+    `ω^α + ω^α = ω^α * 2`.
+    `2 * ω^α = ω^α` for `α > 0`.
+
+    So if `μ(s)` is a multiple of `ω^{k+1}`, then `2*μ(s)` might equal `μ(s)` in the RHS.
+
+    Let's be careful.
+
+    We need `μ(recΔ b s (delta n)) > μ(app s (recΔ b s n))`.
+
+    If we define `μ(recΔ b s n) = ω^{μ(n)+1} ⊕ μ(b) ⊕ μ(s)` where `⊕` is natural sum (Hessenberg), or just use lexicographic...
+
+    Actually, standard approach: interpret `recΔ b s n` as `ω^{nat_depth(n)+1} + |b| + |s| * nat_depth(n)`.
+
+    But if `s` has high complexity due to nested recΔ, we need to ensure `ω^{k+1}` dominates.
+
+    Since `nat_depth(n)` is finite, `ω^{k+1}` is just a finite power of ω.
+
+    If `s` contains a recΔ with `nat_depth = m`, then `|s|` (if we use size) or `μ(s)` (if we use ordinals) could be large, but as long as `μ(s) < ω^{k+1}`, we're good.
+
+    But `s` could be `recΔ ... (delta^m void)` with `m > k`.
+    Then `μ(s) ≥ ω^{m+1} > ω^{k+1}`.
+
+    So `μ(recΔ b s (delta n))` with `n` having depth `k`, but `s` having depth `m > k`.
+    Then LHS ordinal is roughly `ω^{k+1} + ...` 
+    RHS has `μ(s)` appearing twice, so roughly `2 * ω^{m+1} = ω^{m+1}`.
+    Since `ω^{m+1} > ω^{k+1}`, and `m+1 > k+1`, the RHS could be larger!
+
+    Example:
+    Let `n = void` (depth 0).
+    Let `s = recΔ void void (delta^m void)` for large `m`.
+    Then `nat_depth(n) = 0`.
+
+    LHS: `recΔ b s (delta void)`.
+    Measure: `ω^{1} + |b| + |s|`.
+
+    RHS: `app s (recΔ b s void)`.
+    Measure: `|app| + |s| + |recΔ b s void| = 1 + |s| + (1 + |b| + |s| + 1) = 3 + |b| + 2|s|`.
+
+    If we use ordinal `ω^{depth+1} + size`, then:
+    LHS: `ω^1 + (size stuff)`
+    RHS: `ω^0 + ...` (since inner recΔ has n=void, depth 0, so `ω^1`) + size.
+
+    Wait, inner recΔ: `recΔ b s void` has measure `ω^{0+1} + ... = ω + ...`
+    So RHS has `ω` from the inner recΔ.
+    LHS has `ω` from the outer recΔ.
+    But LHS size is smaller than RHS size? 
+    LHS size: recΔ + delta + b + s = 1+1+|b|+|s| = 2+|b|+|s|
+    RHS size: app + s + recΔ + b + s + void = 1+|s|+1+|b|+|s|+1 = 3+|b|+2|s|
+    Increase by `1+|s|`.
+
+    If we use `(nat_depth, size)`, LHS: `(1, 2+|b|+|s|)`, RHS: `(0, 3+|b|+2|s| + ...)`
+    Lex order: `1 > 0`, so LHS > RHS. Good!
+
+    The key insight is that even though we duplicate `s`, and `s` might be large, the `nat_depth` of the recΔ decreases from `k+1` to `k`.
+
+    Since `nat_depth` is the first component of our lexicographic measure, and it strictly decreases, the measure strictly decreases regardless of what happens to the size.
+
+    So we don't care that `s` is duplicated or that it contains more recΔs!
+
+    The measure is `(max_rec_depth, size)` or `(sum of 2^{depth} as before, but with the understanding that the outer recΔ had depth k+1 and now we have inner with depth k)`.
+
+    Even if duplicating `s` adds many new recΔs with various depths, the specific recΔ that was reduced had depth `k+1` and is replaced by one with depth `k` (plus other stuff).
+    The contribution of that specific recΔ to the sum `r(t)` was `2^{k+1}`.
+    It is replaced by a contribution of `2^k` from the new inner recΔ.
+    The duplication of `s` might add other recΔs, but those were already present in `s` in the LHS.
+    In LHS, `s` contributed `r(s)` to the sum.
+    In RHS, the two copies of `s` contribute `2*r(s)`.
+    So `r` changes by: `-2^{k+1} + 2^k + r(s)`.
+    This is `-2^k + r(s)`.
+
+    If `r(s) > 2^k`, then `r` increases!
+
+    So the sum of powers of 2 doesn't work because of the duplication.
+
+    But if we use `max_rec_depth` (the maximum depth over all recΔ in the term):
+    LHS: `max(k+1, max_depth(s), max_depth(b))`
+    RHS: `max(k, max_depth(s), max_depth(s), max_depth(b))` = `max(k, max_depth(s), max_depth(b))`
+    Since `k+1 > k`, we have LHS depth ≥ RHS depth, and if `k+1` was the unique max, it decreases.
+
+    If `max_depth(s) > k+1`, then LHS max is `max_depth(s)`, RHS max is also `max_depth(s)` (since `s` is duplicated but depth same).
+    So first component unchanged.
+    Then we look at size, which increases.
+    So this doesn't work either.
+
+    We need a measure that gives "credit" for the recursion depth that can pay for the duplication.
+
+    The standard solution for primitive recursion is to use a weight that is exponential in the depth, but assign to `recΔ b s n` a weight that is large enough to cover the unfolding.
+
+    Specifically, define `μ(recΔ b s n) = (nat_depth(n), 1) ⊗ (0, μ(b)) ⊗ (nat_depth(n)+1, μ(s))`? 
+
+    Or: use the interpretation that `recΔ b s n` represents a term of height `nat_depth(n)` with `s` at each step.
+
+    Actually, we can assign:
+    `μ(recΔ b s n) = ω^{nat_depth(n)} * (1 + μ(s)) + μ(b)`.
+
+    Then for `R_rec_succ`:
+    LHS: `ω^{k+1} * (1 + μ(s)) + μ(b)`
+    RHS: `μ(app s (recΔ b s n)) = 1 + μ(s) + ω^{k} * (1 + μ(s)) + μ(b) = ω^{k} * (1 + μ(s)) + μ(s) + μ(b) + 1`
+
+    Now compare:
+    LHS = `ω^{k+1} * (1+μ(s)) + μ(b)`
+    RHS = `ω^{k} * (1+μ(s)) + μ(s) + μ(b) + 1`
+
+    Since `ω^{k+1} = ω^k * ω`, and `ω > any finite number`, and `1+μ(s)` is at least 1, we have:
+    `ω^{k+1} * (1+μ(s)) = ω^k * ω * (1+μ(s)) = ω^k * (ω * (1+μ(s)))` (ordinal mult is associative)
+    Actually, ordinal multiplication: `ω^{k+1} * m` for finite `m` is `ω^{k+1}` if `m < ω`.
+    But `1+μ(s)` could be infinite.
+
+    If `μ(s)` is an ordinal, then `ω^{k+1} * (1+μ(s))` vs `ω^k * (1+μ(s))`.
+    If `1+μ(s) > 0`, then `ω^{k+1} * α = ω^k * (ω * α)`.
+    If `α` is a successor or limit, `ω * α` is generally larger than `α`.
+
+    Actually, for any `α < ε_0`, `ω^{k+1} > ω^k * n + α` for any finite `n`.
+
+    But here we have `ω^{k+1} * (1+μ(s))` vs `ω^k * (1+μ(s)) + ...`
+    This is `ω^k * (ω * (1+μ(s)))` vs `ω^k * (1+μ(s)) + ...`
+    Since `ω * (1+μ(s)) > 1+μ(s)`, and ordinal multiplication is continuous, `ω^k * (ω * (1+μ(s)))` is strictly greater than `ω^k * (1+μ(s)) + anything smaller`.
+
+    Specifically, `ω^k * (ω * β) > ω^k * β + γ` for any `γ < ω^k * (ω * β)`.
+
+    So yes, LHS > RHS.
+
+    For `R_rec_zero`:
+    LHS: `ω^0 * (1+μ(s)) + μ(b) = 1+μ(s) + μ(b)`
+    RHS: `μ(b)`
+    Clearly `1+μ(s)+μ(b) > μ(b)`.
+
+    For other rules, `recΔ` is not involved, so we need to check they decrease the measure.
+    `eqW` rules: if we set `μ(eqW a b) = μ(a) + μ(b) + 1` (or higher), and `μ(integrate t) = μ(t) + 1`, etc., we need to ensure `R_eq_diff` decreases.
+
+    But `eqW` is not involved in the recursive measure above.
+
+    We can combine: define `μ` as an ordinal that handles both `eqW` and `recΔ`.
+
+    Assign `μ(eqW a b) = μ(a) + μ(b) + ω` (or just a large finite number, but since `s` can be large, we need infinite ordinals).
+
+    Actually, since `recΔ` gives ordinals up to `ε_0`, we can embed everything in `ε_0`.
+
+    `μ(eqW a b) = max(μ(a), μ(b)) + 1` or something, but need to handle `R_eq_diff`.
+
+    `R_eq_diff`: `eqW a b` → `integrate (merge a b)`
+    If `μ(eqW a b) = μ(a) + μ(b) + 2` and `μ(integrate t) = μ(t) + 1`, `μ(merge a b) = μ(a) + μ(b) + 1`, then
+    LHS: `μ(a)+μ(b)+2`
+    RHS: `μ(a)+μ(b)+1+1 = μ(a)+μ(b)+2`. Equal! Not good.
+
+    So `eqW` needs to be heavier: `μ(eqW a b) = ω + μ(a) + μ(b)`.
+    Then LHS = `ω + ...`, RHS = finite + ... < `ω`? No, `μ(a)` could be large.
+
+    Actually, `μ(a)` could be `ω^k`, so `μ(a)+μ(b)` could be large.
+
+    We need `μ(eqW a b) > μ(integrate (merge a b)) = μ(merge a b) + 1 = μ(a) + μ(b) + 2`.
+    So `μ(eqW a b) = μ(a) + μ(b) + 3` works for this step.
+    But for `R_eq_refl`: `eqW a a` → `void`.
+    LHS = `2μ(a) + 3`, RHS = 0 or 1.
+    Good.
+
+    But does this interact badly with `recΔ`?
+
+    The measure `μ(recΔ b s n)` we defined uses ordinals, and `μ(eqW ...)` uses finite offsets.
+    We can combine by making `eqW` have a fixed finite weight that is larger than any finite increase from `integrate` and `merge`.
+
+    Specifically, let `μ` map to ordinals.
+    `μ(eqW a b) = max(μ(a), μ(b)) + 1`? No, `R_eq_diff` creates `integrate (merge a b)` which has `max(μ(a),μ(b)) + something`.
+
+    Actually, `μ(merge a b)` is roughly `μ(a)+μ(b)`.
+    `μ(integrate t)` is `μ(t)+1`.
+    So `μ(integrate (merge a b))` ≈ `μ(a)+μ(b)+1`.
+    We need `μ(eqW a b) > μ(a)+μ(b)+1`.
+    So set `μ(eqW a b) = μ(a) + μ(b) + 2`.
+
+    Then:
+    - `R_eq_refl`: `2μ(a)+2` → `0` (decrease)
+    - `R_eq_diff`: `μ(a)+μ(b)+2` → `μ(a)+μ(b)+1+1 = μ(a)+μ(b)+2` (equal!)
+    Still not decreasing.
+
+    So we need `μ(eqW a b) = μ(a) + μ(b) + 3` or higher.
+    Then `R_eq_diff`: `...+3` → `...+2`. Decrease by 1. Good.
+
+    Now check if this is compatible with `recΔ` measure.
+
+    The `recΔ` measure was defined using ordinal multiplication.
+    `μ(recΔ b s n) = ω^{nat_depth(n)} * (1 + μ(s)) + μ(b) + 1` or similar.
+
+    This is an ordinal.
+    `μ(eqW a b)` is also an ordinal (sum).
+
+    We need to ensure that for any context, replacing `eqW a b` with `integrate (merge a b)` decreases the measure.
+    Since `μ(eqW a b) = μ(a) + μ(b) + 3` and `μ(integrate (merge a b)) = μ(a) + μ(b) + 2`, it decreases by 1.
+    This is independent of the surrounding context.
+
+    Similarly for `recΔ`.
+
+    So the combined measure works.
+
+    Therefore, the system is strongly normalizing.
+
+    So the answer is: Yes, strong normalization can be established.
+
+    The reasoning is that we can assign to each term an ordinal measure (or a lexicographic combination of natural numbers) that strictly decreases with each reduction step. Specifically:
+    1. The `eqW` rules either decrease the number of `eqW` constructors or map to terms with smaller weight.
+    2. The `recΔ` rules perform structural recursion on the depth of the third argument, which dominates the duplication of the step function `s`.
+    3. Other rules decrease the size.
+
+    Even though `R_rec_succ` duplicates `s` and `R_eq_diff` increases size, the structural recursion in `recΔ` and the elimination of `eqW` ensure termination.
+
+    Final check: are there any critical pairs or interactions that could loop?
+    For example, could `eqW` reduce to something that contains `recΔ` that reduces to something containing `eqW`?
+    The rules don't create `eqW` on the RHS. `eqW` only appears on LHS.
+    So `eqW` count strictly decreases with any `eqW` reduction.
+    Once all `eqW` are gone, they don't come back.
+    Then we handle `recΔ` using the ordinal measure.
+    Then other rules decrease size.
+
+    So yes, the system is SN.
+
+    One final subtlety: `R_eq_diff` applies even when `a=b`, overlapping with `R_eq_refl`.
+    But both decrease the measure (as shown above), so no problem.
+
+    Also, `merge` rules could apply to terms created by `eqW` or `recΔ`, but they only decrease size, and don't affect the `eqW` count or the `recΔ` depth measure in a way that would increase the overall measure.
+
+    Therefore, the assessment is: Yes, strong normalization can be established.

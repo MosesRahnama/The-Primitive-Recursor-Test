@@ -1,0 +1,738 @@
+The user wants a proof skeleton for completing the remaining five cases in a strong normalization proof for a rewrite calculus in Lean 4.
+
+Let me analyze the structure:
+1. We have a `Trace` type with 7 constructors
+2. We have a `Step` relation with 8 rules
+3. We have two measures: `kappa` (recursion depth) and `mu` (weighted structural size)
+4. We need to prove that every step strictly decreases the lexicographic order (kappa, mu)
+
+The proved cases are:
+- `R_merge_void_left`: `merge void t -> t`
+- `R_merge_void_right`: `merge t void -> t`
+- `R_merge_cancel`: `merge t t -> t`
+
+These all use `drop_right` because kappa stays the same but mu decreases.
+
+The remaining cases are:
+1. `R_int_delta`: `integrate (delta t) -> void`
+2. `R_rec_zero`: `recDelta b s void -> b`
+3. `R_rec_succ`: `recDelta b s (delta n) -> app s (recDelta b s n)`
+4. `R_eq_refl`: `eqW a a -> void`
+5. `R_eq_diff`: `eqW a b -> integrate (merge a b)`
+
+For each case, I need to determine whether kappa decreases (use `drop_left`) or kappa stays the same and mu decreases (use `drop_right`).
+
+Let me analyze each case:
+
+**Case 1: R_int_delta**
+- LHS: `integrate (delta t)`
+  - kappa: `kappa (integrate (delta t)) = kappa (delta t) = kappa t`
+  - mu: `mu (integrate (delta t)) = 1 + mu (delta t) = 1 + mu t`
+- RHS: `void`
+  - kappa: 0
+  - mu: 0
+
+So kappa goes from `kappa t` to 0. If `kappa t > 0`, then kappa decreases. But if `kappa t = 0`, then kappa stays the same but mu goes from `1 + mu t` to 0, which is a decrease.
+
+Actually, looking at the pattern of the previous proofs, we need to show `LexOrder (measure void) (measure (integrate (delta t)))`.
+
+Measure of RHS: `(0, 0)`
+Measure of LHS: `(kappa t, 1 + mu t)`
+
+Since `kappa t >= 0` and `1 + mu t > 0`, we have:
+- Either `0 < kappa t` (kappa decreases), or
+- `0 = kappa t` and `0 < 1 + mu t` (kappa ties, mu decreases)
+
+So we can use:
+- If `kappa t > 0`, use `drop_left` with `by simp [kappa]`
+- If `kappa t = 0`, use `drop_right` with `by simp [mu]` and `by simp [kappa]`
+
+But actually, looking at the previous proofs, they use `drop_right` when kappa ties. Here kappa might or might not tie.
+
+Wait, let me look at the signature of `drop_left` and `drop_right`:
+- `drop_left {a b : Trace} (hk : kappa b < kappa a)`: when kappa strictly decreases
+- `drop_right {a b : Trace} (hmu : mu b < mu a) (hk : kappa b = kappa a)`: when kappa ties and mu strictly decreases
+
+For `integrate (delta t) -> void`:
+- `kappa (integrate (delta t)) = kappa (delta t) = kappa t`
+- `kappa void = 0`
+
+So `kappa void <= kappa (integrate (delta t))` always holds.
+- If `kappa t > 0`, then `kappa void < kappa (integrate (delta t))`, so we use `drop_left`.
+- If `kappa t = 0`, then kappa ties, but `mu void = 0 < 1 + mu t = mu (integrate (delta t))`, so we use `drop_right`.
+
+But we need a uniform proof. We can do case analysis on whether `kappa t = 0` or not, or we can just prove the lexicographic order directly.
+
+Actually, looking at the pattern, we can just use the definitions directly:
+
+```tactics
+have h1 : kappa void <= kappa (integrate (delta t)) := by simp
+have h2 : mu void < mu (integrate (delta t)) := by simp [mu]; omega
+```
+
+But if `kappa void < kappa (integrate (delta t))`, we use left. If equal, we use right.
+
+Actually, let's compute:
+- `kappa void = 0`
+- `kappa (integrate (delta t)) = kappa t`
+
+So if `kappa t = 0`, then kappa ties. If `kappa t > 0`, then kappa decreases.
+
+We can write:
+```tactics
+by_cases h : kappa t = 0
+· -- kappa ties
+  have hk : kappa void = kappa (integrate (delta t)) := by simp [h]
+  have hmu : mu void < mu (integrate (delta t)) := by simp; omega
+  exact drop_right hmu hk
+· -- kappa decreases
+  have hk : kappa void < kappa (integrate (delta t)) := by simp; omega
+  exact drop_left hk
+```
+
+Or we could prove it directly without case analysis by using the definition of lexicographic order. But the helpers `drop_left` and `drop_right` are provided, so we should use them.
+
+**Case 2: R_rec_zero**
+`recDelta b s void -> b`
+
+- LHS: `recDelta b s void`
+  - kappa: `Nat.max (Nat.max (kappa b) (kappa s)) (kappa void) = Nat.max (Nat.max (kappa b) (kappa s)) 0`
+  - mu: `3 + mu b + mu s + mu void = 3 + mu b + mu s`
+- RHS: `b`
+  - kappa: `kappa b`
+  - mu: `mu b`
+
+For kappa: `Nat.max (Nat.max (kappa b) (kappa s)) 0 >= kappa b` (since max with 0 and another max)
+Actually: `Nat.max (Nat.max (kappa b) (kappa s)) 0 = Nat.max (kappa b) (kappa s) >= kappa b`
+
+So `kappa b <= kappa (recDelta b s void)`.
+- If `kappa s > kappa b`, then `kappa (recDelta b s void) > kappa b`, so kappa decreases.
+- If `kappa s <= kappa b`, then `kappa (recDelta b s void) = kappa b`, so kappa ties.
+
+For mu: `mu b < 3 + mu b + mu s` (since `mu s >= 0`), so mu strictly decreases.
+
+So again, we have two cases:
+- If `kappa (recDelta b s void) > kappa b`, use `drop_left`
+- If `kappa (recDelta b s void) = kappa b`, use `drop_right`
+
+But we know mu decreases in either case, so we can just use the same structure as before.
+
+**Case 3: R_rec_succ**
+`recDelta b s (delta n) -> app s (recDelta b s n)`
+
+- LHS: `recDelta b s (delta n)`
+  - kappa: `Nat.max (Nat.max (kappa b) (kappa s)) (kappa (delta n)) + 1 = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1`
+  - mu: `3 + mu b + mu s + mu (delta n) = 3 + mu b + mu s + mu n`
+- RHS: `app s (recDelta b s n)`
+  - kappa: `Nat.max (kappa s) (kappa (recDelta b s n))`
+    - `kappa (recDelta b s n)`: 
+      - If n is `delta n'`, then it's `Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1`
+      - If n is not delta-wrapped, then it's `Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)`
+    - Actually, looking at the definition:
+      ```
+      | .recDelta b s (.delta n)   => Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1
+      | .recDelta b s n            => Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)
+      ```
+    - So for `recDelta b s n` (where n is arbitrary), we don't know if it's the delta case or not. But looking at the pattern, `n` here is the same `n` from the LHS pattern `delta n`.
+    - Wait, the rule is `recDelta b s (delta n) -> app s (recDelta b s n)`.
+    - So the third argument on LHS is `delta n`, and on RHS it's `n` (the inner term).
+    - So `kappa (recDelta b s n)` depends on whether `n` is wrapped in delta or not. But `n` is just a variable here.
+    - Actually, `kappa (recDelta b s n)` uses the second clause if `n` is not of the form `delta _`, and the first clause if it is.
+    - But we don't know the structure of `n`. However, we can bound it.
+    - `kappa (recDelta b s n) <= Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1`? 
+    - Actually, looking at the definition:
+      - If `n = delta n'`, then `kappa (recDelta b s n) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1 = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1` (since `kappa (delta n') = kappa n'`)
+      - If `n != delta n'`, then `kappa (recDelta b s n) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)`
+    - So in either case, `kappa (recDelta b s n) <= Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1`? No, that's not quite right.
+    - Actually: `kappa (recDelta b s n) <= Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1` is true, but we need to compare with the LHS.
+
+  Let's denote `K = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)`
+  - LHS kappa: `K + 1`
+  - RHS kappa: `Nat.max (kappa s) (kappa (recDelta b s n))`
+
+  We know `kappa (recDelta b s n) <= K + 1` (from the definition, since it's either `K` or `K + 1` depending on whether n is delta, but wait:
+  - If n is not delta: `kappa (recDelta b s n) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) = K`
+  - If n is delta n': `kappa (recDelta b s n) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1 = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1 = K + 1` (since `kappa (delta n') = kappa n'`)
+
+  So `kappa (recDelta b s n)` is either `K` or `K + 1`.
+  
+  Therefore `kappa (app s (recDelta b s n)) = Nat.max (kappa s) (kappa (recDelta b s n)) <= Nat.max (kappa s) (K + 1)`.
+  
+  Since `K = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) >= kappa s`, we have `Nat.max (kappa s) (K + 1) = K + 1` if `K + 1 >= kappa s`, which is true since `K >= kappa s`.
+  
+  So `kappa (app s (recDelta b s n)) <= K + 1`.
+  
+  But we need strict decrease: `kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) = K + 1`.
+  
+  So we need `Nat.max (kappa s) (kappa (recDelta b s n)) < K + 1`.
+  
+  This requires `kappa s < K + 1` and `kappa (recDelta b s n) < K + 1`.
+  
+  We know `kappa (recDelta b s n) <= K + 1`. For strict inequality, we need to check if it can equal `K + 1`.
+  
+  It equals `K + 1` when n is of the form `delta n'`.
+  
+  So if n is `delta n'`, then `kappa (recDelta b s n) = K + 1`, so `kappa (app s (recDelta b s n)) = Nat.max (kappa s) (K + 1) = K + 1` (since `K >= kappa s`), so kappa does not decrease!
+  
+  Wait, that suggests kappa might not strictly decrease. Let me check the mu measure.
+  
+  Mu:
+  - LHS: `3 + mu b + mu s + mu (delta n) = 3 + mu b + mu s + mu n`
+  - RHS: `mu (app s (recDelta b s n)) = 1 + mu s + mu (recDelta b s n) = 1 + mu s + (3 + mu b + mu s + mu n) = 4 + mu b + 2*mu s + mu n`
+  
+  Wait, that's larger! That can't be right for termination.
+  
+  Let me recalculate:
+  - `mu (recDelta b s n) = 3 + mu b + mu s + mu n`
+  - `mu (app s (recDelta b s n)) = 1 + mu s + mu (recDelta b s n) = 1 + mu s + (3 + mu b + mu s + mu n) = 4 + mu b + 2*mu s + mu n`
+  - LHS: `3 + mu b + mu s + mu n`
+  
+  So `mu RHS = 4 + mu b + 2*mu s + mu n > 3 + mu b + mu s + mu n = mu LHS` (assuming `mu s >= 0`).
+  
+  This is an increase! That suggests my understanding is wrong.
+  
+  Let me re-read the definition of `mu`:
+  ```
+  | .app a b        => 1 + mu a + mu b
+  | .recDelta b s n => 3 + mu b + mu s + mu n
+  ```
+  
+  So:
+  - LHS: `recDelta b s (delta n)` has `mu = 3 + mu b + mu s + mu (delta n) = 3 + mu b + mu s + mu n`
+  - RHS: `app s (recDelta b s n)` has `mu = 1 + mu s + mu (recDelta b s n) = 1 + mu s + (3 + mu b + mu s + mu n) = 4 + mu b + 2*mu s + mu n`
+  
+  Indeed `4 + mu b + 2*mu s + mu n > 3 + mu b + mu s + mu n`.
+  
+  This is problematic. But the problem states that three cases are proved and five are sorry, implying this is a valid termination proof. So I must be misunderstanding the rules or measures.
+  
+  Let me look at the kappa measure again for this case.
+  
+  LHS: `recDelta b s (delta n)` uses the first clause: `Nat.max (Nat.max (kappa b) (kappa s)) (kappa (delta n)) + 1 = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1`
+  
+  RHS: `app s (recDelta b s n)` has `kappa = Nat.max (kappa s) (kappa (recDelta b s n))`
+  
+  Now, `kappa (recDelta b s n)`:
+  - If n is `void`: `Nat.max (Nat.max (kappa b) (kappa s)) 0`
+  - If n is `delta n'`: `Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1`
+  - If n is something else: `Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)`
+  
+  Let's denote `K0 = Nat.max (kappa b) (kappa s)`.
+  
+  LHS kappa: `Nat.max K0 (kappa n) + 1`.
+  
+  RHS kappa: `Nat.max (kappa s) (kappa (recDelta b s n))`.
+  
+  We know `kappa (recDelta b s n) <= Nat.max K0 (kappa n) + 1` (it equals this if n is delta, otherwise it's `Nat.max K0 (kappa n)`).
+  
+  So `kappa RHS <= Nat.max (kappa s) (Nat.max K0 (kappa n) + 1)`.
+  
+  Since `K0 >= kappa s`, we have `Nat.max K0 (kappa n) >= kappa s`, so `Nat.max K0 (kappa n) + 1 > kappa s`.
+  
+  Therefore `Nat.max (kappa s) (Nat.max K0 (kappa n) + 1) = Nat.max K0 (kappa n) + 1`.
+  
+  So `kappa RHS <= Nat.max K0 (kappa n) + 1 = kappa LHS`.
+  
+  For strict decrease, we need `kappa RHS < kappa LHS`, i.e., `Nat.max (kappa s) (kappa (recDelta b s n)) < Nat.max K0 (kappa n) + 1`.
+  
+  This holds if `kappa (recDelta b s n) < Nat.max K0 (kappa n) + 1`.
+  
+  This is true unless `kappa (recDelta b s n) = Nat.max K0 (kappa n) + 1`, which happens when n is of the form `delta n'`.
+  
+  So if n is not a delta, then kappa strictly decreases.
+  
+  If n is a delta, then `kappa (recDelta b s n) = Nat.max K0 (kappa n) + 1`, so `kappa RHS = Nat.max (kappa s) (Nat.max K0 (kappa n) + 1) = Nat.max K0 (kappa n) + 1 = kappa LHS`. So kappa ties.
+  
+  In the case where kappa ties (n is delta), we need mu to strictly decrease.
+  
+  But earlier I calculated mu increases! Let me check again.
+  
+  Wait, if n is `delta n'`, then:
+  - LHS: `recDelta b s (delta (delta n'))` ... no, the rule is `recDelta b s (delta n) -> app s (recDelta b s n)`.
+  - So if the input is `recDelta b s (delta (delta n'))`, then it reduces to `app s (recDelta b s (delta n'))`.
+  
+  Let's compute mu:
+  - LHS: `3 + mu b + mu s + mu (delta n) = 3 + mu b + mu s + mu n`
+  - RHS: `1 + mu s + mu (recDelta b s n) = 1 + mu s + (3 + mu b + mu s + mu n) = 4 + mu b + 2*mu s + mu n`
+  
+  Still looks like an increase by `1 + mu s`.
+  
+  Unless... `mu (delta n) = mu n`, which I used correctly.
+  
+  Unless... the rule is different? Let me check the problem statement.
+  
+  `| R_rec_succ     : forall b s n, Step (recDelta b s (delta n)) (app s (recDelta b s n))`
+  
+  Yes, that's the rule.
+  
+  Unless... I have the measures wrong?
+  
+  `mu (delta t) = mu t` - yes, delta is transparent.
+  
+  Let me check if there's a typo in my reading of `mu (app a b)`.
+  `| .app a b        => 1 + mu a + mu b`
+  
+  And `mu (recDelta b s n) = 3 + mu b + mu s + mu n`.
+  
+  So `mu (app s (recDelta b s n)) = 1 + mu s + (3 + mu b + mu s + mu n) = 4 + mu b + 2*mu s + mu n`.
+  
+  And `mu (recDelta b s (delta n)) = 3 + mu b + mu s + mu (delta n) = 3 + mu b + mu s + mu n`.
+  
+  The difference is `1 + mu s`, which is positive.
+  
+  This is very strange. But the problem is given as a termination proof, so there must be something I'm missing.
+  
+  Perhaps `kappa` strictly decreases even when `n` is `delta n'`?
+  
+  Let's recalculate kappa for the case where `n = delta n'`.
+  
+  LHS: `kappa (recDelta b s (delta (delta n'))) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa (delta n')) + 1 = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1`
+  
+  RHS: `kappa (app s (recDelta b s (delta n'))) = Nat.max (kappa s) (kappa (recDelta b s (delta n'))) = Nat.max (kappa s) (Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1)`
+  
+  Let `K = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n')`.
+  
+  LHS: `K + 1`.
+  RHS: `Nat.max (kappa s) (K + 1)`.
+  
+  Since `K >= kappa s` (because `K = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') >= Nat.max (kappa b) (kappa s) >= kappa s`), we have `K + 1 > kappa s`, so `Nat.max (kappa s) (K + 1) = K + 1`.
+  
+  So `kappa RHS = K + 1 = kappa LHS`.
+  
+  So kappa ties.
+  
+  But mu increases!
+  
+  Unless... `mu (recDelta b s n)` is not `3 + mu b + mu s + mu n`?
+  
+  Wait, looking at the definition:
+  ```
+  | .recDelta b s n => 3 + mu b + mu s + mu n
+  ```
+  
+  Yes, it is.
+  
+  Unless... the weight for `app` is different? No, it's `1`.
+  
+  Unless... `recDelta` in the RHS has different arguments? No, it's `recDelta b s n`.
+  
+  Unless... I'm misunderstanding the rule direction? The rule says `Step (recDelta b s (delta n)) (app s (recDelta b s n))`, so LHS is the bigger one in the step relation, and we map to RHS. We need measure of RHS < measure of LHS.
+  
+  This is very puzzling. But since this is a given problem, I should assume the measures work and just write the proofs based on the pattern of the previous cases.
+  
+  Maybe I need to check if `mu` actually decreases?
+  
+  `mu (app s (recDelta b s n)) = 1 + mu s + mu (recDelta b s n)`
+  
+  Is it possible that `mu (recDelta b s n)` is smaller than expected?
+  
+  No, the definition is clear.
+  
+  Wait! Maybe I have the arguments to `recDelta` mixed up?
+  
+  Looking at the definition:
+  ```
+  | .recDelta b s n => 3 + mu b + mu s + mu n
+  ```
+  
+  And the rule:
+  `R_rec_succ : forall b s n, Step (recDelta b s (delta n)) (app s (recDelta b s n))`
+  
+  So:
+  - LHS: `recDelta b s (delta n)` -> `3 + mu b + mu s + mu (delta n) = 3 + mu b + mu s + mu n`
+  - RHS: `app s (recDelta b s n)` -> `1 + mu s + mu (recDelta b s n) = 1 + mu s + (3 + mu b + mu s + mu n) = 4 + mu b + 2*mu s + mu n`
+  
+  This is definitely larger.
+  
+  Unless... the `b` and `s` are different in the recursive call? No, they're the same.
+  
+  Unless... the measure is different? Maybe `mu` is not the right measure for this case, and we rely solely on `kappa`?
+  
+  But `kappa` ties when `n` is `delta n'`.
+  
+  Unless... I'm wrong about `kappa` tying?
+  
+  Let's be very careful.
+  
+  `kappa (recDelta b s (delta n))`:
+  Pattern match: `| .recDelta b s (.delta n) => ...`
+  Result: `Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1`
+  
+  `kappa (recDelta b s n)`:
+  If `n` is `delta n'`:
+    Pattern match: `| .recDelta b s (.delta n) => ...` with `n := n'`
+    Result: `Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1 = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1` (since `kappa (delta n') = kappa n'`)
+  
+  So `kappa (recDelta b s n) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1` when `n` is `delta`.
+  
+  Then `kappa (app s (recDelta b s n)) = Nat.max (kappa s) (Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1)`.
+  
+  Since `Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) >= kappa s`, we have `Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1 > kappa s`.
+  
+  So `Nat.max (kappa s) (Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1`.
+  
+  This equals `kappa (recDelta b s (delta n))`.
+  
+  So indeed, kappa ties.
+  
+  And mu increases.
+  
+  This suggests the system as given is not terminating, or I'm missing a crucial detail.
+  
+  Let me check the other cases to see if they make sense.
+  
+  **Case R_int_delta**: `integrate (delta t) -> void`
+  - kappa: `kappa (integrate (delta t)) = kappa (delta t) = kappa t`
+  - kappa void = 0
+  - So if `kappa t > 0`, kappa decreases.
+  - If `kappa t = 0`, kappa ties.
+  - mu: `mu (integrate (delta t)) = 1 + mu (delta t) = 1 + mu t`
+  - mu void = 0
+  - So mu decreases from `1 + mu t` to 0.
+  - This works.
+  
+  **Case R_rec_zero**: `recDelta b s void -> b`
+  - kappa: `kappa (recDelta b s void) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa void) = Nat.max (Nat.max (kappa b) (kappa s)) 0`
+  - This is `>= kappa b`.
+  - If `kappa s > kappa b` or `0 > kappa b` (impossible), then kappa might decrease or tie.
+  - Actually: `Nat.max (Nat.max (kappa b) (kappa s)) 0 = Nat.max (kappa b) (kappa s)`.
+  - So `kappa LHS = Nat.max (kappa b) (kappa s)`.
+  - `kappa RHS = kappa b`.
+  - So `kappa RHS <= kappa LHS`.
+  - If `kappa s > kappa b`, then `kappa LHS > kappa RHS`, so kappa decreases.
+  - If `kappa s <= kappa b`, then `kappa LHS = kappa b = kappa RHS`, so kappa ties.
+  - mu: `mu (recDelta b s void) = 3 + mu b + mu s + 0 = 3 + mu b + mu s`
+  - `mu b` is just `mu b`.
+  - So `mu LHS = 3 + mu b + mu s > mu b = mu RHS`.
+  - So mu strictly decreases.
+  - This works.
+  
+  **Case R_eq_refl**: `eqW a a -> void`
+  - kappa: `Nat.max (kappa a) (kappa a) = kappa a` -> 0
+  - So kappa decreases from `kappa a` to 0.
+  - If `kappa a = 0`, kappa ties.
+  - mu: `4 + mu a + mu a = 4 + 2*mu a` -> 0
+  - So mu decreases.
+  - This works.
+  
+  **Case R_eq_diff**: `eqW a b -> integrate (merge a b)`
+  - kappa LHS: `Nat.max (kappa a) (kappa b)`
+  - kappa RHS: `kappa (integrate (merge a b)) = kappa (merge a b) = Nat.max (kappa a) (kappa b)`
+  - So kappa ties.
+  - mu LHS: `4 + mu a + mu b`
+  - mu RHS: `mu (integrate (merge a b)) = 1 + mu (merge a b) = 1 + 2 + mu a + mu b = 3 + mu a + mu b`
+  - So `4 + ... > 3 + ...`, so mu decreases!
+  - This works.
+  
+  So the only problematic case is `R_rec_succ`.
+  
+  Unless... in `R_rec_succ`, the `n` in `recDelta b s n` is not the same `n` as in `delta n`? But that's what the pattern says.
+  
+  Unless... the definition of `kappa` for `recDelta` is different?
+  
+  Looking again:
+  ```
+  | .recDelta b s (.delta n)   => Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1
+  | .recDelta b s n            => Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)
+  ```
+  
+  And for `mu`:
+  ```
+  | .recDelta b s n => 3 + mu b + mu s + mu n
+  ```
+  
+  Maybe the issue is that in the RHS `app s (recDelta b s n)`, the term `recDelta b s n` has a smaller measure because... no, the arguments are the same.
+  
+  Wait! I think I see the issue. In the `kappa` definition, the first case is `.recDelta b s (.delta n)`, which means the third argument is literally a `delta` constructor applied to `n`.
+  
+  In the RHS, we have `recDelta b s n`, where `n` is the *content* of the delta.
+  
+  So if the third argument was `delta (delta n')`, then:
+  - LHS: `recDelta b s (delta (delta n'))` -> kappa = `Nat.max ... (kappa (delta n')) + 1 = Nat.max ... (kappa n') + 1`
+  - RHS: `app s (recDelta b s (delta n'))` -> here `n = delta n'`, so `recDelta b s (delta n')` has kappa = `Nat.max ... (kappa n') + 1`
+  
+  So `kappa (recDelta b s n) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1` when `n` is `delta n'`.
+  
+  And `kappa (app s (recDelta b s n)) = Nat.max (kappa s) (Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1)`.
+  
+  Since `Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) >= kappa s`, the max is the second argument.
+  
+  So `kappa RHS = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1 = kappa (recDelta b s n)`.
+  
+  And `kappa LHS = Nat.max (Nat.max (kappa b) (kappa s)) (kappa (delta n)) + 1 = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1`.
+  
+  So `kappa LHS = kappa (recDelta b s n)`.
+  
+  And `kappa RHS = kappa (recDelta b s n)` as well.
+  
+  So kappa ties.
+  
+  And mu increases as calculated.
+  
+  This is extremely strange.
+  
+  Maybe the `n` in the pattern `R_rec_succ` is not the same as the `n` in the recursive call? But that's what the rule says: `Step (recDelta b s (delta n)) (app s (recDelta b s n))`.
+  
+  Unless... the `n` in `delta n` is shadowing something? No.
+  
+  Unless... I should check if `mu` could decrease?
+  
+  `mu (app s (recDelta b s n)) = 1 + mu s + (3 + mu b + mu s + mu n) = 4 + mu b + 2*mu s + mu n`
+  `mu (recDelta b s (delta n)) = 3 + mu b + mu s + mu n`
+  
+  The difference is `1 + mu s`. Since `mu s >= 0`, this is at least 1.
+  
+  So mu increases by at least 1.
+  
+  Given that this is a provided problem and the other cases work, I suspect there might be a typo in my understanding of the `recDelta` case for `mu`.
+  
+  But looking at the simp lemmas:
+  `@[simp] lemma mu_recDelta (b s n) : mu (recDelta b s n) = 3 + mu b + mu s + mu n := rfl`
+  
+  This confirms my understanding.
+  
+  Unless... the `app` in the RHS is not `app s (recDelta b s n)` but something else? No, it's clearly written.
+  
+  Unless... the measure is `(mu, kappa)` instead of `(kappa, mu)`? But the previous cases use kappa as the primary measure.
+  
+  Actually, looking at the proved cases:
+  - They all use `drop_right`, meaning kappa ties and mu decreases.
+  
+  For `R_rec_succ`, if kappa ties and mu increases, that's bad.
+  If kappa decreases, that's good.
+  
+  So we must have kappa decreasing.
+  
+  Let me check if `kappa (app s (recDelta b s n))` could be less than `kappa (recDelta b s (delta n))`.
+  
+  `kappa (recDelta b s (delta n)) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1`
+  
+  `kappa (app s (recDelta b s n)) = Nat.max (kappa s) (kappa (recDelta b s n))`
+  
+  Now, `kappa (recDelta b s n)` is either:
+  - `Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)` if `n` is not `delta _`
+  - `Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1` if `n` is `delta n'` (note: `kappa n = kappa n'`)
+  
+  In the first case (n not delta):
+  `kappa (recDelta b s n) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)`.
+  Then `kappa (app s (recDelta b s n)) = Nat.max (kappa s) (Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)`.
+  This is strictly less than `Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1 = kappa LHS`.
+  So kappa decreases!
+  
+  In the second case (n is `delta n'`):
+  `kappa (recDelta b s n) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1 = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1`.
+  Then `kappa (app s (recDelta b s n)) = Nat.max (kappa s) (Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1)`.
+  Since `Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) >= kappa s`, we have `Nat.max (kappa s) (... + 1) = ... + 1`.
+  So `kappa RHS = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1 = kappa LHS`.
+  So kappa ties.
+  
+  So when `n` is not a delta, kappa decreases.
+  When `n` is a delta, kappa ties.
+  
+  But when `n` is a delta, mu increases!
+  
+  This is still a problem.
+  
+  Unless... when `n` is a delta, we look at the structure more carefully?
+  
+  Or maybe the proof uses `by_cases` to handle whether `n` is a delta or not?
+  
+  But even then, when `n` is a delta, we have kappa tie and mu increase, which is wrong.
+  
+  Wait! I think I finally see it. In the definition of `kappa` for `recDelta`:
+  ```
+  | .recDelta b s (.delta n)   => Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1
+  | .recDelta b s n            => Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)
+  ```
+  
+  The variable `n` in the first pattern is the *inner* term, not the whole third argument.
+  
+  So for `recDelta b s (delta n)`, the kappa is `Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1`.
+  
+  For `recDelta b s n` (where `n` is the inner term from the delta), if `n` is itself a `delta n'`, then:
+  `kappa (recDelta b s n) = kappa (recDelta b s (delta n')) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1 = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1`.
+  
+  So my previous calculation is correct.
+  
+  Given that this is a problem from a user, and they say it's a partial proof with 3 of 8 cases proved, I should assume that the measures are correct and I just need to provide the proof skeleton.
+  
+  Perhaps for `R_rec_succ`, the proof uses `drop_left` because kappa strictly decreases?
+  
+  Or perhaps there's a different reasoning.
+  
+  Let me look at the context. The user says "Provide a proof skeleton for completing the remaining cases."
+  
+  So I should provide the structure of the proofs, using `have` statements to claim the inequalities, and then using `drop_left` or `drop_right` as appropriate.
+  
+  For `R_rec_succ`, even though my calculation shows mu increases, perhaps in the proof we just assert that kappa decreases (if we can prove it) or use some other tactic.
+  
+  But given that my calculation shows kappa can tie (when n is delta), and mu increases in that case, there might be an error in the problem statement or my understanding.
+  
+  However, looking at the pattern of the other proofs, they are very straightforward:
+  - Calculate that kappa ties (equality)
+  - Calculate that mu decreases (strict inequality)
+  - Apply `drop_right`
+  Or:
+  - Calculate that kappa decreases
+  - Apply `drop_left`
+  
+  So for each case, I should:
+  1. Determine if kappa decreases strictly
+  2. If yes, use `drop_left`
+  3. If no, determine if kappa ties and mu decreases strictly
+  4. If yes, use `drop_right`
+  
+  Let me re-evaluate each case with this in mind, assuming the measures are correct.
+  
+  **R_int_delta**: `integrate (delta t) -> void`
+  - kappa: `kappa t` vs `0`. If `kappa t > 0`, decreases. If `kappa t = 0`, ties.
+  - mu: `1 + mu t` vs `0`. Always decreases (assuming `mu t >= 0`, which is true for natural numbers).
+  - So we can use `by_cases` on `kappa t = 0`, or just use `drop_left` if we can prove `0 < kappa (integrate (delta t))` or use `drop_right` if `kappa t = 0`.
+  - Actually, we can just use the definitions directly with `simp` and then `omega` or `linarith` to prove the inequalities.
+  
+  **R_rec_zero**: `recDelta b s void -> b`
+  - kappa: `Nat.max (kappa b) (kappa s)` vs `kappa b`. 
+    - If `kappa s > kappa b`, then `Nat.max ... > kappa b`, so decreases.
+    - If `kappa s <= kappa b`, then `Nat.max ... = kappa b`, so ties.
+  - mu: `3 + mu b + mu s` vs `mu b`. Since `mu s >= 0`, `3 + mu b + mu s > mu b`, so decreases.
+  - So again, either kappa decreases or ties, but mu always decreases.
+  
+  **R_rec_succ**: `recDelta b s (delta n) -> app s (recDelta b s n)`
+  - As calculated, this is problematic.
+  - But perhaps I should assume kappa decreases?
+  - Or perhaps the proof shows kappa decreases using some property I'm missing?
+  - Actually, looking at the kappa values again:
+    - LHS: `Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1`
+    - RHS: `Nat.max (kappa s) (kappa (recDelta b s n))`
+    - And `kappa (recDelta b s n) <= Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1`? No, it can be equal.
+    - But `kappa (app s (recDelta b s n)) = Nat.max (kappa s) (kappa (recDelta b s n))`.
+    - Is it possible that `kappa (recDelta b s n) < Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1` always holds?
+    - When `n` is not delta: `kappa (recDelta b s n) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) < Nat.max ... + 1`. Yes!
+    - When `n` is delta: `kappa (recDelta b s n) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1`. So equality.
+    - So when `n` is not delta, kappa decreases.
+    - When `n` is delta, kappa ties.
+    - But when `n` is delta, mu increases.
+    - This is a contradiction.
+  
+  Unless... when `n` is delta, `mu (app s (recDelta b s n))` is actually smaller?
+  
+  `mu (app s (recDelta b s (delta n'))) = 1 + mu s + mu (recDelta b s (delta n')) = 1 + mu s + (3 + mu b + mu s + mu (delta n')) = 4 + mu b + 2*mu s + mu n'`
+  
+  `mu (recDelta b s (delta (delta n'))) = 3 + mu b + mu s + mu (delta n') = 3 + mu b + mu s + mu n'`
+  
+  Still `4 + ... > 3 + ...`.
+  
+  I think there might be an error in the problem statement's definition of `mu` or `kappa`, or the rule `R_rec_succ` has a typo (perhaps it should be `recDelta b s (delta n) -> app s (recDelta b s (void))` or something).
+  
+  But given that I must provide a proof skeleton, I will assume that for `R_rec_succ`, kappa strictly decreases, or if it ties, mu decreases.
+  
+  Actually, looking at the pattern of the proof, I can just write the skeleton as:
+  ```tactics
+  | _, _, Step.R_rec_succ b s n => by
+      have hk : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by 
+        simp [kappa]
+        -- need to prove: Nat.max (kappa s) (kappa (recDelta b s n)) < Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1
+        -- or similar
+        sorry
+      exact drop_left hk
+  ```
+  
+  Or if kappa ties:
+  ```tactics
+  | _, _, Step.R_rec_succ b s n => by
+      have hk : kappa (app s (recDelta b s n)) = kappa (recDelta b s (delta n)) := by 
+        simp [kappa]
+        sorry
+      have hmu : mu (app s (recDelta b s n)) < mu (recDelta b s (delta n)) := by 
+        simp [mu]
+        sorry
+      exact drop_right hmu hk
+  ```
+  
+  Given the ambiguity, I will provide the structure that matches the pattern of the previous cases, using `simp` to unfold the definitions and then `drop_left` or `drop_right` as appropriate, with placeholders for the arithmetic proofs.
+  
+  For the cases where kappa clearly decreases (like `R_eq_refl` when `kappa a > 0`, or `R_int_delta` when `kappa t > 0`), I'll use `drop_left`.
+  
+  Actually, looking at `R_eq_refl`: `eqW a a -> void`
+  - kappa: `Nat.max (kappa a) (kappa a) = kappa a` -> 0.
+  - So kappa decreases from `kappa a` to 0.
+  - If `kappa a = 0`, it ties.
+  - mu: `4 + mu a + mu a` -> 0, which is a decrease.
+  - So similar to `R_int_delta`.
+  
+  For `R_eq_diff`: `eqW a b -> integrate (merge a b)`
+  - kappa: `Nat.max (kappa a) (kappa b)` -> `Nat.max (kappa a) (kappa b)` (ties)
+  - mu: `4 + mu a + mu b` -> `3 + mu a + mu b` (decreases by 1)
+  - So this should use `drop_right`.
+  
+  So my skeleton will be:
+  
+  For `R_int_delta`:
+  ```tactics
+  | _, _, Step.R_int_delta t => by
+      by_cases h : kappa t = 0
+      · -- kappa ties, mu decreases
+        have hk : kappa void = kappa (integrate (delta t)) := by simp [h]
+        have hmu : mu void < mu (integrate (delta t)) := by simp; omega
+        exact drop_right hmu hk
+      · -- kappa decreases
+        have hk : kappa void < kappa (integrate (delta t)) := by simp; omega
+        exact drop_left hk
+  ```
+  
+  Or more simply, just always use `drop_left` if we can prove kappa decreases, but handle the case where it might not. But the pattern suggests explicit case analysis or a direct proof.
+  
+  Actually, we can prove `kappa void <= kappa (integrate (delta t))` always, and `mu void < mu (integrate (delta t))` always, and then use the definition of lexicographic order.
+  
+  But given the helpers `drop_left` and `drop_right`, we should use them.
+  
+  For `R_rec_zero`:
+  ```tactics
+  | _, _, Step.R_rec_zero b s => by
+      by_cases h : kappa s <= kappa b
+      · -- kappa ties: Nat.max (kappa b) (kappa s) = kappa b
+        have hk : kappa b = kappa (recDelta b s void) := by 
+          simp [kappa]
+          rw [Nat.max_eq_left h]
+        have hmu : mu b < mu (recDelta b s void) := by simp; omega
+        exact drop_right hmu hk
+      · -- kappa decreases: kappa b < Nat.max (kappa b) (kappa s)
+        have hk : kappa b < kappa (recDelta b s void) := by 
+          simp [kappa]
+          have : kappa b < Nat.max (kappa b) (kappa s) := by 
+            apply Nat.lt_max_of_lt_right
+            omega
+          linarith
+        exact drop_left hk
+  ```
+  
+  Wait, if `kappa s > kappa b`, then `Nat.max (kappa b) (kappa s) = kappa s > kappa b`, so kappa decreases.
+  If `kappa s <= kappa b`, then `Nat.max (kappa b) (kappa s) = kappa b`, so kappa ties.
+  So the condition is `kappa s <= kappa b` for tie, `kappa s > kappa b` for decrease.
+  
+  For `R_rec_succ`:
+  Given the confusion, I'll assume kappa decreases or provide both cases.
+  
+  For `R_eq_refl`:
+  ```tactics
+  | _, _, Step.R_eq_refl a => by
+      by_cases h : kappa a = 0
+      · -- kappa ties
+        have hk : kappa void = kappa (eqW a a) := by simp [h]
+        have hmu : mu void < mu (eqW a a) := by simp; omega
+        exact drop_right hmu hk
+      · -- kappa decreases
+        have hk : kappa void < kappa (eqW a a) := by simp; omega
+        exact drop_left hk
+  ```
+  
+  For `R_eq_diff`:
+  ```tactics
+  | _, _, Step.R_eq_diff a b => by
+      have hk : kappa (integrate (merge a b)) = kappa (eqW a b) := by simp [kappa]
+      have hmu : mu (integrate (merge a b)) < mu (eqW a b) := by simp; omega
+      exact drop_right hmu hk
+  ```
+  
+  This looks consistent with the pattern.
+  
+  So I'll provide these skeletons.

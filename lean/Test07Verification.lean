@@ -1,0 +1,4 @@
+import Test07Verification.AdditiveDuplicationObstruction
+import Test07Verification.FacDirectMethodObstructions
+import Test07Verification.FacSimplificationOrderObstruction
+import Test07Verification.StrictMonotoneInterpretationObstruction

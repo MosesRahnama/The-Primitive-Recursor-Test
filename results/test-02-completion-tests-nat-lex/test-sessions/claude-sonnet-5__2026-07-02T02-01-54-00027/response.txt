@@ -1,0 +1,115 @@
+## Analysis
+
+Each case reduces to the same two‑step recipe used in the solved cases:
+
+1. Determine whether `kappa` strictly drops (use `drop_left`), or
+2. `kappa` ties and `mu` strictly drops (use `drop_right`).
+
+For most rules this requires only unfolding `kappa`/`mu` with `simp` and finishing the arithmetic with `omega`. For `R_int_delta`, `R_rec_zero`, and `R_eq_refl` the two branches of the `Nat.max` (or the comparison against `void`'s zero contribution) force a genuine case split, exactly like the `merge` proofs but with an extra `Nat.eq_zero_or_pos`/`le_or_lt` split. `R_eq_diff` needs no split at all (kappa provably ties unconditionally). `R_rec_succ` is structurally the hardest: it requires case analysis on the shape of the recursion argument `n`, and one branch (`n = delta t`, i.e. recursing on numerals ≥ 2) exposes that `kappa`'s single‑layer `delta`‑check together with `mu`'s full `delta`‑transparency cannot certify a strict decrease with the measure as given — that branch is flagged rather than falsely "closed".
+
+```lean
+-- integrate (delta t) --> void
+| _, _, Step.R_int_delta t => by
+    rcases Nat.eq_zero_or_pos (kappa t) with h0 | hpos
+    · -- kappa ties (0 = kappa t), mu strictly drops (0 < 1 + mu t)
+      have hk  : kappa void = kappa (integrate (delta t)) := by
+        simp [h0]
+      have hmu : mu void < mu (integrate (delta t)) := by
+        simp; omega
+      exact drop_right hmu hk
+    · -- kappa strictly drops: 0 < kappa t
+      have hk : kappa void < kappa (integrate (delta t)) := by
+        simp; omega
+      exact drop_left hk
+
+-- recDelta b s void --> b
+| _, _, Step.R_rec_zero b s => by
+    rcases le_or_lt (kappa s) (kappa b) with hle | hlt
+    · -- kappa s ≤ kappa b ⇒ max(kappa b, kappa s) = kappa b, kappa ties;
+      -- mu strictly drops since mu(recDelta b s void) = 3 + mu b + mu s
+      have hk  : kappa b = kappa (recDelta b s void) := by
+        simp [kappa]; omega
+      have hmu : mu b < mu (recDelta b s void) := by
+        simp; omega
+      exact drop_right hmu hk
+    · -- kappa b < kappa s ⇒ kappa strictly drops
+      have hk : kappa b < kappa (recDelta b s void) := by
+        simp [kappa]; omega
+      exact drop_left hk
+
+-- recDelta b s (delta n) --> app s (recDelta b s n)
+| _, _, Step.R_rec_succ b s n => by
+    cases n with
+    | void =>
+        have hk : kappa (app s (recDelta b s void))
+                    < kappa (recDelta b s (delta void)) := by
+          simp [kappa]; omega
+        exact drop_left hk
+    | delta t =>
+        -- Here the argument to recDelta is itself `delta t`.  Because
+        -- `kappa` only inspects the *outermost* shape of the third
+        -- argument (and is fully transparent through nested `delta`s),
+        --   kappa (recDelta b s (delta (delta t))) = max(max(kappa b,kappa s),kappa t)+1
+        --   kappa (recDelta b s (delta t))          = max(max(kappa b,kappa s),kappa t)+1
+        -- are literally equal, so kappa ties.  A direct computation of
+        -- `mu` in this branch gives
+        --   mu (app s (recDelta b s (delta t)))
+        --     = mu (recDelta b s (delta (delta t))) + (1 + mu s),
+        -- i.e. mu *increases*, not decreases.  The measure (kappa, mu) as
+        -- given therefore does not certify this instance; a fix would
+        -- require a genuine "delta-chain depth" measure that recurses
+        -- through nested `delta`s instead of collapsing them.
+        sorry
+    | integrate t =>
+        have hk : kappa (app s (recDelta b s (integrate t)))
+                    < kappa (recDelta b s (delta (integrate t))) := by
+          simp [kappa]; omega
+        exact drop_left hk
+    | merge a c =>
+        have hk : kappa (app s (recDelta b s (merge a c)))
+                    < kappa (recDelta b s (delta (merge a c))) := by
+          simp [kappa]; omega
+        exact drop_left hk
+    | app a c =>
+        have hk : kappa (app s (recDelta b s (app a c)))
+                    < kappa (recDelta b s (delta (app a c))) := by
+          simp [kappa]; omega
+        exact drop_left hk
+    | recDelta a c d =>
+        have hk : kappa (app s (recDelta b s (recDelta a c d)))
+                    < kappa (recDelta b s (delta (recDelta a c d))) := by
+          simp [kappa]; omega
+        exact drop_left hk
+    | eqW a c =>
+        have hk : kappa (app s (recDelta b s (eqW a c)))
+                    < kappa (recDelta b s (delta (eqW a c))) := by
+          simp [kappa]; omega
+        exact drop_left hk
+
+-- eqW a a --> void
+| _, _, Step.R_eq_refl a => by
+    rcases Nat.eq_zero_or_pos (kappa a) with h0 | hpos
+    · have hk  : kappa void = kappa (eqW a a) := by
+        simp [h0]
+      have hmu : mu void < mu (eqW a a) := by
+        simp; omega
+      exact drop_right hmu hk
+    · have hk : kappa void < kappa (eqW a a) := by
+        simp; omega
+      exact drop_left hk
+
+-- eqW a b --> integrate (merge a b)
+| _, _, Step.R_eq_diff a b => by
+    -- kappa ties unconditionally: both sides equal max(kappa a, kappa b)
+    have hk  : kappa (integrate (merge a b)) = kappa (eqW a b) := by
+      simp
+    -- mu strictly drops: 3 + mu a + mu b < 4 + mu a + mu b
+    have hmu : mu (integrate (merge a b)) < mu (eqW a b) := by
+      simp; omega
+    exact drop_right hmu hk
+```
+
+### Notes on the `sorry` left in `R_rec_succ`
+
+- Six of the seven shapes of `n` (`void`, `integrate`, `merge`, `app`, `recDelta`, `eqW`) genuinely give a strict `kappa` decrease, because in those cases `kappa (recDelta b s n)` drops the `+1` that `kappa (recDelta b s (delta n))` carries, and `app`'s outer `max` cannot restore it (`kappa s` is always dominated).
+- The `delta t` shape is the numeral-successor case (`n` is itself `delta`-headed, i.e. the counter is ≥ 2). There `kappa`'s one-layer check makes both sides tie, and the extra `app s (...)` wrapper strictly *increases* `mu`. Certifying this instance would need a strengthened measure (e.g. one that counts the full nesting depth of `delta` rather than being transparent to it), which is outside the scope of the given `kappa`/`mu` pair; hence it is left explicit as the remaining proof obligation rather than being incorrectly discharged.

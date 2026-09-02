@@ -1,0 +1,94 @@
+An assessment of the provided Lean 4 file reveals that the helper strategy, and the `kappa` measure in general, is **not sound** for proving termination of the `Step` rewrite system as written.
+
+The fundamental requirement for a measure `m : T -> Nat` to prove termination of a rewrite system `a -> b` is that for every possible rewrite, `m(b) < m(a)`. The `kappa` function fails to satisfy this condition for most of the rewrite rules.
+
+### Analysis of `kappa` for Each Rewrite Rule
+
+Let's calculate the change in `kappa` for each `Step` constructor.
+
+1.  **`R_int_delta`**: `Step (integrate (delta t)) void`
+    *   `kappa (integrate (delta t))` = `kappa (delta t)` = `kappa t`
+    *   `kappa void` = 0
+    *   The required condition is `0 < kappa t`. This is not always true. For example, if `t` is `void`, then `kappa t` is 0, and the inequality `0 < 0` is false. The measure does not strictly decrease.
+
+2.  **`R_merge_void_left`**: `Step (merge void t) t`
+    *   `kappa (merge void t)` = `Nat.max (kappa void) (kappa t)` = `Nat.max 0 (kappa t)` = `kappa t`
+    *   `kappa t` = `kappa t`
+    *   The measure is non-increasing (`kappa t < kappa t` is false).
+
+3.  **`R_merge_void_right`**: `Step (merge t void) t`
+    *   `kappa (merge t void)` = `Nat.max (kappa t) (kappa void)` = `Nat.max (kappa t) 0` = `kappa t`
+    *   `kappa t` = `kappa t`
+    *   The measure is non-increasing.
+
+4.  **`R_merge_cancel`**: `Step (merge t t) t`
+    *   `kappa (merge t t)` = `Nat.max (kappa t) (kappa t)` = `kappa t`
+    *   `kappa t` = `kappa t`
+    *   The measure is non-increasing.
+
+5.  **`R_rec_zero`**: `Step (recDelta b s void) b`
+    *   `kappa (recDelta b s void)`: This falls into the general case for `recDelta`, not the `delta n` case.
+        *   `kappa (recDelta b s void)` = `Nat.max (Nat.max (kappa b) (kappa s)) (kappa void)` = `Nat.max (kappa b) (kappa s)`
+    *   `kappa b`
+    *   The required condition is `kappa b < Nat.max (kappa b) (kappa s)`. This only holds if `kappa s > kappa b`. If `kappa s <= kappa b`, the inequality becomes `kappa b < kappa b`, which is false. The measure does not strictly decrease in all cases.
+
+6.  **`R_eq_refl`**: `Step (eqW a a) void`
+    *   `kappa (eqW a a)` = `Nat.max (kappa a) (kappa a)` = `kappa a`
+    *   `kappa void` = 0
+    *   The required condition `0 < kappa a` fails if `a` is `void`.
+
+7.  **`R_eq_diff`**: `Step (eqW a b) (integrate (merge a b))`
+    *   `kappa (eqW a b)` = `Nat.max (kappa a) (kappa b)`
+    *   `kappa (integrate (merge a b))` = `kappa (merge a b)` = `Nat.max (kappa a) (kappa b)`
+    *   The measure is non-increasing.
+
+8.  **`R_rec_succ`**: `Step (recDelta b s (delta n)) (app s (recDelta b s n))`
+    *   This is the one rule where `kappa` *does* strictly decrease.
+    *   LHS: `kappa (recDelta b s (delta n))` = `Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1`
+    *   RHS: `kappa (app s (recDelta b s n))` = `Nat.max (kappa s) (kappa (recDelta b s n))`
+    *   Let `M = Nat.max (kappa b) (kappa s)`. By definition, `kappa s <= M`.
+    *   The value `kappa (recDelta b s n)` depends on the form of `n`.
+        *   If `n` is `delta _`, `kappa (recDelta b s n)` is `Nat.max M (kappa n') + 1` for `n = delta n'`.
+        *   If `n` is not `delta _`, `kappa (recDelta b s n)` is `Nat.max M (kappa n)`.
+    *   In either case, we can observe that `M <= kappa (recDelta b s n)`. Since we also know `kappa s <= M`, it follows that `kappa s <= kappa (recDelta b s n)`.
+    *   Therefore, `Nat.max (kappa s) (kappa (recDelta b s n))` simplifies to `kappa (recDelta b s n)`.
+    *   The required inequality is `kappa (recDelta b s n) < Nat.max M (kappa n) + 1`.
+    *   This inequality holds. For instance, in the simpler case where `n` is not `delta _`, it becomes `Nat.max M (kappa n) < Nat.max M (kappa n) + 1`, which is true.
+
+### Analysis of the Helper Theorems
+
+The helper strategy focuses specifically on the `R_rec_succ` rule, but it is also flawed.
+
+1.  **`theorem kappa_rec_delta_step` is False**
+
+    The theorem claims `kappa (recDelta b s (delta n)) = kappa (recDelta b s n) + 1` for all `n`. This is not true.
+
+    **Calculation:**
+    *   LHS: `kappa (recDelta b s (delta n))` = `Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1`
+    *   RHS: `kappa (recDelta b s n) + 1`
+
+    Let's pick a counterexample. Let `n` be `delta t`.
+    *   LHS: `kappa (recDelta b s (delta (delta t)))` = `Nat.max (Nat.max (kappa b) (kappa s)) (kappa (delta t)) + 1` = `Nat.max (Nat.max (kappa b) (kappa s)) (kappa t) + 1`
+    *   RHS: `kappa (recDelta b s (delta t)) + 1` = `(Nat.max (Nat.max (kappa b) (kappa s)) (kappa t) + 1) + 1`
+
+    Here, `LHS = RHS - 1`, so the equality does not hold. The lemma is only true if `n` is a term whose constructor is not `delta`.
+
+2.  **`theorem kappa_rec_succ_drop` is True, but the Proof Strategy is Unsound**
+
+    The theorem claims `kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n))`. As shown in the analysis of rule `R_rec_succ` above, this statement is **true**.
+
+    However, the proposed proof sketch is:
+    ```lean
+    rw [kappa_rec_delta_step]
+    sorry
+    ```
+    This strategy is unsound because it relies on rewriting with `kappa_rec_delta_step`, which is a false lemma. A proof cannot be built upon a false statement. While the goal is provable, the specific path laid out by the helper theorems is not valid.
+
+### Conclusion
+
+The strategy is **not sound** for the following reasons:
+
+1.  **The Measure Fails:** The `kappa` function does not strictly decrease for 7 out of the 8 rewrite rules. A measure that is non-increasing for even one rule is insufficient to prove termination for the whole system.
+2.  **The Key Lemma is False:** The helper theorem `kappa_rec_delta_step` is false as stated, making the proposed proof strategy for `kappa_rec_succ_drop` invalid.
+
+Therefore, `kappa` cannot be used to prove termination of the `Step` relation. A different, likely more complex, measure would be required, perhaps a lexicographic combination of `kappa` and another measure that handles the other cases.

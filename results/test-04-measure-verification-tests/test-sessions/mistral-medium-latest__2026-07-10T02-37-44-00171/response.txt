@@ -1,0 +1,79 @@
+Let's analyze the termination measure proposed in the Lean 4 file. The measure is defined as a pair `(phase t, cost t)` where:
+
+1. `phase t` is:
+   - 1 if `t` is of the form `recDelta b s (delta n)`
+   - 0 otherwise
+
+2. `cost t` is a recursive function that assigns a natural number to each trace constructor, with:
+   - `void` having cost 0
+   - Other constructors having cost 1 plus the sum of their subterms' costs (with some variations like `eqW` having base cost 3)
+
+The termination measure uses lexicographic ordering on these pairs.
+
+### Soundness Assessment
+
+For a termination measure to be sound, it must satisfy:
+1. It must be well-founded (no infinite descending chains)
+2. For every rewrite rule `Step t1 t2`, we must have `measure t1 > measure t2` in the lexicographic order
+
+Let's check each rewrite rule:
+
+1. `R_int_delta`: `integrate (delta t) → void`
+   - `measure (integrate (delta t)) = (0, 1 + cost (delta t)) = (0, 1 + 1 + cost t) = (0, 2 + cost t)`
+   - `measure void = (0, 0)`
+   - `(0, 2 + cost t) > (0, 0)` holds since `2 + cost t > 0`
+
+2. `R_merge_void_left`: `merge void t → t`
+   - `measure (merge void t) = (0, 1 + cost void + cost t) = (0, 1 + 0 + cost t) = (0, 1 + cost t)`
+   - `measure t` depends on `t`, but in all cases `1 + cost t > cost t`, so `(0, 1 + cost t) > (0, cost t)` holds
+
+3. `R_merge_void_right`: `merge t void → t`
+   - Similar to above, `(0, 1 + cost t + 0) > (0, cost t)` holds
+
+4. `R_merge_cancel`: `merge t t → t`
+   - `measure (merge t t) = (0, 1 + cost t + cost t) = (0, 1 + 2*cost t)`
+   - `measure t` is `(phase t, cost t)`
+   - We need `(0, 1 + 2*cost t) > (phase t, cost t)`
+   - If `phase t = 0`, then we need `1 + 2*cost t > cost t` which holds
+   - If `phase t = 1`, then we need `0 > 1` in the first component, which fails
+   - **Problem**: If `t` is `recDelta b s (delta n)`, then `phase t = 1`, and `(0, ...) > (1, ...)` is false in lex order
+
+5. `R_rec_zero`: `recDelta b s void → b`
+   - `measure (recDelta b s void) = (0, 1 + cost b + cost s + cost void) = (0, 1 + cost b + cost s)`
+   - `measure b` is `(phase b, cost b)`
+   - We need `(0, 1 + cost b + cost s) > (phase b, cost b)`
+   - If `phase b = 0`, then we need `1 + cost b + cost s > cost b` which holds
+   - If `phase b = 1`, then we need `0 > 1` in the first component, which fails
+   - **Problem**: If `b` is `recDelta ... (delta ...)`, then `phase b = 1`, and the measure doesn't decrease
+
+6. `R_rec_succ`: `recDelta b s (delta n) → app s (recDelta b s n)`
+   - `measure (recDelta b s (delta n)) = (1, 1 + cost b + cost s + cost (delta n)) = (1, 1 + cost b + cost s + 1 + cost n) = (1, 2 + cost b + cost s + cost n)`
+   - `measure (app s (recDelta b s n)) = (phase (app s (recDelta b s n)), cost (app s (recDelta b s n)))`
+     - `phase (app s (recDelta b s n))` is 0 unless `app s (recDelta b s n)` is `recDelta ... (delta ...)`, which it's not
+     - So phase is 0
+     - `cost (app s (recDelta b s n)) = 1 + cost s + cost (recDelta b s n) = 1 + cost s + (1 + cost b + cost s + cost n) = 2 + cost b + 2*cost s + cost n`
+   - We need `(1, 2 + cost b + cost s + cost n) > (0, 2 + cost b + 2*cost s + cost n)`
+   - First component: `1 > 0` holds, so the pair comparison holds regardless of the second component
+   - This rule is fine
+
+7. `R_eq_refl`: `eqW a a → void`
+   - `measure (eqW a a) = (0, 3 + cost a + cost a) = (0, 3 + 2*cost a)`
+   - `measure void = (0, 0)`
+   - `(0, 3 + 2*cost a) > (0, 0)` holds
+
+8. `R_eq_diff`: `eqW a b → integrate (merge a b)`
+   - `measure (eqW a b) = (0, 3 + cost a + cost b)`
+   - `measure (integrate (merge a b)) = (0, 1 + cost (merge a b)) = (0, 1 + 1 + cost a + cost b) = (0, 2 + cost a + cost b)`
+   - `(0, 3 + cost a + cost b) > (0, 2 + cost a + cost b)` holds
+
+### Conclusion
+
+The measure is **not sound** because there exist rewrite rules (`R_merge_cancel` and `R_rec_zero`) where the measure does not strictly decrease when the right-hand side has `phase = 1` and the left-hand side has `phase = 0`.
+
+For example, consider `t = recDelta b s (delta n)` (which has `phase t = 1`):
+- `merge t t → t` would have `measure (merge t t) = (0, 1 + 2*cost t)` and `measure t = (1, cost t)`
+- But `(0, 1 + 2*cost t)` is not greater than `(1, cost t)` in lex order (since `0 < 1`)
+
+Similarly for `R_rec_zero` when `b` has `phase b = 1`.
+
+Thus, the proposed lexicographic termination measure is **not sound** for this rewrite system.

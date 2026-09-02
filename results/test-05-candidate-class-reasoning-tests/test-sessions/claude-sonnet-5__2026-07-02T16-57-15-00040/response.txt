@@ -1,0 +1,65 @@
+## Overview
+
+To certify termination of `Step` via a measure `μ : Trace → Nat`, we need `μ(t) > μ(t')` for **every** instance of **every** one of the eight rules. I checked all eight rules against `mu1`, `mu2`, `mu3`. Seven of the eight rules are handled correctly by all three candidates (with varying margins), but **all three candidates fail on `R_rec_succ`**, and for the same structural reason.
+
+## The seven "easy" rules
+
+For all three measures, straightforward computation shows strict decrease:
+
+- **R_int_delta**: `μ(integrate (delta t))` has an extra `1` or `2`-plus-`1` on top of `μ t`, target is `0`. ✔ for all three.
+- **R_merge_void_left/right**: `μ(merge void t) = c + μ t > μ t` (`c = 1` or `2`). ✔ for all three.
+- **R_merge_cancel**: `μ(merge t t) = c + 2μ t > μ t`. ✔ for all three.
+- **R_rec_zero**: `μ(recDelta b s void) = k + μ b + μ s > μ b`. ✔ for all three.
+- **R_eq_refl**: `μ(eqW a a) = c + 2μ a > 0`. ✔ for all three.
+- **R_eq_diff**: `μ(eqW a b)` exceeds `μ(integrate (merge a b))` by exactly `1` in every candidate (`3` vs `2+1`, `5` vs `2+2+1`... all work out to a margin of `1`). ✔ for all three.
+
+So the "budget" chosen for `integrate`, `merge`, `eqW` is generous enough everywhere.
+
+## The fatal rule: `R_rec_succ`
+
+```
+recDelta b s (delta n)  --->  app s (recDelta b s n)
+```
+
+Write each candidate's `recDelta`-clause as `k + p·μb + q·μs + r·μn`, and its `app`-clause as `j + x·μa + y·μb`. Substituting:
+
+- **source** = `μ(recDelta b s (delta n))` = `(k+r) + p·μb + q·μs + r·μn`
+- **target** = `μ(app s (recDelta b s n))` = `(j+k) + p·μb + (x + y·q)·μs + r·μn`  (using `y·p = p`, `y·r=r` since here `y=1` in all three)
+
+For `source > target` to hold for **all** `μb, μs, μn ≥ 0`, we'd need the coefficient of `μs` to satisfy `x + y·q ≤ q`, i.e. (since `y = 1` for `app` in *all three* candidates) `x ≤ 0`. But every candidate sets `x = 1` (the "a"-slot of `app`, occupied here by `s`, always gets weight `1`). This is impossible — the inequality is violated for every choice of `b, s, n`, independent of the constants `k, j, p, q, r`.
+
+Concretely, `target − source = μ(s) + (j − r)`:
+
+| Measure | `j` (app const) | `r` (recDelta·n coeff) | `target − source` |
+|---|---|---|---|
+| `mu1` | 1 | 1 | `μ1(s) + 0` |
+| `mu2` | 1 | 1 | `μ2(s) + 0` |
+| `mu3` | 2 | 1 | `μ3(s) + 1` |
+
+So:
+
+- **`mu1`, `mu2`**: fail whenever `μ(s) > 0` (measure strictly *increases*); only weakly non-decreasing (equal) when `s = void`. Never strictly decreasing.
+- **`mu3`**: fails **unconditionally** — `target > source` even when `s = void`, since the constant offset alone (`j − r = 1`) already breaks it.
+
+### Concrete witness
+
+Take `b = void`, `s = delta void`, `n = void`, so the redex is
+`recDelta void (delta void) (delta void) → app (delta void) (recDelta void (delta void) void)`.
+
+- `mu1`: source `= 3`, target `= 4` (increase).
+- `mu2`: source `= 7`, target `= 8` (increase).
+- `mu3`: source `= 3`, target `= 5` (increase by 2 — worst case).
+
+This confirms the general computation.
+
+## Root cause
+
+`R_rec_succ` duplicates `s`: the successor case re-embeds a **whole copy of `s`** alongside the recursive call `recDelta b s n`. Any purely additive, per-constructor linear measure that gives `app`'s second argument full weight `y = 1` (as all three candidates do — a natural choice, since otherwise the measure would ignore the recursive call's size entirely) inevitably reproduces `s`'s cost undiminished, while the "payment" for the rule (`r · 1` from consuming one `delta` off `n`) does not scale with `μ(s)`. No tuning of the additive constants (`k, j, p, q, r`) can repair this: the defect is structural, not numeric — it would require either giving `app` an asymmetric/zero weight on the recursive-call slot, or moving to a non-linear measure (e.g. one where `s`'s cost is amortized/bounded independent of duplication, or a multiset/lexicographic order tracking `n` as the *primary* decreasing component with `s`, `b` frozen as side arguments).
+
+## Verdict
+
+- **`mu1`** — invalid termination measure; fails `R_rec_succ` (non-strict/increasing whenever `μ(s) > 0`), otherwise fine.
+- **`mu2`** — invalid termination measure; fails `R_rec_succ` in exactly the same pattern as `mu1` (same margin), otherwise fine.
+- **`mu3`** — invalid termination measure; fails `R_rec_succ` even more severely (strictly increases unconditionally, never even weakly compatible), otherwise fine.
+
+None of the three candidates certifies termination of `Step`. All three are correct on the `integrate`/`merge`/`eqW` rules but are refuted by the same counterexample shape on `R_rec_succ`, with `mu3` being strictly the worst of the three (it fails even in the base case `s = void`) and `mu1`/`mu2` being equally (marginally) less broken.

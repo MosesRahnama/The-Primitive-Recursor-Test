@@ -1,0 +1,121 @@
+Let me analyze this rewrite system carefully.
+
+The system has:
+- `void` - a base/terminal term
+- `delta t` - successor-like constructor
+- `integrate t` - reduces to void when applied to delta
+- `merge t1 t2` - merge with void, cancellation
+- `app t1 t2` - application, no rewrite rules shown (so it's stuck)
+- `recΔ b s n` - recursion on delta-encoded naturals
+- `eqW a b` - equality test
+
+Let me think about strong normalization.
+
+Rules:
+1. `integrate (delta t) → void`
+2. `merge void t → t`
+3. `merge t void → t`
+4. `merge t t → t`
+5. `recΔ b s void → b`
+6. `recΔ b s (delta n) → app s (recΔ b s n)`
+7. `eqW a a → void`
+8. `eqW a b → integrate (merge a b)` (when a ≠ b? or always?)
+
+Wait, the rule `R_eq_diff` has no guard that a ≠ b. So it applies to all a, b, including a = b. So `eqW a a` reduces to both `void` and `integrate (merge a a)`. This creates non-deterministic reduction but both targets are in normal form... wait, is `integrate (merge a a)` a normal form? `merge a a → a` is a rule, so `integrate (merge a a) → integrate a` via merge cancellation. And `integrate a` only reduces if a is `delta t`.
+
+Also, `eqW a a → void` and `eqW a a → integrate (merge a a)` then `→ integrate a` (if we reduce merge first). These give different normal forms potentially.
+
+Now, the key question: is the system strongly normalizing?
+
+Let me think. The recursion `recΔ` unfolds with `delta` and terminates at `void`. So if we have a closed term of the form `recΔ b s (delta^k void)`, it reduces to something involving `app s (... recΔ b s void...)` which eventually becomes `app s (... b ...)`.
+
+The question is: can we get non-terminating reductions?
+
+Consider `merge`. Merge is idempotent. `integrate (delta t) → void`. So we can get `integrate (delta t) → void`, and then stuck (no rule applies to void in a context... actually void appears as a term but there's no rule that fires on void itself).
+
+What about `eqW`? `eqW a b → integrate (merge a b)`. The merge then reduces, and if the result is `delta x`, integrate reduces to void. If the result is not a delta (e.g., it's `void`, or `app ...`, or `recΔ ...`), then integrate is stuck.
+
+So `eqW void void → integrate (merge void void) → integrate void`. Then `integrate void` is in normal form (no rule fires — `R_int_delta` requires the argument to be `delta t`).
+
+Hmm wait, `eqW void void` could also go directly to `void` via `R_eq_refl`.
+
+Now the real question: is this system SN?
+
+Let me think of potential non-termination. The rules are:
+- integrate: only fires on `delta` argument
+- merge: void-annihilation and idempotent
+- recΔ: recursion through delta
+- eqW: refl → void; else → integrate(merge a b)
+
+All these rules strictly decrease some measure? Let me see.
+
+For `recΔ b s (delta n) → app s (recΔ b s n)`: the recursive call has `n` which is the predecessor. If we measure by "the delta-depth of the recursion counter", this strictly decreases. Eventually hits `void` and stops.
+
+For `eqW a b → integrate (merge a b)`: no recursion, just a redex that fires once.
+
+For merge: decreases term size strictly (eliminating one of the arguments when equal, or both void).
+
+For integrate: removes the wrapper.
+
+So intuitively, each rule fires at most once on a given subterm, and strictly decreases size... but wait, `app s (recΔ b s n)` has the same size as `recΔ b s (delta n)`, just rearranged with an `app` wrapping. The recursive subterm is smaller (n vs delta n), so by induction on the recursion counter, it terminates.
+
+Actually let me think more carefully. The size of `recΔ b s n` vs `app s (recΔ b s n)` — the latter is larger. But the recursive call within it is on `n` which is smaller than `delta n`. So by a lexicographic measure (first on the "outer delta-depth", then on term size), this should terminate.
+
+Hmm, but `app` is a free constructor with no rules. So we can keep building larger terms via `app`, but they don't reduce.
+
+What about `eqW`? After firing, we get `integrate (merge a b)`. Then merge reduces, and if the result is a delta, integrate fires. After integrate fires, we get void, no further reductions.
+
+I think this system is strongly normalizing. The reasoning:
+
+1. Each rewrite rule decreases the "structural size" of the term except `R_rec_succ` which builds an `app` wrapper but decreases the recursion counter inside.
+2. A standard measure: weighted term size where `recΔ` weights the third argument's "delta-depth" heavily. Or, define a well-founded order by recursion on the structure and use induction.
+
+Actually wait, let me reconsider. Is `R_eq_diff` really only firing once? `eqW a b → integrate (merge a b)`. Then merge reduces to some term c. If c = `delta x`, then integrate(c) → void. If c ≠ `delta x`, then integrate(c) is in normal form. Either way, this redex chain is finite.
+
+So each redex fires a bounded number of times (bounded by the rewrite depth within that redex).
+
+But can we create new redexes? The rules only decrease, not increase (except rec_succ creates app, but that's not a redex).
+
+Wait, `R_rec_succ` produces `app s (recΔ b s n)`. The `app` is not a redex. The `recΔ b s n` is a smaller redex (smaller recursion counter). So this is fine.
+
+What about overlaps? `R_eq_refl` and `R_eq_diff` both apply to `eqW a a`. This is non-deterministic but doesn't cause non-termination (both branches terminate).
+
+I think this is strongly normalizing. The standard approach: define a measure like the multiset of "delta-depths of all recΔ counters" plus term size, well-founded.
+
+Actually, simpler: every rule is "size-decreasing" in some sense. Let me check `R_rec_succ`:
+- LHS: `recΔ b s (delta n)`, size = 1 + |b| + |s| + 1 + |n|
+- RHS: `app s (recΔ b s n)`, size = 1 + |s| + 1 + |b| + 1 + |s| + |n|
+
+Wait, RHS is larger! Because we duplicate `s`. Hmm.
+
+But the new redex is `recΔ b s n` with a smaller counter. And we can't apply rules to the `app` wrapper. So the `app` just gets "out of the way" and the inner recΔ gets to fire.
+
+For SN, we'd use a measure that prioritizes the recursion counter. E.g., define a function `f(t)` = max delta-depth of any recΔ counter in t, then term size. Lex order, well-founded.
+
+Actually for first-order rewrite systems without variables, SN is decidable, and we can just check. The system looks SN.
+
+Let me look once more for any non-terminating behavior...
+
+`merge t t → t` — strictly decreases.
+`merge void t → t` — strictly decreases.
+`merge t void → t` — strictly decreases.
+`integrate (delta t) → void` — strictly decreases.
+`recΔ b s void → b` — could increase or decrease depending on b.
+`recΔ b s (delta n) → app s (recΔ b s n)` — could increase term size.
+`eqW a a → void` — could increase or decrease.
+`eqW a b → integrate (merge a b)` — could increase.
+
+But the key invariant: no rule creates a new redex of the same kind that could grow without bound.
+
+For `R_rec_succ`: each application of recΔ decreases the counter by 1 (delta gets consumed). So bounded by counter size.
+
+For `R_eq_diff`: the redex is replaced by a non-redex (merge a b might be a redex, but it reduces to a single term, not an eqW).
+
+I think this is SN.
+
+Conclusion: Yes, strong normalization can be established from the calculus alone. The system is first-order with no variable binding, all rewrite rules are "size-decreasing" in a well-founded sense, and there's no way to create an infinite reduction sequence because:
+1. recΔ recursion is bounded by the delta-depth of the counter
+2. merge/integrate/eqW redexes are one-shot (they become non-redexes after one step)
+3. No rule creates new persistent redexes that could grow
+
+The proof method: standard first-order termination argument, e.g., using a recursive path order or a size-based measure, or simply by induction on the term structure with a "fuel" argument.

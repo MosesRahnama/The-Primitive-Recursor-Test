@@ -1,0 +1,260 @@
+The user wants a raw assessment of whether strong normalization (SN) can be established for the given rewrite calculus in Lean 4.
+
+ First, let's analyze the system:
+
+ 1. **Syntax**:
+    - `void`: A constant (base case)
+    - `delta t`: A unary constructor (successor-like)
+    - `integrate t`: A unary constructor
+    - `merge t1 t2`: Binary constructor (like addition or union)
+    - `app t1 t2`: Binary constructor (application)
+    - `recΔ t1 t2 t3`: Ternary constructor (recursion)
+    - `eqW t1 t2`: Binary constructor (equality witness)
+
+ 2. **Rewrite Rules**:
+    - `R_int_delta`: `integrate (delta t) → void`
+    - `R_merge_void_left`: `merge void t → t`
+    - `R_merge_void_right`: `merge t void → t`
+    - `R_merge_cancel`: `merge t t → t`
+    - `R_rec_zero`: `recΔ b s void → b`
+    - `R_rec_succ`: `recΔ b s (delta n) → app s (recΔ b s n)`
+    - `R_eq_refl`: `eqW a a → void`
+    - `R_eq_diff`: `eqW a b → integrate (merge a b)`
+
+ 3. **Key Observations**:
+    - The system is first-order (no binding constructs like λ-abstraction or ∀)
+    - No external memory or imported axioms
+    - We need to check for strong normalization: does every reduction sequence terminate?
+
+ 4. **Potential issues**:
+    - The `recΔ` rule for successor looks like it could create infinite loops if `s` contains something that grows, but actually, it unfolds recursion once and applies `s` to the recursive call.
+    - Wait, looking at `R_rec_succ`: `recΔ b s (delta n) → app s (recΔ b s n)`. This decreases the size of the third argument (from `delta n` to `n`), so that's well-founded.
+    - But what about `app`? There are no rules for `app`! That's crucial. `app` is a constructor with no rewrite rules, so it's just a binary operator that doesn't reduce.
+    - Wait, looking again... `app` appears in the conclusion of `R_rec_succ`, but there are no rules reducing `app` itself. So `app` acts like a pair constructor or application that doesn't compute further.
+
+ 5. **Critical analysis**:
+    - `R_eq_diff`: `eqW a b → integrate (merge a b)`. This could potentially increase the size of the term.
+    - But does it lead to infinite reduction?
+    - Let's trace possible reductions:
+      - `integrate (delta t) → void` (decreases size)
+      - `merge` rules decrease size or keep it same (cancel)
+      - `recΔ` rules decrease the size of the third argument
+      - `eqW` rules: `eqW a a → void` (decreases), `eqW a b → integrate (merge a b)` (increases?)
+
+    - The problematic rule is `R_eq_diff`: it replaces `eqW a b` with `integrate (merge a b)`. If `a` and `b` are arbitrary, `merge a b` could be larger than `eqW a b` in some measure, but we need to check if this can loop.
+
+    - Actually, looking at the structure:
+      - `eqW a b` reduces to `integrate (merge a b)`.
+      - Then `merge a b` might reduce if `a` or `b` is `void` or if `a = b`.
+      - But `integrate` only reduces if its argument is `delta t`.
+      - So if `merge a b` doesn't reduce to `delta t`, then `integrate (merge a b)` is a normal form (assuming `merge` is in normal form).
+
+    - Wait, is there any interaction that creates a loop?
+      - Could `integrate (merge a b)` reduce back to something containing `eqW`? No, none of the rules introduce `eqW` in the right-hand side except... actually, looking carefully, none of the right-hand sides contain `eqW` except... wait, no, none do.
+      - RHS of `R_eq_diff` is `integrate (merge a b)` - no `eqW`.
+      - So once we hit `eqW`, we either go to `void` (if reflexive) or to `integrate (merge a b)`.
+
+    - Is there any rule that can increase the "size" indefinitely?
+      - The only rule that might increase size is `R_eq_diff`, but it eliminates `eqW`.
+      - After applying `R_eq_diff`, we have `integrate (merge a b)`.
+      - `merge` can be reduced by void rules or cancel, all of which decrease size or keep it same (cancel replaces `merge t t` with `t`, which is smaller).
+      - `integrate` only reduces when applied to `delta t`.
+
+    - Actually, let's check for confluence or termination more carefully.
+
+    - **Termination Argument**:
+      We can try to define a well-founded measure that decreases with each step.
+
+      Let's try structural induction or a multiset ordering.
+
+      Define a measure `|t|`:
+      - `|void| = 1`
+      - `|delta t| = |t| + 1`
+      - `|integrate t| = |t| + 1`
+      - `|merge t1 t2| = |t1| + |t2| + 1`
+      - `|app t1 t2| = |t1| + |t2| + 1`
+      - `|recΔ t1 t2 t3| = |t1| + |t2| + |t3| + 1` (or maybe something exponential?)
+      - `|eqW t1 t2| = |t1| + |t2| + 1`
+
+      Check each rule:
+      1. `integrate (delta t) → void`: LHS size = (|t|+1)+1 = |t|+2, RHS = 1. Decreases.
+      2. `merge void t → t`: LHS = 1 + |t| + 1 = |t|+2, RHS = |t|. Decreases.
+      3. `merge t void → t`: Similar, decreases.
+      4. `merge t t → t`: LHS = |t|+|t|+1 = 2|t|+1, RHS = |t|. Decreases if |t| ≥ 1.
+      5. `recΔ b s void → b`: LHS = |b|+|s|+1+1 = |b|+|s|+2, RHS = |b|. Decreases.
+      6. `recΔ b s (delta n) → app s (recΔ b s n)`:
+         LHS = |b|+|s|+(|n|+1)+1 = |b|+|s|+|n|+2
+         RHS = |s| + (|b|+|s|+|n|+1) + 1 = |b|+2|s|+|n|+2
+         This is larger if |s| > 0!
+
+      Oh no, the recursion rule increases the size if we use a simple size metric. The step case replaces the third argument `delta n` (size |n|+1) with `recΔ b s n` (size |b|+|s|+|n|+1), and wraps it in `app s (...)`, so total size includes an extra copy of `s`.
+
+      This looks like it could be problematic. If `s` is non-void, the term grows.
+
+      However, we need to check if this leads to non-termination. The recursion is structural on the third argument (from `delta n` to `n`), but the body `s` is duplicated/wrapped around the recursive call.
+
+      This resembles primitive recursion: `rec b s 0 = b`, `rec b s (n+1) = s (rec b s n)`.
+      In a standard rewrite system for primitive recursion, this is terminating because the third argument decreases (is structurally smaller), even though the output might be larger.
+
+      But in structural term rewriting systems, we usually require a well-founded order compatible with the rules.
+
+      The standard approach for primitive recursion is to use a lexicographic order or a weighted size where `recΔ` has a large weight on its third argument.
+
+      Let's try: define `|t|` as the size of the term, but `|recΔ b s n| = ω * |n| + |b| + |s|` or something similar, where ω is an ordinal.
+
+      Actually, we can use the lexicographic order on the tuple (size of third argument of recΔ, total size).
+
+      More precisely: assign to each term a pair (n, m) where n is the "depth" of nested recΔ in the third argument, and m is the total size.
+
+      But we need to be careful with `app`. The rule `R_rec_succ` creates `app s (recΔ b s n)`. If `s` contains `recΔ` itself, or if later rules reduce `app`, we might have issues. But there are no rules for `app`.
+
+      So `app` is just a constructor. Once `R_rec_succ` fires, we have an `app` node. This `app` node will never be reduced further because there are no rules for `app`.
+
+      Therefore, the only way to get non-termination is if we can create an infinite sequence of `recΔ` reductions. But each `recΔ` reduction either:
+      - Removes the recΔ entirely (base case)
+      - Reduces the third argument from `delta n` to `n` (step case)
+
+      Since `n` is structurally smaller than `delta n`, and there are no rules that increase the depth of the third argument of a recΔ (in fact, no rules match inside the arguments of recΔ except when recΔ itself is the redex), the recursion is well-founded.
+
+      Wait, but after `R_rec_succ`, we have `app s (recΔ b s n)`. Could the `recΔ` inside be reduced? Yes, if `n` is `void` or `delta n'`, it can reduce further.
+
+      So the reduction proceeds as:
+      `recΔ b s (delta (delta ... (delta void)...))` → `app s (recΔ b s (delta ... (delta void)...))` → ... → nested `app s (app s (... (recΔ b s void)...))` → ... → `app s (app s (... b...))`.
+
+      This terminates because the number of `delta` constructors in the third argument decreases with each step.
+
+      So recΔ is safe.
+
+    - Now check `eqW`:
+      - `eqW a a → void`: decreases
+      - `eqW a b → integrate (merge a b)`: replaces eqW with integrate+merge.
+        - If `a` and `b` are normal forms (or just arbitrary), we then need to reduce `merge a b`.
+        - `merge` reductions decrease the size (as shown above).
+        - `integrate` only reduces if the argument is `delta t`.
+        - Could `merge a b` become `delta t`? Only if `a` or `b` is `delta t` and the other is `void` (but then we'd use void rules), or if `a = b = delta t` (then we get `delta t` from cancel).
+        - So if `a = b = delta t`, then:
+          `eqW (delta t) (delta t)` → `void` (by refl), not the diff rule. The refl rule takes precedence? Actually, in rewriting systems, we usually consider that if multiple rules apply, any can be chosen. But `eqW a a` matches the first rule, so it would reduce to `void`.
+        - If `a ≠ b`, we go to `integrate (merge a b)`.
+        - If `merge a b` reduces to `delta t`, then `integrate` reduces to `void`.
+        - So no infinite loop there.
+
+    - Is there any way to create a cycle?
+      - The only "expanding" rule is `R_eq_diff`, but it consumes `eqW` and produces `integrate` and `merge`, neither of which can recreate `eqW`.
+      - All other rules decrease some standard measure (like weighted size).
+
+    - **Potential issue**: Overlap between `R_eq_refl` and `R_eq_diff`.
+      When `a = b`, both could apply (if we interpret `R_eq_diff` as requiring `a ≠ b`, but the formal statement says `∀ a b`, so it applies to all including when `a = b`).
+      However, even if we apply `R_eq_diff` to `eqW a a`, we get `integrate (merge a a)`.
+      Then `merge a a → a` by cancel.
+      Then we have `integrate a`.
+      If `a` is `delta t`, this reduces to `void`.
+      If `a` is not `delta t`, this is a normal form.
+      So no infinite loop, just a different normal form (potentially). This is a confluence issue, not a termination issue.
+
+    - **Conclusion on SN**: The system appears to be strongly normalizing. We can prove this by defining a well-founded measure.
+
+      One standard method: assign to each term an ordinal (or natural number with a carefully chosen weighting) that decreases.
+
+      Let's try to assign weights:
+      - Let `w(void) = 1`
+      - `w(delta t) = w(t) + 1`
+      - `w(integrate t) = w(t) + 1` if t is not of form `delta t'`, else 1... actually, we need to account for the reduction.
+      - Better: use the lexicographic path ordering or a polynomial interpretation.
+
+      Actually, a simpler approach: The system is an orthogonal (or almost orthogonal) first-order term rewriting system. We can check for termination using standard techniques.
+
+      Key observations:
+      1. `recΔ` is primitive recursive schema - terminates.
+      2. `merge` with void and cancel rules - terminates (it's like idempotent monoid with unit).
+      3. `integrate` with `delta` - terminates.
+      4. `eqW` - terminates because it either disappears (refl) or becomes `integrate (merge ...)` which terminates.
+
+      The interaction between them: since `recΔ` doesn't appear in any LHS except its own rules, and `eqW` doesn't appear in any RHS, and `merge` doesn't appear in LHS of other rules... actually, let's check:
+
+      - `integrate` appears in LHS of `R_int_delta` and RHS of `R_eq_diff`.
+      - `merge` appears in LHS of void and cancel rules, and RHS of `R_eq_diff`.
+      - `void` appears everywhere.
+
+      So there is a dependency: `eqW` → `integrate` + `merge`.
+      But `integrate` and `merge` are "lower" in the sense that they don't produce `eqW`.
+
+      This forms a termination ordering:
+      - `eqW` > `integrate`, `merge` (in the term ordering sense)
+      - `recΔ` > `app` (but `app` is not reducible anyway)
+
+      We can define a recursive path ordering (RPO) or use the size measure with a twist for `recΔ`.
+
+      For `recΔ`, we can use: `|recΔ b s n| = 2 * |n| + |b| + |s| + 1`.
+      Then for `R_rec_succ`:
+      LHS: `|recΔ b s (delta n)| = 2*(|n|+1) + |b| + |s| + 1 = 2|n| + |b| + |s| + 3`
+      RHS: `|app s (recΔ b s n)| = |s| + (2*|n| + |b| + |s| + 1) + 1 = 2|n| + |b| + 2|s| + 2`
+      Compare: LHS = 2|n| + |b| + |s| + 3, RHS = 2|n| + |b| + 2|s| + 2.
+      LHS > RHS if |s| + 3 > 2|s| + 2, i.e., 1 > |s|.
+      So if |s| >= 1, this doesn't work!
+
+      We need a better measure. The standard approach for primitive recursion is to use a lexicographic order: the third argument decreases, and we don't care about the growth of the overall term size because the recursion depth is bounded by the structure of the third argument.
+
+      We can define a measure `μ(t)` that is a multiset or ordinal:
+      - For `recΔ b s n`, the measure is primarily the "height" or "size" of `n` (number of delta constructors), secondarily the size of the whole term.
+
+      Specifically, define `μ(t) = (d(t), s(t))` where:
+      - `d(t)` is the maximum depth of `recΔ` nesting in the third argument (or sum of sizes of third arguments of all recΔ subterms)
+      - `s(t)` is the standard size
+
+      Actually, simpler: Use the lexicographic order on (number of recΔ redexes, weighted size).
+
+      But let's be systematic. This is a first-order TRS. We can check if it's terminating by checking critical pairs and using a reduction ordering.
+
+      However, the question asks for a "raw assessment" and "briefly explain the reasoning". It doesn't require a full formal proof, just whether it can be established and why.
+
+      Given the analysis:
+      - `recΔ` is primitive recursion, which is terminating because the third argument is structurally decreasing (from `delta n` to `n`).
+      - `merge` rules are terminating (confluent and terminating, like idempotent monoid).
+      - `integrate` with `delta` is terminating.
+      - `eqW` rules are terminating (no cycles).
+
+      The only subtlety is the interaction in `R_rec_succ` where the term grows, but this is standard for primitive recursion and is handled by the structural decrease in the recursion argument.
+
+      Therefore, **yes**, strong normalization can be established.
+
+      Wait, I need to be careful. Is there any hidden subtlety?
+
+      Look at `R_eq_diff`: `eqW a b → integrate (merge a b)`.
+      This rule applies to any `a, b`. If `a` or `b` contains `eqW`, then the RHS might contain `integrate (merge ...)` with subterms containing `eqW`?
+      No, `a` and `b` are just variables in the rule, they stand for any term. But the RHS is `integrate (merge a b)`, which contains `a` and `b` as subterms. So if `a` contained `eqW`, now that `eqW` is inside `merge` inside `integrate`.
+
+      But `eqW` inside `a` or `b` would be a sub-redex. So we could have:
+      `eqW (eqW x y) b` → `integrate (merge (eqW x y) b)`.
+      Then we can reduce the inner `eqW x y` to something, etc.
+
+      This doesn't create a loop. The `eqW` nodes are pushed down into `merge` arguments, but they don't come back up. Eventually, all `eqW` are eliminated (either by refl or by diff followed by merge reductions).
+
+      So yes, the system is strongly normalizing.
+
+      **Final check**: Are there any rules that could diverge?
+      - No rule duplicates a redex in a way that creates exponential blowup that could be infinite (like the famous `f(x) -> g(x,x)` with `g` having rules that recreate `f`).
+      - The `recΔ` rule creates an `app` containing a smaller `recΔ`, but `app` is inert, so this is just building a tree that eventually becomes static when the recursion bottoms out.
+
+      **Conclusion**: Strong normalization holds. The reasoning is that we can define a well-founded measure based on:
+      1. The multiset of `eqW` positions (they only decrease)
+      2. For `recΔ`, the structural size of the third argument (standard primitive recursion)
+      3. For `merge` and `integrate`, standard size measures suffice as they reduce term complexity.
+
+      Or more elegantly: use a lexicographic combination of (number of `eqW` and `recΔ` symbols, weighted size) with appropriate weights so that `recΔ` with larger third argument is considered larger than the expanded `app` term.
+
+      Actually, for `recΔ`, we can observe that it defines a function by recursion on the third argument. Each reduction step replaces `recΔ b s (delta n)` with `app s (recΔ b s n)`. The number of `delta` constructors in the third argument strictly decreases. Since there are no rules that increase the number of `delta` constructors in the third argument of a `recΔ` (in fact, no rules apply inside the third argument of `recΔ` except when the whole `recΔ` is the redex), this is well-founded.
+
+      So yes, SN can be established.
+
+      One final check: `R_eq_diff` produces `integrate (merge a b)`. Could `merge a b` create a `delta` that then interacts with `integrate` to create `void`, and could `void` participate in creating `eqW` again?
+      - `void` can be created, but no rule creates `eqW` from scratch. So no.
+
+      Therefore, the assessment is: **Yes, the system is strongly normalizable.**
+
+      The system is first-order, has no variable binding, and the rewrite rules correspond to primitive recursion (recΔ) and straightforward simplification rules (merge, integrate, eqW) that either decrease term size or maintain termination through structural recursion.
+
+      I should mention that the recΔ rule follows the primitive recursion schema which is terminating because the recursive call is on a structurally smaller argument (the predecessor of a delta), despite the apparent size increase in the term.
+
+      Also, eqW either disappears or transforms into integrate/merge which are terminating.
+
+      So the answer is yes.

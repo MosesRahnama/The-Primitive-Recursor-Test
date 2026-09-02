@@ -1,0 +1,54 @@
+## Assessment: The measure is **unsound**
+
+The termination order being proposed is the lexicographic pair `(phase, cost)`, presumably intended so that every `Step t t'` should satisfy `measure t' < measure t` lexicographically. This fails.
+
+### The problem
+
+`phase` is defined by matching only on the **outermost** constructor of the term:
+
+```
+phase : Trace → Nat
+| .recDelta _ _ (.delta _) => 1
+| _ => 0
+```
+
+So `phase` is 1 only when the term is *itself* of the shape `recDelta _ _ (delta _)`; it says nothing about whether such a subterm occurs elsewhere. Several rewrite rules can *introduce* a top-level `recDelta _ _ (delta _)` shape at the root of the result even though the source term's root did not have that shape (because the relevant subterm was buried one level down). This causes `phase` to *increase* rather than decrease.
+
+### Concrete counterexample
+
+Consider the rule
+
+```
+R_merge_void_left : ∀ t, Step (merge void t) t
+```
+
+Instantiate `t := recDelta b s (delta n)` for arbitrary `b s n`. This is a legitimate instance of the rule, giving
+
+```
+Step (merge void (recDelta b s (delta n))) (recDelta b s (delta n))
+```
+
+Now compute the measure on both sides:
+
+- Source `merge void (recDelta b s (delta n))`: the outermost constructor is `.merge`, so `phase = 0`. Its cost is `1 + cost void + cost (recDelta b s (delta n)) = 1 + cost t` where `t = recDelta b s (delta n)`.
+- Target `recDelta b s (delta n)`: this matches the special pattern, so `phase = 1`. Its cost is `cost t`.
+
+So:
+```
+measure source = (0, 1 + cost t)
+measure target = (1, cost t)
+```
+
+Lexicographically, `(1, cost t) > (0, 1 + cost t)` since the first components already decide the order (`1 > 0`). Hence
+
+```
+measure target > measure source
+```
+
+which is the **opposite** of what a sound termination measure requires (`measure target < measure source`).
+
+The same issue arises analogously with `R_merge_void_right`, `R_merge_cancel`, and `R_rec_zero` whenever the term being "unwrapped" (`t` in `merge void t`/`merge t void`/`merge t t`, or `b` in `recDelta b s void`) happens to have the shape `recDelta _ _ (delta _)`: the rewrite step deletes an outer wrapper (`merge`, or the zero-case of `recDelta`) that had `phase = 0`, exposing an inner subterm whose root now matches the `phase = 1` pattern. This spuriously *increases* the first (higher-priority) component of the lexicographic measure, which no decrease in `cost` can compensate for.
+
+### Conclusion
+
+The proposed lexicographic measure `(phase, cost)` is **not sound** as a termination measure for `Step`: rules like `R_merge_void_left`, `R_merge_void_right`, `R_merge_cancel`, and `R_rec_zero` can increase `phase` when the exposed subterm happens to match the `recDelta _ _ (delta _)` pattern, so the measure does not decrease along every step, invalidating its use for a termination/well-foundedness argument.

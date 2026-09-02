@@ -1,0 +1,49 @@
+## Verdict: The strategy is unsound — both helper statements are actually false.
+
+### The problem: `kappa`'s pattern match on `recDelta` is *order-sensitive* in a way the lemmas ignore
+
+The definition of `kappa` on `recDelta` is:
+
+```
+| .recDelta b s (.delta n) => Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1
+| .recDelta b s n          => Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)
+```
+
+The first branch fires whenever the *third argument's head symbol* is `delta` — regardless of how deep the term is. So `kappa (recDelta b s t)` gets a `+1` bonus exactly when `t = delta _`, and this bonus can "stack": if `t = delta (delta m)`, then `kappa (recDelta b s t)` uses the first branch once (contributing `+1`), but the *inner* `kappa (recDelta b s (delta m))` referenced by the "step" lemma would again hit the first branch (another `+1`). The lemma `kappa_rec_delta_step` claims a clean "peel one delta, add one" relationship, but that's only true when the *next* layer isn't itself a `delta`.
+
+### Counterexample
+
+Take `b = void`, `s = void`, and instantiate the lemma's `n` as `delta void`.
+
+**Checking `kappa_rec_delta_step`:**
+
+- LHS: `kappa (recDelta void void (delta (delta void)))`
+  Head of third arg is `delta`, inner argument `delta void`, so
+  `= max(max(0,0), kappa (delta void)) + 1 = max(0,0) + 1 = 1`.
+
+- RHS: `kappa (recDelta void void (delta void)) + 1`.
+  Here `kappa (recDelta void void (delta void))` again hits the first branch (head is `delta`), giving `max(max(0,0),0) + 1 = 1`. So RHS `= 1 + 1 = 2`.
+
+So the lemma claims `1 = 2` — **false**. The sorry for `kappa_rec_delta_step` cannot be discharged; the statement itself is unprovable because it is false.
+
+**Checking `kappa_rec_succ_drop`** (the actually load-bearing termination fact) with the same instantiation:
+
+- RHS: `kappa (recDelta void void (delta (delta void))) = 1` (computed above).
+- LHS: `kappa (app void (recDelta void void (delta void)))`
+  `= max(kappa void, kappa (recDelta void void (delta void))) = max(0, 1) = 1`.
+
+So the goal reduces to `1 < 1`, which is **false**.
+
+### Why this matters mathematically
+
+The rewrite rule being measured is
+```
+recDelta b s (delta n) ⟶ app s (recDelta b s n)
+```
+For `kappa` to certify termination, `kappa` must *strictly* decrease on every instance of this rule. But when `n` itself is of the form `delta m` (i.e. the recursor is applied to a "successor of a successor"), the right-hand side `recDelta b s n = recDelta b s (delta m)` again falls into the `+1`-bumped branch of `kappa`, exactly cancelling the intended decrease. The `+1` bonus that `kappa` assigns for "having a delta on top" is not consumed when peeling one layer if another `delta` immediately follows — it just gets re-created one level down. Hence `kappa` does **not** decrease strictly across this step in general; it can stay exactly equal (as the concrete instance `b=s=void`, `n=delta void` shows: both sides equal `1`).
+
+### Conclusion
+
+- `kappa_rec_delta_step` is a **false** universally quantified statement (fails whenever `n` itself starts with `delta`), so its `sorry` cannot be soundly filled.
+- Consequently `kappa_rec_succ_drop`, which is derived from it via `rw`, is also **false** in exactly the same cases (the `rw` would need to invoke a false lemma, and independently the target inequality itself fails, as shown by direct computation giving `1 < 1`).
+- Therefore `kappa` as defined is **not** a valid decreasing measure for the `R_rec_succ` rule, and the two "helper theorems" do not constitute a sound termination argument — they assert something false about nested `delta`s under `recDelta`.

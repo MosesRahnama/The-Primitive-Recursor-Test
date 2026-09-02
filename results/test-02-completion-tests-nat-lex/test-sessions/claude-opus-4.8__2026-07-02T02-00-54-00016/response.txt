@@ -1,0 +1,101 @@
+# Proof Skeleton for the Five Remaining Cases
+
+Below is a skeleton for each `sorry`, following the pattern established by the three proved cases. Each case must decide whether `kappa` drops strictly (use `drop_left`) or ties while `mu` drops (use `drop_right`).
+
+## Analysis of each case
+
+**Case 1: `integrate (delta t) → void`**
+
+`kappa (integrate (delta t)) = kappa (delta t) = kappa t`, and `kappa void = 0`. So `kappa` may only *tie* if `kappa t = 0`, but in general `kappa` does **not** drop (it could stay equal only if `kappa t = 0`). Check `mu`: `mu void = 0 < 1 + mu t`. But `kappa` does not tie in general (`kappa void = 0` vs `kappa t`), so you must use `drop_left` — but that requires `kappa void < kappa t`, which fails when `kappa t = 0`.
+
+⚠️ **Warning to flag:** This case is only sound if `kappa (integrate (delta t)) > 0`, i.e. `kappa t > 0`. When `kappa t = 0`, `kappa` ties and `mu` drops (fine via `drop_right`); when `kappa t > 0`, `kappa` drops (fine via `drop_left`). So a **case split on `kappa t`** is needed.
+
+```lean
+| _, _, Step.R_int_delta t => by
+    -- Goal: LexOrder (measure void) (measure (integrate (delta t)))
+    -- kappa (integrate (delta t)) = kappa t ; kappa void = 0
+    rcases Nat.eq_zero_or_pos (kappa t) with hz | hpos
+    · -- kappa ties at 0, use mu drop
+      have hmu : mu void < mu (integrate (delta t)) := by simp [mu]; omega
+      have hk  : kappa void = kappa (integrate (delta t)) := by simp [kappa, hz]
+      exact drop_right hmu hk
+    · -- kappa drops strictly
+      have hk : kappa void < kappa (integrate (delta t)) := by simp [kappa]; omega
+      exact drop_left hk
+```
+
+**Case 2: `recDelta b s void → b`**
+
+Here the third argument is `void`, matching the `recDelta b s n` fallthrough of `kappa` (no `+1`). So
+`kappa (recDelta b s void) = max (max (kappa b) (kappa s)) (kappa void) = max (max (kappa b)(kappa s)) 0`.
+`kappa b ≤ kappa (recDelta b s void)`, so `kappa` does **not** strictly drop; it ties only if `kappa b` dominates. Again a split may be needed. Check `mu`: `mu b < 3 + mu b + mu s + mu void`, always true.
+
+```lean
+| _, _, Step.R_rec_zero b s => by
+    -- kappa (recDelta b s void) = max (max (kappa b) (kappa s)) 0
+    by_cases hk : kappa b = kappa (recDelta b s void)
+    · have hmu : mu b < mu (recDelta b s void) := by simp [mu]; omega
+      exact drop_right hmu hk
+    · have hk' : kappa b < kappa (recDelta b s void) := by
+        simp [kappa] at hk ⊢; omega
+      exact drop_left hk'
+```
+
+**Case 3: `recDelta b s (delta n) → app s (recDelta b s n)`** — the key case.
+
+LHS uses the `+1` clause: `kappa (recDelta b s (delta n)) = max (max (kappa b)(kappa s)) (kappa n) + 1`.
+RHS: `kappa (app s (recDelta b s n)) = max (kappa s) (kappa (recDelta b s n))`, where the inner `recDelta b s n` uses the **fallthrough** (n is not syntactically `delta`), so `= max (max (kappa b)(kappa s)) (kappa n)`. Hence RHS `kappa = max (kappa s) (max (max (kappa b)(kappa s)) (kappa n)) = max (max (kappa b)(kappa s)) (kappa n)`. This is exactly `LHS_kappa − 1 < LHS_kappa`. So `kappa` **strictly drops** by 1. Use `drop_left`.
+
+⚠️ **Subtlety:** the `kappa (recDelta b s n)` reduction requires `n` not to have the form `delta _` at the syntactic pattern level; but `kappa` is defined by pattern matching so it computes correctly regardless. You may need `simp [kappa]` plus manual unfolding of the inner `recDelta`, possibly a `cases n` if `simp` won't reduce the fallthrough clause automatically.
+
+```lean
+| _, _, Step.R_rec_succ b s n => by
+    have hk : kappa (app s (recDelta b s n))
+              < kappa (recDelta b s (delta n)) := by
+      simp only [kappa_rec_delta, kappa_app]
+      -- unfold inner: kappa (recDelta b s n).  May need `cases n` to force
+      -- the fallthrough kappa clause to reduce.
+      cases n <;> simp [kappa] <;> omega
+    exact drop_left hk
+```
+
+**Case 4: `eqW a a → void`**
+
+`kappa (eqW a a) = max (kappa a) (kappa a) = kappa a`; `kappa void = 0`. Same shape as case 1: split on `kappa a`.
+
+```lean
+| _, _, Step.R_eq_refl a => by
+    rcases Nat.eq_zero_or_pos (kappa a) with hz | hpos
+    · have hmu : mu void < mu (eqW a a) := by simp [mu]; omega
+      have hk  : kappa void = kappa (eqW a a) := by simp [kappa, hz]
+      exact drop_right hmu hk
+    · have hk : kappa void < kappa (eqW a a) := by simp [kappa]; omega
+      exact drop_left hk
+```
+
+**Case 5: `eqW a b → integrate (merge a b)`**
+
+`kappa (eqW a b) = max (kappa a)(kappa b)`.
+`kappa (integrate (merge a b)) = kappa (merge a b) = max (kappa a)(kappa b)`.
+So `kappa` **ties exactly**. Check `mu`: `mu (integrate (merge a b)) = 1 + (2 + mu a + mu b) = 3 + mu a + mu b`, while `mu (eqW a b) = 4 + mu a + mu b`. So `mu` drops by 1. Use `drop_right`.
+
+```lean
+| _, _, Step.R_eq_diff a b => by
+    have hmu : mu (integrate (merge a b)) < mu (eqW a b) := by simp [mu]; omega
+    have hk  : kappa (integrate (merge a b)) = kappa (eqW a b) := by simp [kappa]
+    exact drop_right hmu hk
+```
+
+## Summary table
+
+| Rule | kappa behavior | Tactic | Notes |
+|------|---------------|--------|-------|
+| `R_int_delta` | ties (kappa t=0) or drops | split + `drop_right`/`drop_left` | needs case split |
+| `R_rec_zero` | ties or drops | `by_cases` + both | needs case split |
+| `R_rec_succ` | strictly −1 | `drop_left` | `cases n` to reduce inner kappa |
+| `R_eq_refl` | ties (a=0) or drops | split + both | needs case split |
+| `R_eq_diff` | ties exactly | `drop_right` | mu drops by 1 |
+
+**Robustness fallbacks** (if the `simp`/`omega` incantations don't close a goal):
+- Replace `simp [kappa]; omega` with explicit `Nat.max` lemmas (`Nat.max_zero`, `Nat.zero_max`, `Nat.le_max_left/right`).
+- In case 3, if `cases n <;> simp` misbehaves, isolate `have : kappa (recDelta b s n) = max (max (kappa b) (kappa s)) (kappa n) := by cases n <;> rfl` and rewrite manually.

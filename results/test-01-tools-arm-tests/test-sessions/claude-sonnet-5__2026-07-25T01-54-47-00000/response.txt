@@ -1,0 +1,89 @@
+[TOOL-CALL code_execution]
+{
+ "code": "\nimport random\nfrom functools import lru_cache\n\n# Represent Trace terms as nested tuples\n# void: ('void',)\n# delta t: ('delta', t)\n# integrate t: ('integrate', t)\n# merge t1 t2: ('merge', t1, t2)\n# app t1 t2: ('app', t1, t2)\n# recD b s n: ('recD', b, s, n)\n# eqW a b: ('eqW', a, b)\n\ndef size(t):\n    if t[0] in ('void',):\n        return 1\n    elif t[0] in ('delta','integrate'):\n        return 1 + size(t[1])\n    elif t[0] in ('merge','app','eqW'):\n        return 1 + size(t[1]) + size(t[2])\n    elif t[0] == 'recD':\n        return 1 + size(t[1]) + size(t[2]) + size(t[3])\n    else:\n        raise ValueError(t)\n\ndef step_root(t):\n    \"\"\"Return list of one-step ROOT-ONLY reducts of t (no congruence closure).\"\"\"\n    res = []\n    tag = t[0]\n    if tag == 'integrate':\n        arg = t[1]\n        if arg[0] == 'delta':\n            res.append(('void',))\n    elif tag == 'merge':\n        a,b = t[1], t[2]\n        if a == ('void',):\n            res.append(b)\n        if b == ('void',):\n            res.append(a)\n        if a == b:\n            res.append(a)\n    elif tag == 'recD':\n        b,s,n = t[1], t[2], t[3]\n        if n == ('void',):\n            res.append(b)\n        if n[0] == 'delta':\n            res.append(('app', s, ('recD', b, s, n[1])))\n    elif tag == 'eqW':\n        a,b = t[1], t[2]\n        if a == b:\n            res.append(('void',))\n        res.append(('integrate', ('merge', a, b)))\n    # void, delta, app have no root rules matching them as LHS (they never appear as a full-term LHS pattern)\n    return res\n\ndef random_term(depth):\n    if depth <= 0:\n        return ('void',)\n    choice = random.choice(['void','delta','integrate','merge','app','recD','eqW'])\n    if choice == 'void':\n        return ('void',)\n    elif choice in ('delta','integrate'):\n        return (choice, random_term(depth-1))\n    elif choice in ('merge','app','eqW'):\n        return (choice, random_term(depth-1), random_term(depth-1))\n    elif choice == 'recD':\n        return ('recD', random_term(depth-1), random_term(depth-1), random_term(depth-1))\n\n# Explore all reduction paths from a term (DFS), check for termination and log max chain length / any size blowups\nimport sys\nsys.setrecursionlimit(10000)\n\ndef explore(t, max_steps=200):\n    \"\"\"Do a DFS over ALL nondeterministic choices, return True if all paths terminate within max_steps,\n       else False (found an infinite/very long path).\"\"\"\n    def dfs(cur, steps, path_sizes):\n        if steps > max_steps:\n            return False, path_sizes\n        succs = step_root(cur)\n        if not succs:\n            return True, path_sizes\n        for s in succs:\n            ok, ps = dfs(s, steps+1, path_sizes+[size(s)])\n            if not ok:\n                return False, ps\n        return True, path_sizes\n    return dfs(t, 0, [size(t)])\n\nrandom.seed(0)\nall_ok = True\nmax_len_seen = 0\nfor trial in range(3000):\n    t = random_term(random.randint(1,6))\n    ok, sizes = explore(t, max_steps=100)\n    if not ok:\n        print(\"NON-TERMINATION or too long found:\", t)\n        all_ok = False\n        break\n    max_len_seen = max(max_len_seen, len(sizes))\n\nprint(\"All terminated within bound:\", all_ok)\nprint(\"Max chain length observed:\", max_len_seen)\n"
+}
+[/TOOL]
+
+
+
+[TOOL-RESULT code_execution]
+{
+ "type": "code_execution_result",
+ "stdout": "All terminated within bound: True\nMax chain length observed: 1",
+ "stderr": "",
+ "return_code": 0,
+ "content": [],
+ "abort_reason": null
+}
+[/TOOL]
+
+
+
+[TOOL-CALL code_execution]
+{
+ "code": "\nimport random\n\ndef random_term(depth):\n    if depth <= 0:\n        return ('void',)\n    choice = random.choice(['void','delta','integrate','merge','app','recD','eqW'])\n    if choice == 'void':\n        return ('void',)\n    elif choice in ('delta','integrate'):\n        return (choice, random_term(depth-1))\n    elif choice in ('merge','app','eqW'):\n        return (choice, random_term(depth-1), random_term(depth-1))\n    elif choice == 'recD':\n        return ('recD', random_term(depth-1), random_term(depth-1), random_term(depth-1))\n\ndef step_root(t):\n    res = []\n    tag = t[0]\n    if tag == 'integrate':\n        arg = t[1]\n        if arg[0] == 'delta':\n            res.append(('void',))\n    elif tag == 'merge':\n        a,b = t[1], t[2]\n        if a == ('void',):\n            res.append(b)\n        if b == ('void',):\n            res.append(a)\n        if a == b:\n            res.append(a)\n    elif tag == 'recD':\n        b,s,n = t[1], t[2], t[3]\n        if n == ('void',):\n            res.append(b)\n        if n[0] == 'delta':\n            res.append(('app', s, ('recD', b, s, n[1])))\n    elif tag == 'eqW':\n        a,b = t[1], t[2]\n        if a == b:\n            res.append(('void',))\n        res.append(('integrate', ('merge', a, b)))\n    return res\n\ndef max_chain_len(t, max_steps=500, memo=None):\n    \"\"\"Return the max number of steps over all nondeterministic reduction paths starting at t,\n       or None if it exceeds max_steps (potential non-termination).\"\"\"\n    if memo is None:\n        memo = {}\n    def rec(cur, depth_budget, visited_path):\n        if cur in memo:\n            return memo[cur]\n        if depth_budget <= 0:\n            return None  # signal: too deep / possible non-termination\n        succs = step_root(cur)\n        if not succs:\n            memo[cur] = 0\n            return 0\n        best = 0\n        for s in succs:\n            r = rec(s, depth_budget-1, visited_path+[cur])\n            if r is None:\n                return None\n            best = max(best, r+1)\n        memo[cur] = best\n        return best\n    return rec(t, max_steps, [])\n\nrandom.seed(1)\noverall_max = 0\nworst_term = None\nfail = False\nfor trial in range(20000):\n    t = random_term(random.randint(1,6))\n    r = max_chain_len(t, max_steps=200)\n    if r is None:\n        print(\"Potential non-termination / too deep:\", t)\n        fail = True\n        break\n    if r > overall_max:\n        overall_max = r\n        worst_term = t\n\nprint(\"Fail (non-term found)?\", fail)\nprint(\"Overall max chain length across 20000 random terms:\", overall_max)\nprint(\"Worst term:\", worst_term)\n"
+}
+[/TOOL]
+
+
+
+[TOOL-RESULT code_execution]
+{
+ "type": "code_execution_result",
+ "stdout": "Fail (non-term found)? False\nOverall max chain length across 20000 random terms: 3\nWorst term: ('recD', ('merge', ('void',), ('eqW', ('app', ('merge', ('recD', ('void',), ('void',), ('void',)), ('integrate', ('void',))), ('delta', ('void',))), ('recD', ('integrate', ('app', ('void',), ('void',))), ('merge', ('delta', ('void',)), ('recD', ('void',), ('void',), ('void',))), ('eqW', ('app', ('void',), ('void',)), ('merge', ('void',), ('void',)))))), ('delta', ('app', ('recD', ('delta', ('eqW', ('void',), ('void',))), ('integrate', ('merge', ('void',), ('void',))), ('delta', ('merge', ('void',), ('void',)))), ('void',))), ('void',))",
+ "stderr": "",
+ "return_code": 0,
+ "content": [],
+ "abort_reason": null
+}
+[/TOOL]
+
+
+
+[TOOL-CALL code_execution]
+{
+ "code": "\n# Verify structurally that outputs of R_rec_succ (app ...) and R_eq_diff (integrate (merge ...))\n# NEVER admit any further root-step, for arbitrary random subterms.\nimport random\n\ndef random_term(depth):\n    if depth <= 0:\n        return ('void',)\n    choice = random.choice(['void','delta','integrate','merge','app','recD','eqW'])\n    if choice == 'void':\n        return ('void',)\n    elif choice in ('delta','integrate'):\n        return (choice, random_term(depth-1))\n    elif choice in ('merge','app','eqW'):\n        return (choice, random_term(depth-1), random_term(depth-1))\n    elif choice == 'recD':\n        return ('recD', random_term(depth-1), random_term(depth-1), random_term(depth-1))\n\ndef step_root(t):\n    res = []\n    tag = t[0]\n    if tag == 'integrate':\n        arg = t[1]\n        if arg[0] == 'delta':\n            res.append(('void',))\n    elif tag == 'merge':\n        a,b = t[1], t[2]\n        if a == ('void',):\n            res.append(b)\n        if b == ('void',):\n            res.append(a)\n        if a == b:\n            res.append(a)\n    elif tag == 'recD':\n        b,s,n = t[1], t[2], t[3]\n        if n == ('void',):\n            res.append(b)\n        if n[0] == 'delta':\n            res.append(('app', s, ('recD', b, s, n[1])))\n    elif tag == 'eqW':\n        a,b = t[1], t[2]\n        if a == b:\n            res.append(('void',))\n        res.append(('integrate', ('merge', a, b)))\n    return res\n\nrandom.seed(2)\nbad = 0\nfor _ in range(50000):\n    s = random_term(3)\n    b = random_term(3)\n    n = random_term(3)\n    rec_succ_output = ('app', s, ('recD', b, s, n))\n    if step_root(rec_succ_output):\n        bad += 1\n        print(\"rec_succ output reducible!\", rec_succ_output)\n\n    a = random_term(3); bb = random_term(3)\n    eq_diff_output = ('integrate', ('merge', a, bb))\n    if step_root(eq_diff_output):\n        bad += 1\n        print(\"eq_diff output reducible!\", eq_diff_output)\n\nprint(\"Number of counterexamples found:\", bad, \"out of 100000 checks\")\n"
+}
+[/TOOL]
+
+
+
+[TOOL-RESULT code_execution]
+{
+ "type": "code_execution_result",
+ "stdout": "Number of counterexamples found: 0 out of 100000 checks",
+ "stderr": "",
+ "return_code": 0,
+ "content": [],
+ "abort_reason": null
+}
+[/TOOL]
+
+## Assessment: **Yes — strong normalization follows directly from the calculus as written, by an elementary well‑founded argument, with no extra axioms needed.**
+
+## Why
+
+The decisive structural fact is what `Step` *doesn't* contain: there is no congruence/compatible‑closure clause (nothing of the form "if `Step a b` then `Step (f a) (f b)`"). The inductive definition gives exactly 8 constructors, each of which matches only a **whole term** against one of eight fixed root patterns:
+
+- `integrate (delta t)`, `merge void t`, `merge t void`, `merge t t`, `recΔ b s void`, `recΔ b s (delta n)`, `eqW a a`, `eqW a b`.
+
+So `Step` never rewrites *inside* a subterm sitting under `delta`, `integrate`, `merge`, `app`, `recΔ`, or `eqW` unless the whole term happens to already have one of these eight shapes. This removes the usual source of difficulty in SN proofs (redex interaction/duplication propagating through arbitrary contexts) and makes the system amenable to a direct case split.
+
+**Case split on the eight rules, using a size measure (node count):**
+
+- `R_int_delta`, `R_merge_void_left`, `R_merge_void_right`, `R_merge_cancel`, `R_rec_zero`, `R_eq_refl` all produce either `void` or a **strict subterm** of the redex — strictly smaller under any structural size measure.
+- `R_rec_succ` produces `app s (recΔ b s n)`; `R_eq_diff` produces `integrate (merge a b)`. These *can* increase size, but both outputs are **provably permanent normal forms**, unconditionally in `a,b,s,n`:
+ - `app _ _` never matches any of the eight LHS patterns (no rule has `app` as its head constructor at all).
+ - `integrate (merge a b)` can only reduce via `R_int_delta`, which needs the argument to be of the form `delta _`; but `merge a b` is headed by the constructor `merge`, never `delta`, for any `a,b` — this is just constructor disjointness, a property that comes for free from the inductive definition of `Trace`, not an imported axiom.
+
+So every step is either strictly size‑decreasing or lands immediately in a term with no further `Step` (i.e., an unconditional dead end). An infinite reduction sequence would therefore have to consist entirely of size‑decreasing steps, which is impossible since natural‑number size is well‑founded. Hence every reduction sequence is finite — strong normalization holds for the whole system.
+
+I checked this reasoning computationally (exhaustive nondeterministic exploration of `Step` on thousands of randomly generated `Trace` terms, plus a direct structural check that `R_rec_succ`/`R_eq_diff` outputs never admit a further step for arbitrary subterms): no counterexample and no chain longer than 3 steps was found, matching the theoretical bound.
+
+## What this proof uses (and doesn't)
+
+It only uses:
+1. the inductive structure of `Trace` itself (giving a well‑founded size measure and constructor injectivity/disjointness "for free" — a foundational property of any inductive type, not a strengthening), and
+2. exhaustive case analysis on the finitely many `Step` rules exactly as given.
+
+No extra rewrite rules, guards, side conditions, congruence closure, or external SN‑style machinery (reducibility candidates, logical relations, etc.) is required. Note that this conclusion depends essentially on the fact that `Step`, as literally defined, is *not* closed under contexts; if one were to (implicitly) add the usual congruence rules to make reduction act at arbitrary positions, the recursor‑like `recΔ`/`eqW` rules would set up a genuinely harder termination problem requiring real inductive machinery — but that would be an addition beyond what is presented, which the question rules out.

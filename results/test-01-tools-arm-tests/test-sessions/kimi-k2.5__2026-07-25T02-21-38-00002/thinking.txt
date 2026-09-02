@@ -1,0 +1,588 @@
+The user wants me to assess whether the given rewrite calculus (defined in Lean 4) is strongly normalizing.
+
+ Let me analyze the system:
+
+ 1. **Syntax**:
+    - `void`: base term
+    - `delta t`: successor-like operator
+    - `integrate t`: some unary operator
+    - `merge t1 t2`: binary operator
+    - `app t1 t2`: binary operator (application?)
+    - `recΔ t1 t2 t3`: recursion/elimination for delta
+    - `eqW t1 t2`: equality witness
+
+ 2. **Rewrite Rules**:
+    - `R_int_delta`: integrate (delta t) → void
+    - `R_merge_void_left`: merge void t → t
+    - `R_merge_void_right`: merge t void → t
+    - `R_merge_cancel`: merge t t → t
+    - `R_rec_zero`: recΔ b s void → b
+    - `R_rec_succ`: recΔ b s (delta n) → app s (recΔ b s n)
+    - `R_eq_refl`: eqW a a → void
+    - `R_eq_diff`: eqW a b → integrate (merge a b) [when a ≠ b? Wait, no condition is given in the rule!]
+
+ Wait, looking at `R_eq_diff`: `∀ a b, Step (eqW a b) (integrate (merge a b))`
+
+ This rule applies to ANY a and b, including when a = b. But there's also `R_eq_refl`: `∀ a, Step (eqW a a) void`.
+
+ So for `eqW a a`, we have two possible reductions:
+ 1. To `void` (via R_eq_refl)
+ 2. To `integrate (merge a a)` (via R_eq_diff)
+
+ And `merge a a` reduces to `a` (via R_merge_cancel).
+ And `integrate a`... well, if a is of the form `delta t`, it reduces to `void`.
+
+ But this doesn't immediately suggest non-termination.
+
+ Let me look for potential sources of non-termination.
+
+ The critical rule that might cause issues is `R_rec_succ`:
+ `recΔ b s (delta n) → app s (recΔ b s n)`
+
+ This looks like primitive recursion. If `s` increases the size, and we recurse on `n`, we might have issues, but actually this reduces the `delta` constructor, so the `n` inside is smaller (structurally).
+
+ Wait, `delta` is a constructor, so `delta n` is bigger than `n`. So `recΔ b s (delta n)` reduces to `app s (recΔ b s n)`. The recursive call is on `n`, which is structurally smaller than `delta n`. So this looks terminating.
+
+ But what about `app`? There are no rules for `app`! So `app` is just a constructor that doesn't reduce. So once we hit `app`, the recursion stops in some sense.
+
+ Actually, looking carefully:
+ - `app` appears only on the right-hand side of `R_rec_succ`
+ - There are no rewrite rules for `app`
+
+ So `app` is a normal form (or at least, inert).
+
+ Now, is there any way to create an infinite reduction sequence?
+
+ Let me check if there's any rule that can increase the size or create cycles.
+
+ `R_eq_diff` creates `integrate (merge a b)`.
+ If `a = b`, then `merge a b` → `a`, so we get `integrate a`.
+ If `a` is `delta t`, then `integrate (delta t)` → `void`.
+ If `a` is not `delta t`, then `integrate a` is stuck (normal form).
+
+ Wait, but `eqW a b` can reduce to `integrate (merge a b)` even when `a = b`.
+ Then `merge a a` → `a`, so we get `integrate a`.
+ If `a` is not of the form `delta t`, this is a normal form.
+
+ But we could also have chosen `R_eq_refl` to reduce `eqW a a` directly to `void`.
+
+ So there are overlapping rules, but both lead to normal forms (or at least, we need to check if they terminate).
+
+ Actually, the question is about **strong** normalization. This means every reduction sequence must terminate.
+
+ Let me look for a potential infinite loop.
+
+ Consider the interaction between `R_eq_diff` and other rules.
+
+ `eqW a b` → `integrate (merge a b)` → `integrate a` (if a=b) → ? 
+ If `a` is `delta c`, then → `void`.
+ If `a` is not `delta c`, stuck.
+
+ What if we have nested `eqW`?
+
+ `eqW (eqW a b) (eqW c d)`...
+
+ Or perhaps we can create a cycle with `integrate` and `delta`?
+
+ `integrate (delta t)` → `void`. That's fine.
+
+ What about `recΔ`?
+
+ `recΔ b s (delta n)` → `app s (recΔ b s n)` → no further reduction for the `app` part, but `recΔ b s n` might reduce further if `n` is `delta m`.
+
+ So `recΔ b s (delta (delta (... (delta void)...)))` reduces in n steps to `app s (app s (... (app s b)...))`.
+
+ That terminates.
+
+ Is there any rule that can create a larger term?
+
+ `R_eq_diff` replaces `eqW a b` with `integrate (merge a b)`. 
+ The size: `eqW` has two children. `integrate` has one child `merge a b` which has two children. So roughly same size.
+
+ `R_rec_succ` replaces `recΔ b s (delta n)` with `app s (recΔ b s n)`.
+ Size: `recΔ` has 3 children, one of which is `delta n` (size 1 + size(n)). Result: `app` has 2 children, one is `s`, one is `recΔ b s n` (size roughly size(n) + constant).
+ So the size of the third argument decreases (from `delta n` to `n`), but we add an `app` wrapper.
+
+ This looks like it could be measured by a lexicographic ordering or multiset ordering.
+
+ But wait, is there any way for `recΔ` to be recreated in a larger context?
+
+ The only rules producing `recΔ` are... none! `recΔ` only appears on the left-hand sides. So `recΔ` is eliminated by reduction.
+
+ Similarly, `eqW` is eliminated by reduction (converted to `void` or `integrate (merge ...)`).
+
+ `merge` is reduced by the merge rules.
+
+ `integrate` is reduced only when applied to `delta`.
+
+ `delta` is a constructor that is only consumed by `integrate` and `recΔ`.
+
+ `app` is never reduced.
+
+ `void` is atomic.
+
+ So intuitively, this system looks like it should be strongly normalizing. But I need to be careful.
+
+ The main risk is usually:
+ 1. Recursive calls that don't decrease a measure
+ 2. Rules that can be applied indefinitely in a cycle
+
+ Here, `recΔ` decreases the size of the third argument (removing `delta` constructors).
+
+ `eqW` is eliminated.
+
+ But there's a subtlety: `R_eq_diff` produces `integrate (merge a b)`. 
+ If `a` and `b` contain `eqW`, those could reduce, but eventually, we reach normal forms.
+
+ Actually, the question is tricky. Let me look again at `R_eq_diff`.
+
+ `R_eq_diff : ∀ a b, Step (eqW a b) (integrate (merge a b))`
+
+ There is no side condition `a ≠ b`. So this applies even when `a = b`.
+
+ So for `eqW t t`, we have two reductions:
+ 1. To `void` via `R_eq_refl`
+ 2. To `integrate (merge t t)` via `R_eq_diff`
+
+ Then `merge t t` → `t` via `R_merge_cancel`.
+ So `integrate (merge t t)` → `integrate t`.
+
+ Now, if `t` is `delta u`, then `integrate t` → `void`.
+ If `t` is not `delta u`, then `integrate t` is stuck.
+
+ So from `eqW t t`, we can go to `void` (normal form) or to `integrate t` (possibly normal form).
+
+ This is a branching, but both paths terminate.
+
+ Is there any term that can reduce to itself or to a bigger term?
+
+ Let me try to construct a counterexample.
+
+ Suppose we have a term `T` such that `T` reduces to something containing `T`.
+
+ The only rule that "duplicates" or keeps subterms around in a tricky way is... none, really.
+
+ Wait, `R_rec_succ` does: `recΔ b s (delta n)` → `app s (recΔ b s n)`.
+ Here `recΔ b s n` is a subterm of the original (with `n` instead of `delta n`).
+
+ So it's recursive on the structure.
+
+ What if we define a measure:
+ - `|void| = 1`
+ - `|delta t| = |t| + 1`
+ - `|integrate t| = |t| + 1`
+ - `|merge t1 t2| = |t1| + |t2| + 1`
+ - `|app t1 t2| = |t1| + |t2| + 1`
+ - `|recΔ t1 t2 t3| = ω^{|t3|} + |t1| + |t2|` or something? No, that's for strong normalization proofs usually.
+
+ Actually, for strong normalization of such systems, we can often use a weighted measure or an interpretation into a well-founded order.
+
+ Let me try to find an infinite reduction manually.
+
+ Start with `eqW (delta void) (delta void)`.
+
+ Option 1: `R_eq_refl` → `void`. Done.
+
+ Option 2: `R_eq_diff` → `integrate (merge (delta void) (delta void))`.
+ Then `R_merge_cancel` → `integrate (delta void)`.
+ Then `R_int_delta` → `void`. Done.
+
+ So that's finite.
+
+ What about `recΔ`?
+
+ `recΔ void (delta void) (delta (delta void))` → 
+ `app (delta void) (recΔ void (delta void) (delta void))` → 
+ `app (delta void) (app (delta void) (recΔ void (delta void) void))` → 
+ `app (delta void) (app (delta void) void)`.
+
+ Done.
+
+ Looks terminating.
+
+ But I should check if there's any subtle interaction.
+
+ What about `eqW` inside `recΔ`?
+
+ `recΔ b s (eqW t1 t2)`... but `recΔ` only reduces when the third argument is `void` or `delta n`. If it's `eqW ...`, it's stuck.
+
+ Similarly, `integrate` only reduces on `delta`.
+
+ `merge` reduces when one is `void` or both are equal.
+
+ So the system is very constrained.
+
+ However, there's one suspicious thing: `R_eq_diff` and `R_eq_refl` overlap. This creates critical pairs.
+
+ But critical pairs don't necessarily imply non-termination.
+
+ Actually, I recall that for strong normalization, having confluence is not required, but having a decreasing measure is.
+
+ Let me try to define a measure that decreases with each step.
+
+ Define `|t|` as the size (number of constructors).
+
+ 1. `R_int_delta`: `integrate (delta t)` has size `|t|+2`, `void` has size 1. Decreases.
+ 2. `R_merge_void_left`: `merge void t` has size `1 + |t| + 1 = |t|+2`, `t` has size `|t|`. Decreases.
+ 3. `R_merge_void_right`: similar.
+ 4. `R_merge_cancel`: `merge t t` has size `|t| + |t| + 1 = 2|t|+1`, `t` has size `|t|`. Decreases for `|t| >= 1`.
+ 5. `R_rec_zero`: `recΔ b s void` has size `|b|+|s|+1+1 = |b|+|s|+2`, `b` has size `|b|`. Decreases (assuming `s` has size >= 0).
+ 6. `R_rec_succ`: `recΔ b s (delta n)` has size `|b|+|s|+|n|+1+1 = |b|+|s|+|n|+2`.
+    Result: `app s (recΔ b s n)` has size `|s| + (|b|+|s|+|n|+1) + 1 = |b|+2|s|+|n|+2`.
+    Wait, this is **larger** than the original if `|s| > 0`!
+
+ Original: `|b| + |s| + |n| + 2`
+ New: `|b| + 2|s| + |n| + 2`
+
+ The difference is `|s|`. So if `s` is non-trivial, the size increases!
+
+ For example, let `s = delta void` (size 2).
+ Original `recΔ void (delta void) (delta void)` has size `1 + 2 + 2 = 5`? Wait:
+ - `void`: 1
+ - `delta void`: 1 + 1 = 2
+ - `delta void`: 2
+ - `recΔ void (delta void) (delta void)`: 1 + 2 + 2 = 5? No, recΔ takes 3 args, so size is 1 (node) + sum of sizes.
+
+ Let's define size properly:
+ - `|void| = 1`
+ - `|delta t| = 1 + |t|`
+ - `|integrate t| = 1 + |t|`
+ - `|merge t1 t2| = 1 + |t1| + |t2|`
+ - `|app t1 t2| = 1 + |t1| + |t2|`
+ - `|recΔ t1 t2 t3| = 1 + |t1| + |t2| + |t3|`
+ - `|eqW t1 t2| = 1 + |t1| + |t2|`
+
+ Then:
+ `|recΔ b s (delta n)| = 1 + |b| + |s| + (1 + |n|) = 2 + |b| + |s| + |n|`
+ `|app s (recΔ b s n)| = 1 + |s| + (1 + |b| + |s| + |n|) = 2 + |b| + 2|s| + |n|`
+
+ So the size increases by `|s|`.
+
+ This means a simple size measure won't work for strong normalization.
+
+ However, this doesn't mean it's not strongly normalizing. We need a more sophisticated measure, like a weighted path order or interpretation into ordinals.
+
+ The rule `R_rec_succ` resembles the recursion rule for natural numbers. In typed lambda calculus, this is strongly normalizing. But here we have no types.
+
+ Wait, but `s` is duplicated in the measure sense? No, `s` appears twice in the result, but it's the same subterm.
+
+ In the redex `recΔ b s (delta n)`, `s` appears once.
+ In the contractum `app s (recΔ b s n)`, `s` appears twice (once directly, once inside the recΔ).
+
+ So `s` is duplicated!
+
+ This is the classic source of non-termination in rewrite systems: duplication of arbitrary subterms.
+
+ For example, if we had a rule `f x → app x (f x)`, this is not terminating.
+
+ Here, we have `recΔ b s (delta n) → app s (recΔ b s n)`.
+
+ This looks like it could be non-terminating if we can set things up so that the `recΔ` keeps generating more `app s` and we never reach the base case.
+
+ But wait, the third argument decreases: `delta n` becomes `n`. Eventually we reach `void` (if we start with a finite tower of deltas).
+
+ So even though `s` is duplicated in the sense of appearing in the measure calculation, the recursion is on the third argument which is structurally decreasing.
+
+ In strong normalization proofs for primitive recursion, we use a lexicographic order or an interpretation where the value of the third argument (an ordinal or natural number) decreases.
+
+ Specifically, we can map terms to ordinals:
+ - Map `delta` to successor
+ - Map `recΔ b s n` to some function of the interpretation of `n`
+
+ But the issue is that `s` is arbitrary. If `s` contains `recΔ`, we might have issues.
+
+ Actually, no: the `recΔ` in the result has a smaller third argument.
+
+ Standard proof for primitive recursion:
+ Define `|recΔ b s n| = |n|` (the height of the tower of deltas).
+ Then `|recΔ b s (delta n)| = |n|+1`
+ And `|app s (recΔ b s n)|` needs to be less than `|n|+1`.
+
+ But `|app s (recΔ b s n)|` involves `|recΔ b s n| = |n|`, but also `|s|`.
+
+ If we define the measure as just the measure of the third argument, then:
+ - `R_rec_zero`: third arg is `void` (size 0), result is `b` (measure doesn't apply, or we say it's 0).
+ - `R_rec_succ`: third arg is `delta n` (size k+1), result contains `recΔ b s n` (size k) inside `app`.
+
+ But `app` doesn't decrease, it just wraps. So if we define the measure as the size of the third argument of the outermost `recΔ`, then `R_rec_succ` decreases it (from `delta n` to `n`).
+
+ However, the issue is that `s` could contain `recΔ` terms that are "active" and could create larger computations.
+
+ But for strong normalization, we can use the notion of "reducibility" or define a well-founded interpretation.
+
+ Interpretation into natural numbers:
+ - `|void| = 0`
+ - `|delta t| = |t| + 1`
+ - `|integrate t| = |t|` (or `|t|+1`, doesn't matter much)
+ - `|merge t1 t2| = max(|t1|, |t2|)` (or sum)
+ - `|app t1 t2| = |t1| + |t2|` (or max)
+ - `|recΔ b s n| = |n|` (the crucial part: we ignore `b` and `s` for the measure? No, that doesn't work because `b` could be huge)
+
+ Actually, for strong normalization of primitive recursion, we need to use a more complex measure. The standard approach is to use the length of the recursion (the third argument) as the primary measure, and ensure that `s` and `b` are "safe" (which they are by induction hypothesis if we prove SN by structural induction).
+
+ But here we don't have types. We need to prove that every term is strongly normalizing.
+
+ The standard method for untyped systems with recursion is to use a reducibility predicate or a weight function that accounts for the recursion depth.
+
+ Actually, looking at the rules again, this looks very similar to Gödel's System T primitive recursion, but untyped.
+
+ In System T, primitive recursion is strongly normalizing even in the untyped version? No, untyped lambda calculus with recursors is not strongly normalizing if we allow fixed points, but primitive recursion is different.
+
+ Wait, the rule `recΔ b s (delta n) → app s (recΔ b s n)` is exactly the primitive recursion rule for natural numbers (if we identify `delta` as successor and `void` as zero).
+
+ In the simply typed lambda calculus with primitive recursion (System T), this is strongly normalizing.
+
+ But in an untyped setting, is it still strongly normalizing?
+
+ Consider the term `recΔ Ω I (delta void)` where `Ω` is some diverging term and `I` is identity.
+ If `b` diverges, then `recΔ b s void` reduces to `b`, which diverges.
+ So if we allow arbitrary terms, and we hit the base case, we get `b`.
+
+ But the question is: does the rewrite system allow us to construct a term that reduces infinitely?
+
+ Yes! If `b` is a term that has an infinite reduction, then `recΔ b s void` reduces to `b` and then diverges.
+
+ But the question is about strong normalization of the system itself, meaning every term is strongly normalizing. This is clearly false if we can have `b` be any term, because `b` could be... wait, what could `b` be?
+
+ The only redexes are specific patterns. Can we construct a term with an infinite reduction?
+
+ Let's try to construct one.
+
+ We need a cycle or an infinite ascending chain.
+
+ The only rule that might allow this is if we can create a term where `recΔ` expands infinitely.
+
+ But `recΔ` always decreases the size of the third argument (number of `delta` wrappers).
+
+ So any sequence of `R_rec_succ` steps must terminate after finitely many steps (equal to the number of `delta`s in the third argument).
+
+ Once we reach `R_rec_zero`, we get `b`.
+
+ If `b` has no redexes, we're done.
+ If `b` has redexes, we reduce `b`.
+
+ So the only way to get infinite reduction is if `b` has infinite reduction, or if `app s (...)` creates infinite reduction.
+
+ But `app` is a constructor with no rules. So `app s t` is a normal form if `s` and `t` are normal forms. It doesn't create new redexes (except those inside `s` and `t`).
+
+ So the recursion always terminates, producing a term consisting of nested `app s (... (app s b)...)` which is built from `s` and `b`.
+
+ If `s` and `b` are SN, then the result is SN.
+
+ This suggests we can prove SN by induction on the structure of terms, or more precisely, by defining a measure that is a lexicographic combination of:
+ 1. The maximum number of nested `recΔ` (or the sum of depths of `recΔ` arguments)
+ 2. Something else
+
+ Actually, we can use the method of "reducibility candidates" or simply note that this is a first-order system (no binders) and use the fact that all rules are "size-decreasing" in some well-founded sense.
+
+ But wait, earlier I calculated that `R_rec_succ` increases the syntactic size if `|s| > 0`.
+
+ However, we can use a weighted size where `recΔ` nodes have a large weight on their third argument.
+
+ Define `||t||` as follows:
+ - `||void|| = 1`
+ - `||delta t|| = 1 + ||t||`
+ - `||integrate t|| = 1 + ||t||`
+ - `||merge t1 t2|| = 1 + ||t1|| + ||t2||`
+ - `||app t1 t2|| = 1 + ||t1|| + ||t2||`
+ - `||recΔ b s n|| = ω * ||n|| + (||b|| + ||s||)` where ω is an ordinal (or we can use a pair `(||n||, ||b||+||s||)` with lexicographic order)
+
+ Then for `R_rec_succ`:
+ Left: `||recΔ b s (delta n)|| = ω * (1 + ||n||) + (||b|| + ||s||) = ω + ω * ||n|| + ||b|| + ||s||`
+ Right: `||app s (recΔ b s n)|| = 1 + ||s|| + (ω * ||n|| + ||b|| + ||s||) = 1 + ω * ||n|| + ||b|| + 2||s||`
+
+ Since ω > any finite number, `ω + ω * ||n|| > 1 + ω * ||n|| + 2||s||` for any finite `||s||`.
+
+ So the ordinal measure decreases.
+
+ For other rules:
+ - `R_rec_zero`: `||recΔ b s void|| = ω * 1 + ||b|| + ||s|| = ω + ...` vs `||b||`. Since ω > ||b||, this decreases.
+ - `R_int_delta`: `||integrate (delta t)|| = 1 + (1 + ||t||) = 2 + ||t||` vs `||void|| = 1`. Decreases.
+ - `R_merge_void_left`: `||merge void t|| = 1 + 1 + ||t|| = 2 + ||t||` vs `||t||`. Decreases.
+ - `R_merge_cancel`: `||merge t t|| = 1 + 2||t||` vs `||t||`. Decreases for ||t|| >= 1.
+ - `R_eq_refl`: `||eqW a a|| = 1 + 2||a||` vs `||void|| = 1`. Decreases.
+ - `R_eq_diff`: `||eqW a b|| = 1 + ||a|| + ||b||` vs `||integrate (merge a b)|| = 1 + (1 + ||a|| + ||b||) = 2 + ||a|| + ||b||`. 
+
+ Wait! `R_eq_diff` **increases** the measure! `1 + ||a|| + ||b||` vs `2 + ||a|| + ||b||`.
+
+ So my measure doesn't work for this rule.
+
+ I need a different measure for `eqW` and `integrate`.
+
+ Maybe:
+ - `||eqW a b|| = ||a|| + ||b||` (no +1)
+ - `||integrate t|| = ||t||` (no +1)
+
+ Then `R_eq_diff`: `||eqW a b|| = ||a|| + ||b||` vs `||integrate (merge a b)|| = 1 + ||a|| + ||b||`. Still increases by 1.
+
+ If I set `||integrate t|| = ||t|| - 1`? But that's not well-defined for all t.
+
+ Or I can swap the weight:
+ `||eqW a b|| = 2(||a|| + ||b||)` and `||integrate t|| = ||t||`, `||merge a b|| = ||a|| + ||b||`.
+ Then `2x` vs `1 + x`, decreases if `x > 1`.
+
+ But if `||a||=||b||=0` (impossible, minimum is 1 for `void`), or if we allow 0...
+
+ Actually `||void|| = 1`, so `||a|| >= 1`, so `||a||+||b|| >= 2`, so `2x >= 4` vs `1+x >= 3`, so it decreases.
+
+ Let me check:
+ `R_eq_diff`: `2(||a|| + ||b||)` vs `1 + (||a|| + ||b||) = 1 + ||a|| + ||b||`.
+ Since `||a||, ||b|| >= 1`, we have `||a||+||b|| >= 2`, so `2(||a||+||b||) >= 4` and `1 + ||a||+||b|| >= 3`.
+ And `2k > 1+k` for `k > 1`.
+ If `k=1` (i.e., one is void and the other is... wait, minimum size is 1, so if both are void, `||a||=||b||=1`, sum=2.
+ Then left = 4, right = 1+2 = 3. Decreases.
+
+ So with this weighting, `R_eq_diff` decreases.
+
+ Now check `R_int_delta`:
+ `||integrate (delta t)||`... if `||integrate x|| = ||x||`, then `||integrate (delta t)|| = 1 + ||t||`.
+ `||void|| = 1`.
+ So `1 + ||t||` vs `1`. Decreases.
+
+ `R_eq_refl`: `||eqW a a|| = 2(||a||+||a||) = 4||a||` vs `||void|| = 1`. Decreases.
+
+ So this measure seems to work!
+
+ Let me formalize:
+ Define `|t|` (natural number) by:
+ - `|void| = 1`
+ - `|delta t| = 1 + |t|`
+ - `|integrate t| = |t|` (identity)
+ - `|merge t1 t2| = |t1| + |t2|` (sum, no +1)
+ - `|app t1 t2| = 1 + |t1| + |t2|` (standard)
+ - `|recΔ b s n| = ω * |n| + |b| + |s|` (ordinal)
+ - `|eqW t1 t2| = 2(|t1| + |t2|)` (double)
+
+ Check all rules:
+
+ 1. `R_int_delta`: integrate (delta t) → void
+    LHS: |integrate (delta t)| = |delta t| = 1 + |t|
+    RHS: |void| = 1
+    1+|t| > 1. OK.
+
+ 2. `R_merge_void_left`: merge void t → t
+    LHS: |merge void t| = |void| + |t| = 1 + |t|
+    RHS: |t|
+    1+|t| > |t|. OK.
+
+ 3. `R_merge_void_right`: merge t void → t
+    LHS: |t| + 1 > |t|. OK.
+
+ 4. `R_merge_cancel`: merge t t → t
+    LHS: |t| + |t| = 2|t|
+    RHS: |t|
+    2|t| > |t| for |t| >= 1. OK.
+
+ 5. `R_rec_zero`: recΔ b s void → b
+    LHS: ω * |void| + |b| + |s| = ω * 1 + |b| + |s| = ω + |b| + |s|
+    RHS: |b|
+    Since ω is infinite ordinal, ω + x > y for any finite x, y. OK.
+
+ 6. `R_rec_succ`: recΔ b s (delta n) → app s (recΔ b s n)
+    LHS: ω * |delta n| + |b| + |s| = ω * (1 + |n|) + |b| + |s| = ω + ω*|n| + |b| + |s|
+    RHS: |app s (recΔ b s n)| = 1 + |s| + (ω*|n| + |b| + |s|) = 1 + ω*|n| + |b| + 2|s|
+    Since ω > 1 + |s| (finite), we have ω + ω*|n| > 1 + 2|s| + ω*|n|? No.
+    Actually: ω + (ω*|n| + |b| + |s|) vs (ω*|n| + |b| + 2|s|) + 1.
+    The first is ω + C, the second is C' where C and C' are finite if |n|=0, or start with ω*|n| if |n|>0.
+    If |n| > 0, then both are in the ω*|n| "column", and we compare the finite parts: |b|+|s| vs 1+|b|+2|s|, i.e., 0 vs 1+|s|, so RHS is larger? No!
+
+    Wait: ω*(1+k) = ω + ω*k.
+    If k > 0, then ω*k is a limit ordinal, and ω + ω*k = ω*k (since ω*k is limit and absorbs finite additions on the left? No, ordinal arithmetic: ω + ω = ω*2, not ω).
+    Actually, ordinal arithmetic: α + β is not commutative.
+    ω*(1+k) = ω + ω*k.
+    If k=0: ω*1 = ω.
+    If k>0: ω*(1+k) = ω + ω*k.
+
+    But ω + ω*k = ω*(1+k) already.
+
+    Standard ordinal comparison:
+    ω + ω*k vs 1 + ω*k + finite...
+    Actually, for ordinals: if α >= ω, then 1 + α = α.
+    So if |n| > 0, then ω*|n| >= ω, so 1 + ω*|n| = ω*|n|.
+    So RHS = ω*|n| + |b| + 2|s|.
+    LHS = ω + ω*|n| + |b| + |s| = ω*(1+|n|) + |b| + |s| (if |n|>0, this is ω*|n| + ω? No.)
+    
+    Let's be careful.
+    |n| is a finite natural number.
+    ω*|n| is ω added |n| times.
+    LHS: ω*(1+|n|) + |b|+|s| = ω + ω*|n| + |b|+|s|
+    RHS: 1 + |s| + ω*|n| + |b|+|s| = 1 + ω*|n| + |b|+2|s|
+
+    Since ω*|n| is a limit ordinal (for |n|>0), 1 + ω*|n| = ω*|n|.
+    So RHS = ω*|n| + |b|+2|s|.
+
+    LHS = ω + (ω*|n| + |b|+|s|) = ω + C where C >= ω (if |n|>0).
+    Actually, ordinal addition: if C >= ω, then ω + C = C if C is a limit of cofinality >= ω? No.
+    If C = ω*k + m, then ω + C = ω + ω*k + m = ω*(1+k) + m.
+    So LHS = ω*(1+|n|) + |b|+|s| (since |b|+|s| is finite).
+    RHS = ω*|n| + (|b|+2|s|+1) (reordering finite terms).
+
+    So LHS = ω*(1+|n|) + finite = ω + ω*|n| + finite
+    RHS = ω*|n| + finite'
+
+    Clearly LHS > RHS because ω + anything > anything (for finite anything), and ω + X > X for any ordinal X.
+
+    If |n| = 0:
+    LHS = ω*1 + |b|+|s| = ω + |b|+|s|
+    RHS = 1 + |s| + (ω*0 + |b|+|s|) = 1 + |s| + |b| + |s| = 1 + |b| + 2|s|
+    ω + finite > finite. OK.
+
+    So this works!
+
+ 7. `R_eq_refl`: eqW a a → void
+    LHS: 2(|a|+|a|) = 4|a|
+    RHS: 1
+    4|a| > 1. OK.
+
+ 8. `R_eq_diff`: eqW a b → integrate (merge a b)
+    LHS: 2(|a|+|b|)
+    RHS: |integrate (merge a b)| = |merge a b| = |a|+|b|
+    2(|a|+|b|) > |a|+|b| since |a|,|b| >= 1, so sum >= 2. OK.
+
+ So with this weight function into ordinals (or into natural numbers with a suitable linearization, but ordinals are easier), every rewrite step decreases the weight.
+
+ Therefore, the system is strongly normalizing (terminating).
+
+ Wait, I need to make sure that the weight is well-defined and that the comparisons are correct.
+
+ For `recΔ`, I used an ordinal weight. This is standard for proving SN of primitive recursion.
+
+ The other rules use natural number weights, which embed into ordinals.
+
+ So yes, this establishes strong normalization.
+
+ Therefore, the answer is YES, strong normalization can be established.
+
+ But I should double-check if there are any hidden issues.
+
+ One issue: `R_eq_diff` applies even when a = b. This means `eqW t t` can go to `integrate (merge t t)` → `integrate t`.
+ But `eqW t t` can also go to `void`.
+ This is a non-confluent critical pair, but both branches terminate.
+
+ Is there any term where `integrate t` creates a redex that leads to infinite loop?
+ `integrate` only reduces if `t` is `delta u`.
+ So if we have `integrate (merge a b)` and `merge a b` reduces to something, and eventually to `delta u`, then we can reduce further.
+
+ But since `merge` rules reduce size (in our measure), and `integrate` doesn't increase it (in our measure |integrate t| = |t|), and `delta` adds 1, we have:
+ `eqW a b` (weight 2(|a|+|b|)) → `integrate (merge a b)` (weight |a|+|b|) → ... → `integrate (delta u)` (weight 1+|u|) → `void` (weight 1).
+
+ So it terminates.
+
+ Therefore, the system is indeed strongly normalizing.
+
+ Final check: are there any other critical pairs or interactions I missed?
+ - `merge` rules: left and right void, and cancel. These overlap (e.g., `merge void void`), but all reduce to `void`.
+ - `eqW` rules: overlap when a=b, but both terminate.
+
+ The system is orthogonal (or at least, the critical pairs are harmless for SN).
+
+ So my assessment is: **Yes**, strong normalization can be established using a suitable ordinal (or weighted) measure that decreases with each rewrite step, particularly by assigning ω-weight to the recursive position in `recΔ` and double-weight to `eqW` to handle the `R_eq_diff` rule.
+
+ Actually, I should verify that `|integrate t| = |t|` is consistent with `R_int_delta`.
+ LHS: |integrate (delta t)| = |delta t| = 1+|t|
+ RHS: |void| = 1
+ 1+|t| > 1. Yes.
+
+ And for contexts: since this is a first-order system (no binders), we can extend the measure homomorphically to contexts, or just note that all rules are linear and the measure is monotone in all arguments (for the ordinal part, we need to be careful, but since we're just proving that the specific redex weight decreases, and the context adds the same weight to both sides, the inequality is preserved).
+
+ Therefore, the answer is yes.

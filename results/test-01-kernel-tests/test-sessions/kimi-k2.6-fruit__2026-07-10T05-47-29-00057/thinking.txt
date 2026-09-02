@@ -1,0 +1,992 @@
+The user wants a raw assessment of whether strong normalization (SN) can be established for the given rewrite system in Lean 4. The system has no variable binding, no external memory, and no imported axioms beyond the rules shown.
+
+ First, let's understand the syntax:
+
+ ```lean
+ inductive Trace : Type
+ | plum : Trace
+ | grape : Trace → Trace
+ | mango : Trace → Trace
+ | peach : Trace → Trace → Trace
+ | pear : Trace → Trace → Trace
+ | banana : Trace → Trace → Trace → Trace
+ | cherry : Trace → Trace → Trace
+ ```
+
+ Constructors:
+ - `plum`: constant (0-ary)
+ - `grape`: unary
+ - `mango`: unary
+ - `peach`: binary
+ - `pear`: binary
+ - `banana`: ternary
+ - `cherry`: binary
+
+ Rewrite rules (Step relation):
+
+ 1. `R_mango_grape`: `mango (grape t) → plum` for any `t`.
+ 2. `R_peach_plum_left`: `peach plum t → t`
+ 3. `R_peach_plum_right`: `peach t plum → t`
+ 4. `R_peach_cancel`: `peach t t → t`
+ 5. `R_banana_zero`: `banana b s plum → b`
+ 6. `R_apple_orange`: `banana b s (grape n) → pear s (banana b s n)`
+ 7. `R_cherry_refl`: `cherry a a → plum`
+ 8. `R_cherry_diff`: `a ≠ b → cherry a b → mango (peach a b)`
+
+ The question: "can strong normalization of this system be established from the presented calculus alone, without importing structural axioms or object-level assumptions beyond what is derivable from the given syntax and rewrite rules?"
+
+ Strong normalization means there are no infinite reduction sequences. We need to check if the system terminates from any starting term.
+
+ Let's analyze the rewrite rules for potential non-termination.
+
+ The rules are all first-order rewrite rules. No variable binding (so no lambda), no external memory.
+
+ Let's see if there are any cycles or rules that can increase size in a way that enables infinite reductions.
+
+ Let's list the rules with their size behavior (roughly term size):
+
+ 1. `mango (grape t) → plum`: Size decreases significantly. `mango` and `grape` removed.
+ 2. `peach plum t → t`: Size decreases. `peach` and `plum` removed.
+ 3. `peach t plum → t`: Size decreases.
+ 4. `peach t t → t`: Size decreases.
+ 5. `banana b s plum → b`: Size decreases. `banana`, `s`, `plum` removed.
+ 6. `banana b s (grape n) → pear s (banana b s n)`: Here, the left side has `banana` with third argument `grape n`. The right side has `pear` and `banana b s n`. The `grape` is stripped from `n`. Let's count constructors:
+    - LHS: `banana` (1) + size(b) + size(s) + `grape` (1) + size(n) = size(b)+size(s)+size(n)+2
+    - RHS: `pear` (1) + size(s) + `banana` (1) + size(b) + size(s) + size(n) = size(b)+2*size(s)+size(n)+2
+    Wait, the `banana` on RHS has arguments `b`, `s`, `n`. So the size of RHS is 1 (pear) + size(s) + [1 (banana) + size(b) + size(s) + size(n)] = size(b) + 2*size(s) + size(n) + 2.
+    LHS size: 1 (banana) + size(b) + size(s) + [1 (grape) + size(n)] = size(b) + size(s) + size(n) + 2.
+    So RHS has an extra `size(s)` compared to LHS. The size can increase if `s` is non-trivial! This is a key rule.
+
+    However, note that the third argument on LHS is `grape n`, which has a `grape` constructor. On RHS, the third argument to banana is `n` (without grape). But we introduce a `pear s (...)` wrapper and duplicate `s` as an argument to `pear` and as the second argument to the inner `banana`.
+    
+    Let's write the rule carefully:
+    `banana b s (grape n) → pear s (banana b s n)`
+    
+    So `s` appears twice on the right. If `s` is large, the term size can grow.
+    
+    But maybe there is a measure that decreases. For example, the number of `grape` constructors in the third argument of `banana`? No, because the `banana` reappears with `n` which is smaller (no grape wrapper), but the outer `pear` adds something. However, we could have a loop if `pear` or other rules can recreate a `grape` inside a `banana` context.
+
+ 7. `cherry a a → plum`: Size decreases.
+ 8. `cherry a b → mango (peach a b)` if `a ≠ b`. Size: LHS `cherry` (1) + size(a) + size(b). RHS `mango` (1) + `peach` (1) + size(a) + size(b) = size(a)+size(b)+2. LHS is size(a)+size(b)+1. So size increases by 1. But only applicable if `a ≠ b`.
+
+ So rules 6 and 8 can increase term size. Rule 6 duplicates `s`. Rule 8 adds a constructor.
+
+ We need to see if these can interact to produce an infinite loop.
+
+ Let's think about possible cycles.
+
+ Rule 6: `banana b s (grape n) → pear s (banana b s n)`.
+ This reduces the depth of `grape` nesting in the third argument of `banana`. But it duplicates `s`.
+ If `s` contains a `banana`, or can generate a `banana`, or if `pear` rules can lead back to `banana`...
+
+ Are there rules for `pear`? No! There are no rewrite rules for `pear`. `pear` is a constructor that is only introduced in rule 6, and never reduced. So any `pear` term is a normal form unless it contains reducible subterms.
+
+ Wait, `pear` is a binary constructor. The rewrite rules don't mention `pear` on the LHS. So `pear` is inert, except its subterms can be reduced.
+
+ Similarly, `plum` is inert (no rules mention `plum` as a LHS constructor except inside larger patterns).
+ `grape` appears on LHS inside `mango (grape t)` and inside `banana b s (grape n)`.
+ `mango` appears on LHS as the outer constructor in `mango (grape t)`. It also appears on RHS of rule 8.
+ `peach` appears on LHS in rules 2,3,4 and inside `mango (peach a b)` on RHS of rule 8. No rule reduces `mango (peach a b)` directly unless the inner `peach` reduces.
+ `banana` appears on LHS in rules 5 and 6.
+ `cherry` appears on LHS in rules 7 and 8.
+
+ So the only active reducible patterns are:
+ - `mango (grape t)`
+ - `peach plum t`
+ - `peach t plum`
+ - `peach t t`
+ - `banana b s plum`
+ - `banana b s (grape n)`
+ - `cherry a a`
+ - `cherry a b` with `a ≠ b`
+
+ Since `pear` is inert and just wraps things, rule 6 essentially produces a `pear` shell around a recursive call. Since `pear` is never reduced, the duplication of `s` inside `pear s (...)` means the size grows, but the new `banana` term has `n` instead of `grape n`. So if we think about a measure like a weighted sum, maybe we can assign weights to constructors to make each rule decrease the weight.
+
+ Let's try to find a weight function `w` from terms to natural numbers (or ordinals) that decreases with each step. If we can find one, then SN holds.
+
+ Let `w` be defined recursively:
+ - `w(plum) = 0`
+ - `w(grape t) = w(t) + 1`? Or something else.
+ - `w(mango t) = ...`
+ - etc.
+
+ Let's denote weights of constructors:
+ Let |plum| = p
+ |grape|(x) = g + x
+ |mango|(x) = m + x
+ |peach|(x,y) = c + x + y  (I'll use c for peach)
+ |pear|(x,y) = r + x + y
+ |banana|(x,y,z) = b + x + y + z
+ |cherry|(x,y) = h + x + y  (h for cherry)
+
+ For rule 1: `mango (grape t) → plum`.
+ LHS weight: m + g + w(t) + p? Wait, `mango` takes one argument. So if `w(grape t) = g + w(t)`, then LHS = m + g + w(t). RHS = p.
+ Need: m + g + w(t) > p for all t. Since w(t) ≥ 0, need m + g > p. Or more precisely, m + g + w(t) > p. Since w(t) can be 0, need m + g > p.
+
+ Rule 2: `peach plum t → t`.
+ LHS: c + p + w(t). RHS: w(t).
+ Need: c + p + w(t) > w(t) => c + p > 0.
+
+ Rule 3: `peach t plum → t`.
+ LHS: c + w(t) + p > w(t) => c + p > 0.
+
+ Rule 4: `peach t t → t`.
+ LHS: c + w(t) + w(t) > w(t) => c + w(t) > 0. Need c > 0 or w(t) always positive, but w(t) can be 0 if t=plum. If t=plum, LHS = c + p + p, RHS = p. So need c + p > 0.
+
+ Rule 5: `banana b s plum → b`.
+ LHS: b + w(b) + w(s) + p > w(b). Need b + w(s) + p > 0.
+
+ Rule 6: `banana b s (grape n) → pear s (banana b s n)`.
+ LHS: b + w(b) + w(s) + g + w(n).
+ RHS: r + w(s) + [b + w(b) + w(s) + w(n)] = r + b + w(b) + 2*w(s) + w(n).
+ Need: b + w(b) + w(s) + g + w(n) > r + b + w(b) + 2*w(s) + w(n).
+ Simplify: g + w(s) > r + 2*w(s) => g > r + w(s).
+ But w(s) can be arbitrarily large! So no constant weights can work for rule 6 if we use a standard additive weight. The LHS weight depends on w(s) linearly with coefficient 1, while RHS has coefficient 2. So the difference is g - r - w(s). For large w(s), this becomes negative. So additive weights with positive coefficients don't work.
+
+ We need a non-linear weight or a lexicographic measure.
+
+ Let's think about what rule 6 does. It moves a `grape` from inside the third argument of `banana` to ... well it removes the `grape` but duplicates `s`. This looks like it could be problematic if `s` can contain a `banana` that leads to further reductions that grow the term.
+
+ However, note that the `banana` on the RHS has the same `b` and `s`, but `n` instead of `grape n`. So the number of `grape` constructors strictly decreases in the third argument of this particular `banana`. But `s` is duplicated. If `s` is a normal form, then we just get a larger term but with fewer `grape`s in that position.
+
+ The question is whether the duplication of `s` can create new redexes that somehow lead back to a larger version of the original term.
+
+ Let's examine possible interactions.
+
+ The `s` in rule 6 is duplicated: one goes into `pear` (which is inert), and one stays as the second argument of `banana`. Since `pear` is inert, the copy inside `pear` cannot be reduced unless it's part of a larger redex. But there are no rules for `pear`. So the copy inside `pear` is "dead" in terms of creating new redexes at the root. However, subterms inside it can still be reduced if they contain redexes, but those reductions would have been possible in the original `s` as well. So duplicating `s` into `pear` doesn't create new redexes that weren't already possible in `s`. It just creates an additional copy of any redexes present in `s`.
+
+ The `banana` on the RHS has arguments `b`, `s`, `n`. Compared to LHS `banana b s (grape n)`, the third argument lost a `grape`. So if we consider the pair:
+ (number of `grape` constructors in the third argument of `banana`, something else)
+ maybe we can do lexicographic induction.
+
+ But wait, the `banana` is now inside a `pear`. The root is `pear`. No rule applies to `pear`. So the only further reductions can happen inside the subterms: either inside `s` (the first argument of `pear`), or inside the second argument which is `banana b s n`.
+
+ Inside `banana b s n`, we could apply rule 5 if `n = plum`, or rule 6 if `n = grape n'`, or nothing if `n` is something else (like `mango x`, `peach x y`, `pear x y`, `banana x y z`, `cherry x y`, or `plum`).
+
+ If `n = grape n'`, then we can apply rule 6 again:
+ `banana b s (grape n') → pear s (banana b s n')`.
+ This will again duplicate `s` and strip another `grape`. So repeatedly applying rule 6 to a chain of grapes will peel off one grape at a time, each time duplicating `s` and wrapping in a `pear`. After k steps, we'll have a nested sequence of `pear s (pear s (... (banana b s n_k)...))`.
+
+ Eventually, if the grape chain is finite, we reach a term `banana b s n_final` where `n_final` is not `grape`. If `n_final = plum`, rule 5 applies: `banana b s plum → b`. Then we get `pear s (pear s (... (pear s b)...))`. Since `pear` is inert, we're done (modulo reductions in `b` and the copies of `s`).
+
+ If `n_final` is something else (e.g., `mango x`), then `banana b s (mango x)` is a normal form (no rule applies). So again we get stuck with a tower of `pear`s.
+
+ So rule 6 seems to terminate by itself because it consumes a `grape` from the third argument each time. The duplication of `s` doesn't create new `banana` redexes at the root because the new `banana` is nested inside `pear` and has a smaller third argument.
+
+ However, could reductions inside `b` or `s` create new redexes? For example, if `s` reduces to a term that interacts with `pear`? No, `pear` has no rules. If `b` reduces, that doesn't affect the `banana` unless `b` is the result of `banana` reduction (but here `b` is just a subterm). The only way to get a new `banana` redex at the root is if some rule produces a `banana` at the root. Which rules produce `banana`? None! `banana` only appears on the LHS of rules. It never appears on the RHS of any rule except rule 6 itself, where it appears nested inside `pear`. Wait, rule 6 RHS is `pear s (banana b s n)`. So `banana` is produced, but it's always inside `pear`.
+
+ Rule 5 produces `b`, which is a subterm. Rule 1 produces `plum`. Rules 2,3,4 produce a subterm. Rule 7 produces `plum`. Rule 8 produces `mango (peach a b)`.
+
+ So no rule ever creates a `banana` at the root position except that `banana` can be a subterm of the starting term or produced inside `pear` by rule 6. Since `pear` is inert, a `banana` inside `pear` can only reduce if it's in the third argument of `pear` (the second component). But even then, its own reduction might produce more `pear`s inside it, but they stay inside.
+
+ So `banana` redexes are "self-contained" and each application of rule 6 reduces the number of `grape` constructors along the left spine of the third argument of that `banana`. Wait, not necessarily left spine; the third argument is exactly `grape n`. So each application strips exactly one `grape` from the third argument. Since there are no rules that increase the number of `grape` constructors in that position (in fact, no rules create `grape` at all), this process must terminate.
+
+ Similarly, `mango` only reduces when its argument is `grape t`. Rule 1 removes both. `mango` appears on RHS of rule 8: `mango (peach a b)`. If `a` and `b` are such that `peach a b` reduces? There are rules for `peach`: if one argument is `plum` or both are equal. So `mango (peach a b)` could reduce if `peach a b` reduces to something, but rule 1 requires the argument of `mango` to be `grape t`. So `mango (peach a b)` is not a redex for rule 1 unless `peach a b` is `grape t`, which is impossible because `peach` and `grape` are different constructors. So `mango` created by rule 8 is inert unless some other rule applies to its argument, but no rule turns `peach a b` into `grape t`. Actually, `peach a b` could reduce via rules 2,3,4 if `a` or `b` is `plum` or `a=b`. But the result is `a` or `b`, which are subterms of `peach a b`. So the `mango` would become `mango a` or `mango b`, which is still inert unless `a` or `b` is `grape t`. But `a` and `b` are arbitrary. So a term `mango x` is a normal form unless `x` is of the form `grape t`.
+
+ Wait, could `a` or `b` be `grape t`? Yes, if the original terms were. Then `mango (peach (grape t1) b)` doesn't match rule 1. But if `peach (grape t1) b` reduces? No, rules for `peach` require `plum` or equality. `grape t1` is not `plum` (unless `t1` is something making it equal? No, constructors are disjoint). So `peach (grape t1) b` does not reduce unless `(grape t1) = b` (rule 4). If `b = grape t1`, then `peach (grape t1) (grape t1) → grape t1`. Then `mango (peach ...)` becomes `mango (grape t1)`, which then reduces to `plum` via rule 1. So we have a sequence:
+ `cherry (grape t1) (grape t2)` with `t1 ≠ t2` (assuming they are different). Actually rule 8 requires `a ≠ b`. If `a = grape t1`, `b = grape t2`, and `t1 ≠ t2`, then `a ≠ b`. So `cherry a b → mango (peach a b)`. If later `a` becomes equal to `b`? No, `a` and `b` are fixed subterms; reduction doesn't change them unless they are reduced themselves. But `peach a b` doesn't reduce `a` or `b` internally; it only produces `a` or `b` as a whole. So if `a ≠ b`, `peach a b` is inert (no rule applies). Wait, rule 4 is `peach t t → t`, which requires equality. So if `a ≠ b`, `peach a b` is a normal form. Thus `mango (peach a b)` is inert because argument is not `grape`. So rule 8 produces an inert term unless the resulting `mango` argument later becomes `grape` through reduction of `a` or `b`? But `a` and `b` are subterms; they could reduce. However, `peach a b` doesn't reduce to something containing `grape` unless `a` or `b` is `grape`. But `peach a b` is not reducible if `a ≠ b` and neither is `plum`. If `a` or `b` reduces to `plum`, then `peach a b` might become reducible. For example, if `a` reduces to `plum`, then `peach a b` doesn't reduce because rule 2 requires the left arg to be `plum` at the time of pattern matching. Actually, reduction can happen inside subterms. So if `a →* plum`, then `peach a b →* peach plum b → b`. So `mango (peach a b)` could reduce if `a` or `b` reduces to `plum` or they become equal. But that involves reductions inside `a` and `b`, which are smaller.
+
+ Let's think more systematically. This is a first-order term rewriting system (TRS). We need to determine if it is strongly normalizing (SN).
+
+ Rules:
+ 1. mango(grape(x)) -> plum
+ 2. peach(plum, x) -> x
+ 3. peach(x, plum) -> x
+ 4. peach(x, x) -> x
+ 5. banana(b, s, plum) -> b
+ 6. banana(b, s, grape(n)) -> pear(s, banana(b, s, n))
+ 7. cherry(x, x) -> plum
+ 8. cherry(x, y) -> mango(peach(x, y))  if x ≠ y
+
+ Note: In rule 8, the condition `x ≠ y` is a side condition based on equality of terms. This is a *conditional* rewrite rule, or rather a rewrite rule with a side condition. In first-order TRS, such rules are usually considered as part of a conditional TRS. However, the Lean formalization uses a dependent type/proposition: `a ≠ b` is a proof that the terms are not equal. Since the system has no variables other than universal quantification over terms, and equality is standard (constructors are disjoint, etc.), this is fine.
+
+ Actually, in Lean, `a` and `b` are arbitrary terms of type `Trace`. The condition `a ≠ b` is a proposition. So rule 8 applies only when the two arguments are not equal. Since `Trace` is an inductive type, equality is decidable, but that's not relevant.
+
+ Let's consider potential infinite reductions.
+
+ The only rule that can increase the size of the term is rule 6 (duplicates `s`) and rule 8 (adds a constructor). Rule 6's size increase is problematic because `s` can be arbitrarily large.
+
+ However, rule 6 can only apply to terms of the form `banana(b, s, grape(n))`. It produces `pear(s, banana(b, s, n))`. The new `banana` has third argument `n`, which is strictly smaller than `grape(n)` in terms of depth (or number of `grape` constructors). Specifically, if we define a measure on the third argument of `banana`, such as the number of `grape` constructors along the "grape-spine", it decreases.
+
+ Let's define a measure for any term `t`:
+ - Let `G(t)` be the number of `grape` constructors in `t`.
+
+ For rule 6: LHS has `G(b) + G(s) + 1 + G(n)` grapes. RHS has `G(s) + G(b) + G(s) + G(n)` = `G(b) + 2G(s) + G(n)`. So total grapes increase by `G(s)`. Not good.
+
+ But for the specific `banana` redex, the third argument's `G` decreases by 1 (removing the outermost grape). However, a new `banana` is created with that smaller third argument. The old `banana` is destroyed. The new `banana` can again apply rule 6 if `n` is `grape(n')`. Each application strips one `grape` from the third argument. Since there are no rules that create `grape` in the third argument of a `banana`, and no rule that moves a `banana` out of a `pear` to make it a root redex again, the chain of rule 6 applications along any given `banana` must terminate after finitely many steps (equal to the number of nested `grape`s in the original third argument).
+
+ But could the copies of `s` inside `pear` create new `banana` redexes? No, because `pear` is inert and `banana` inside `pear` is not at the root. However, subterms inside the copies of `s` can reduce. Since `s` is duplicated, there are now two independent copies of `s` that can reduce. If `s` itself has redexes, they can be reduced in either copy. But those reductions would have been possible in the original `s` anyway. The duplication doesn't create new types of redexes.
+
+ Wait: does the duplication of `s` allow a redex inside `s` to be reduced twice, whereas before it was only one `s`? Yes, but that's fine; it just means more work. The question is whether the total reduction sequence can be infinite.
+
+ Let's think about recursive structure. The TRS is not size-decreasing, so we can't just use size. But maybe we can use a well-founded measure based on a lexicographic combination.
+
+ Consider the set of positions where `banana` occurs with a third argument that is either `plum` or `grape n`. Actually, any `banana` term with third argument not `plum` or `grape n` is inert. So a `banana` term is either:
+ - reducible by rule 5 if third arg is `plum`
+ - reducible by rule 6 if third arg is `grape n`
+ - irreducible otherwise.
+
+ For rule 5: `banana b s plum → b`. This reduces the term to `b`, discarding `s` and the banana. So it's decreasing.
+
+ For rule 6: it consumes one `grape` from the third arg. If we think of the third argument as a "counter", each application decrements the counter (number of `grape`s at the head of the third argument). The counter is a natural number. So each `banana` can undergo rule 6 at most as many times as the `grape`-depth of its third argument.
+
+ But the `banana` is nested inside `pear`. Could some other rule reduce the `pear` or move the `banana` out? No rules for `pear`. So the `banana` stays inside `pear` forever (unless `pear` itself becomes part of a larger redex, but there are no larger redexes involving `pear`). Actually, `pear` could be the first or second argument of another constructor, e.g., `grape (pear ...)` or `mango (pear ...)` or `peach (pear ...) (... )`, etc. But none of the rules match on `pear`. So `pear` is transparent: reductions can happen inside its arguments, but no rule applies to `pear` itself.
+
+ Therefore, any `banana` inside a `pear` is "stuck" in the sense that it can only reduce internally, but cannot become part of a larger redex at the root. Wait, it could be inside another `banana`'s arguments? For example, if `s` in a top-level `banana` contains a `banana`. But that inner `banana` is independent.
+
+ So the overall structure is a tree. The rewrite rules are all linear or have a specific structure.
+
+ Let's try to prove SN using a multi-set measure or a weight that assigns very high weight to `grape` and negative weight to `pear` or something.
+
+ Actually, rule 6: `banana b s (grape n) → pear s (banana b s n)`.
+ If we assign weight to `banana` that depends on the third argument. Let's try to define a measure on terms using a polynomial interpretation.
+
+ Polynomial interpretations: assign to each constructor `f` of arity `n` a polynomial `P_f(x1,...,xn)` with natural coefficients such that for each rule `l → r`, `P_l > P_r` for all values of variables in positive naturals. This implies SN.
+
+ Let's try:
+ - P_plum = 1
+ - P_grape(x) = x + 1
+ - P_mango(x) = x + 1? Or something.
+ - P_peach(x,y) = x + y + 1
+ - P_pear(x,y) = x + y + 1
+ - P_banana(x,y,z) = x + 2y + z + 1? No, need to handle duplication.
+ Actually, for rule 6, LHS: P_banana(P_b, P_s, P_grape(P_n)) = P_banana(b, s, n+1).
+ RHS: P_pear(P_s, P_banana(P_b, P_s, P_n)) = P_pear(s, P_banana(b, s, n)).
+
+ Let's try:
+ P_plum = 1
+ P_grape(x) = x + 2
+ P_mango(x) = 2x + 1
+ P_peach(x,y) = x + y + 1
+ P_pear(x,y) = x + y + 1
+ P_banana(x,y,z) = x + y * z + 1? That seems weird.
+
+ Better: Since rule 6 duplicates `s`, maybe we can assign to `banana` a weight that is exponential in the third argument or something, so that removing one `grape` (which adds some amount) offsets the duplication of `s`. For example, if `P_banana(x,y,z) = x + y * ω(z) + ...` but we need natural numbers.
+
+ Actually, if we assign `P_grape(x) = 2x`, then each nesting doubles. And `P_banana(x,y,z) = x + y + z`. Then LHS = x + y + 2*n. RHS = (y + ...) no.
+
+ Let's think: We want `P_banana(b, s, grape(n)) > P_pear(s, P_banana(b, s, n))`.
+ If we set `P_pear(x,y) = x + y`, and `P_banana(x,y,z) = x + 2y + z`, then:
+ LHS = b + 2s + (n+1) = b + 2s + n + 1.
+ RHS = s + (b + 2s + n) = b + 3s + n.
+ Need: b + 2s + n + 1 > b + 3s + n => 1 > s. So only if s < 1 (i.e., s=0, but we have plum=1). Not good.
+
+ What if `P_grape(x) = x`, `P_pear(x,y) = 0`? Then RHS = 0 + P_banana(b,s,n). But then pear disappears, which may not be monotonic? Actually polynomial interpretations require monotonicity in each argument. If P_pear(x,y) = 0, it's not strictly monotonic. We need strict monotonicity for the interpretation to be valid (usually). But maybe we can use weak monotonicity? No, for SN we need strict monotonicity.
+
+ Let's try a different measure: the maximum depth of `grape` chains in certain positions.
+
+ Actually, rule 6 is very similar to a recursor: it iterates over a chain of `grape`s in the third argument. This is like defining a function by recursion on a natural number encoded as `grape^n(plum)`. The duplication of `s` corresponds to accumulating a result. This is reminiscent of a fold.
+
+ Consider the type `Trace` as a tree. Rule 6 is the only rule that duplicates a subterm. But since the recursion is structural on the `grape`-chain, it should terminate.
+
+ Let's check if there's any subtle non-termination due to interaction between rules.
+
+ Could rule 8 create a term that leads to an infinite loop?
+ `cherry a b → mango (peach a b)` when `a ≠ b`.
+ Then `mango (peach a b)` is inert (since `peach` is not `grape`). Unless `a` or `b` reduces to something that makes `peach a b` reducible.
+ Suppose `a` reduces to `plum`. Then `peach a b` becomes `peach plum b`, which reduces to `b`. So we get `mango b`. If `b` is `grape t`, then `mango (grape t) → plum`. So:
+ `cherry (plum) (grape t)` — but wait, rule 8 requires `a ≠ b`. `plum ≠ grape t` (disjoint constructors). So rule 8 applies: `cherry plum (grape t) → mango (peach plum (grape t))`.
+ Now reduce inside: `peach plum (grape t) → grape t` (rule 2). So we get `mango (grape t) → plum`.
+ This terminates.
+
+ What if `a` reduces to something, and `b` reduces to the same something? For example, `a = mango (grape t1)` and `b = mango (grape t2)`. Then `a` reduces to `plum` via rule 1, and `b` reduces to `plum` via rule 1. But they reduce independently. The term `cherry a b` could reduce via rule 7 if `a = b`. If `a ≠ b`, we can apply rule 8. After reductions inside `a` and `b`, they might become equal, but that doesn't create a new redex at the root of `cherry` because the root `cherry` is already gone (we applied rule 8). However, if we don't apply rule 8, we could reduce inside `a` and `b` until they become equal, then apply rule 7. That would give `plum`. So there is a branching, but both branches seem to terminate.
+
+ Is there any way to have an infinite reduction? The only potential source of growth is rule 6. Let's examine rule 6 carefully.
+
+ Rule 6: `banana b s (grape n) → pear s (banana b s n)`.
+
+ Let's define the "grape-depth" of a term as the number of `grape` constructors along the leftmost path? No, we care about the third argument of `banana`.
+
+ Define for any term `t` a measure `μ(t)` as follows:
+ - `μ(plum) = 0`
+ - `μ(grape t) = μ(t) + 1`
+ - `μ(mango t) = μ(t)`
+ - `μ(peach t1 t2) = max(μ(t1), μ(t2))`? Or sum?
+ Actually, we want a measure that decreases for all rules.
+
+ Let's try to define a weight that assigns to each term a tuple of natural numbers ordered lexicographically, or a multiset.
+
+ Since the system is finitely branching (for each term, only finitely many one-step reducts? Actually, for `cherry a b`, if `a ≠ b`, only rule 8 applies. If `a = b`, only rule 7 applies. But there could be multiple redexes inside subterms. So it's finitely branching because there are finitely many positions.
+
+ For SN of a finitely branching TRS, it suffices to show that there is no infinite reduction sequence.
+
+ Let's try to prove SN by induction on a well-founded measure.
+
+ Consider the number of `banana` and `cherry` constructors that are "active". A `banana` is active if its third argument is `plum` or `grape n`. A `cherry` is active if its arguments are equal or not equal (always active? Actually, rules 7 and 8 cover all cases because either `a = b` or `a ≠ b`).
+
+ Wait, for any `cherry a b`, either `a = b` or `a ≠ b` (by excluded middle in classical logic, but in Lean's constructive setting? Actually, `a = b` is decidable for inductive types, but the rewrite relation is defined using the inductive `Step`, which has constructors for both cases. So the system is complete: any `cherry a b` is reducible.
+
+ For `banana b s t`: if `t = plum`, rule 5. If `t = grape n`, rule 6. Otherwise, no rule at root. So a `banana` may be inert.
+
+ Let's define a measure on terms based on the following:
+ 1. The total number of `grape` constructors in the term. Call this `G(t)`.
+    - Rule 1: removes one `grape` and one `mango`. `G` decreases by 1.
+    - Rule 2,3,4: no `grape` change.
+    - Rule 5: no `grape` change.
+    - Rule 6: removes one `grape` from the third arg, but the new `pear` wraps a new `banana` with the same `b` and `s`. No new grapes are created. `G` decreases by 1.
+    - Rule 7: no `grape` change.
+    - Rule 8: no `grape` change.
+ So `G` is non-increasing, and strictly decreases on rules 1 and 6.
+
+ 2. However, rules 2,3,4,5,7,8 can be applied without decreasing `G`. We need another measure for when `G` is unchanged.
+
+ Consider the number of `cherry` constructors, `C(t)`.
+ - Rule 8 replaces one `cherry` with one `mango` and one `peach`. So `C` decreases by 1.
+ - Rule 7 replaces one `cherry` with `plum`. `C` decreases by 1.
+ - Other rules don't create `cherry`.
+ So `C` is non-increasing, and strictly decreases on rules 7 and 8.
+
+ But rule 8 can increase size. However, `C` decreases. After all `cherry`s are gone, we cannot apply rules 7 or 8.
+
+ Similarly, consider the number of `mango` constructors that are applied to `grape`, or more generally the number of active redexes.
+
+ Wait, after `C` is 0, we have no `cherry`. Then remaining rules are 1-6. Rule 1 and 6 decrease `G`. But rules 2,3,4,5 don't change `G`. Let's see what they do.
+
+ Rule 2: `peach plum t → t`. Removes `peach` and `plum`.
+ Rule 3: `peach t plum → t`. Same.
+ Rule 4: `peach t t → t`. Removes `peach` and one copy of `t`? Actually, replaces `peach t t` with `t`. So removes one `peach` and one copy of `t`? No, `t` is the result; the two occurrences of `t` in the pattern are the same subterm. In rewriting, `peach t t` means both args are identical. The result is `t`. So the size strictly decreases (removes `peach` and one copy of `t`? Wait, `t` appears twice in the LHS but once in the RHS. So if `t` is large, the size can decrease a lot. In terms of tree size, `|peach t t| = 1 + 2|t|`, while `|t| = |t|`. So size decreases by `1 + |t|`.
+
+ Rule 5: `banana b s plum → b`. Size decreases.
+
+ So rules 2-5 are all size-decreasing. Rule 1 and 6 decrease `G`. Rule 7 and 8 decrease `C`.
+
+ Wait, rule 8: `cherry a b → mango (peach a b)`. Size: `|mango (peach a b)| = 1 + (1 + |a| + |b|) = 2 + |a| + |b|`. `|cherry a b| = 1 + |a| + |b|`. So size increases by 1. And `C` decreases by 1. But could an increase in size create new `cherry` somewhere? No, because `mango` and `peach` are not `cherry`. So `C` strictly decreases.
+
+ Similarly, rule 6 increases size but decreases `G`. Could it create new `grape`? No, it removes one `grape`. It creates `pear` and duplicates `s`, but `s` already existed. It doesn't create new `grape` constructors.
+
+ Therefore, the pair `(G(t), C(t), |t|)` ordered lexicographically does not work because rule 6 decreases `G` but increases `|t|`, which is fine for lex order: if first component decreases, we don't care about later ones. Rule 8 decreases `C` but may increase `|t|` and doesn't change `G`. So lex order `(C, G, ...)` or `(G, C, ...)` might work.
+
+ Let's try lex order `(C(t), G(t), size(t))` or just `(C(t), G(t), M(t))` where `M` handles the rest.
+
+ Since rule 8 decreases `C` by 1 and doesn't create new `cherry`, any reduction sequence can apply rule 8 at most C_0 times. After that, `C = 0`. Then we have only rules 1-7 without 8, but rule 7 also decreases `C`. So after finitely many applications of rules 7 and 8, no more `cherry` exists.
+
+ Once `C = 0`, we have rules 1-6. Rule 1 and 6 decrease `G`. Rule 6 removes one `grape`. Since no rule creates `grape`, `G` strictly decreases on rule 6 and rule 1. So after finitely many applications of rules 1 and 6, `G` becomes 0. Wait, but rules 2-5 don't change `G`. So the lexicographic measure `(G(t), ...)` decreases whenever rule 1 or 6 is applied. But between such applications, we might apply rules 2-5 arbitrarily. We need to ensure that while `G` is constant, the system with rules 2-5 terminates.
+
+ Let's examine the subsystem with rules 2,3,4,5 (and rule 1 maybe, but rule 1 decreases G so we can consider it separately). Actually, after C=0, the measure is G. But we can have a sequence: rule 2, rule 2, rule 2, ...? Does that terminate?
+
+ Rules 2,3,4 involve `peach`. Let's see:
+ - `peach plum t → t`
+ - `peach t plum → t`
+ - `peach t t → t`
+
+ These are all decreasing in size. Also, they reduce the number of `peach` constructors? Not necessarily: `t` could contain `peach`. But each application removes one `peach` constructor at the root of the redex. Since the redex is replaced by `t`, which is a subterm, the number of `peach` constructors at the root of that position decreases. But could it create new `peach` redexes elsewhere? No, because we are replacing a term with its subterm. This is like a projection. The subsystem of rules 2,3,4 is confluent and terminating? Actually, `peach` is like a conditional selector. It's clearly SN because each application strictly decreases the size of the term.
+
+ Rule 5: `banana b s plum → b`. Strictly decreases size.
+
+ So if we fix `G`, the rules that can apply without changing `G` are 2,3,4,5. Each of these strictly decreases the size of the term. Therefore, there cannot be an infinite sequence of only rules 2,3,4,5.
+
+ But wait: could rule 1 or 6 be applied inside a subterm while rules 2-5 are applied at the root? Yes, but if rule 1 or 6 is applied inside a subterm, it decreases `G` of that subterm, hence decreases `G` of the whole term. So the lexicographic measure `(G(t), size(t))` with lexicographic order on pairs of natural numbers is well-founded and decreases:
+ - Rule 1: `G` decreases. Good.
+ - Rule 2,3,4,5: `G` unchanged, size decreases. Good.
+ - Rule 6: `G` decreases. Good.
+ - Rule 7: `G` unchanged, size decreases (since `cherry a a` size is `1+2|a|`, `plum` size is 1; wait, `plum` size is 1? Let's define size as number of constructors. `plum` = 1. `cherry a a` = 1 + size(a) + size(a) = 1 + 2*size(a). This is > 1 unless size(a)=0 which is impossible because `plum` has size 1. So size decreases. Good.
+ - Rule 8: `G` unchanged? Let's check: `cherry a b` has G = G(a)+G(b). `mango (peach a b)` has G = G(a)+G(b). So G unchanged. Size increases. But `C` decreases.
+
+ So lex measure `(C(t), G(t), size(t))` seems to decrease on every step:
+ - Rule 1: C unchanged (no cherry involved), G decreases, size decreases. So lex measure decreases.
+ - Rule 2: C unchanged, G unchanged, size decreases. Decreases.
+ - Rule 3: same.
+ - Rule 4: same.
+ - Rule 5: same.
+ - Rule 6: C unchanged, G decreases. Decreases.
+ - Rule 7: C decreases. Decreases.
+ - Rule 8: C decreases. Decreases.
+
+ Wait, does rule 8 always decrease C? Yes, because it consumes one `cherry`. Does it create any `cherry`? No. So C decreases by exactly 1.
+
+ Does any rule increase C? No. Because no RHS contains `cherry`. Let's check all RHS:
+ 1. plum: no cherry.
+ 2. t: t is a subterm; could contain cherry. But we are replacing `peach plum t` with `t`. So the number of cherry constructors in the whole term could stay the same or decrease? Actually, if `t` contains cherries, they remain. The `peach` and `plum` are removed. So C stays same (since no cherry in `peach plum t` except inside `t`). So C unchanged.
+ 3. t: same.
+ 4. t: same.
+ 5. b: same.
+ 6. pear s (banana b s n): no cherry. But `s` and `b` and `n` could contain cherries. The LHS `banana b s (grape n)` had cherries inside `b`, `s`, `n`. The RHS has cherries inside `s`, `b`, `s`, `n` (two copies of `s`). So C could increase if `s` contains cherries! This is a crucial point.
+
+ Rule 6 duplicates `s`. If `s` contains a `cherry`, then the number of `cherry` constructors in the whole term increases by the number of cherries in `s`. So `C` can increase!
+
+ Similarly, rule 6 could duplicate `grape` constructors? No, `s` could contain grapes, so `G` could increase! Let's check: LHS has grapes in `b`, `s`, `n` plus one for `grape n`. RHS has grapes in `s` (twice), `b`, `n`. So total grapes = G(b) + 2*G(s) + G(n). LHS = G(b) + G(s) + G(n) + 1. So if G(s) > 1, total grapes increase!
+
+ Wait, this is important. My earlier assumption that no rule creates grapes was wrong because duplication of `s` duplicates everything in `s`, including grapes and cherries.
+
+ So `G` and `C` are not monotonic in the sense of being non-increasing. They can increase due to duplication of `s` in rule 6.
+
+ Let's reconsider.
+
+ Rule 6: `banana b s (grape n) → pear s (banana b s n)`.
+ This duplicates `s`. If `s` contains redexes, bananas, cherries, grapes, etc., then the RHS has two copies of all that.
+
+ However, note that the `banana` on the RHS is inside `pear`. The `pear` constructor has no rules. So the new `banana` is in a context where it cannot be the root of a rule that consumes the `pear`. But it can still reduce internally. The duplication means that any reductions possible in `s` can now happen in two places.
+
+ Could this lead to infinite reduction? It could if the process of reducing the inner `banana` somehow recreates the outer `banana` with a larger third argument, leading to a loop. But rule 6 only strips `grape` from the third argument. It never adds `grape`. The inner `banana` has `n`, which is smaller (in terms of grape-depth) than `grape n`. So the inner `banana` can only undergo rule 6 finitely many times before its third argument is no longer `grape`.
+
+ But the copies of `s` inside `pear` are not subject to any rules involving `pear`. They are just subterms. However, if `s` contains a `banana`, that inner `banana` might reduce. If `s` contains a `cherry`, it might reduce. But those reductions are independent of the outer `banana`.
+
+ The danger is that `s` could be a term that, when reduced, becomes something that interacts with the outer `banana`? No, because the outer `banana` is gone; it has been replaced by `pear s (banana b s n)`. The `s` copies are now arguments of `pear` and `banana`. There is no rule that matches `pear` or `banana` in a way that combines with the duplicated `s` to recreate the original redex.
+
+ So the recursion is well-founded because each application of rule 6 to a particular `banana` reduces the `grape`-depth of its third argument by 1. Even though it duplicates `s`, the `banana` is now deeper inside the term (inside `pear`), and its third argument is smaller. Once the `banana` third argument is not `grape`, rule 6 no longer applies to it. So each `banana` can only trigger rule 6 finitely many times.
+
+ But what if `s` itself contains a `banana` that is active? Then when `s` is duplicated, we get more active bananas. But those bananas are independent; they have their own third arguments. Their reduction doesn't affect the outer banana's measure.
+
+ To prove SN, we need a well-founded measure that accounts for duplication. A standard method for TRSs with duplication is to use a lexicographic measure or an ordinal measure based on the depth of the term.
+
+ Since rule 6 duplicates `s`, but the duplicated `s` appears in a `pear` context which is "dead" (no rules), we might assign a weight of 0 to `pear` arguments for the purpose of the banana measure? No, reductions can still happen inside `s` even when wrapped in `pear`.
+
+ Let's think about the set of active bananas. An active banana is one whose third argument is a chain of grapes followed by something. Actually, any banana with third argument having a grape at the root is active for rule 6. Any banana with third argument `plum` is active for rule 5.
+
+ Define for a term `t` the measure `M(t)` as the multiset of the grape-depths of all active bananas in `t`. But rule 6 replaces a banana with grape-depth `d` (if third arg is `grape n`, then its grape-depth is 1 + grape-depth of n? Actually, the number of grapes at the head of the third argument). Let's define for a banana `banana b s u`, let `d(u)` be the number of leading `grape` constructors in `u`. If `u` is not `grape` or `plum`, then it's inactive for rule 6, but could be active for rule 5 if `u=plum`.
+
+ Wait, rule 5 applies if third arg is exactly `plum`. Rule 6 applies if third arg is `grape n`. If third arg is anything else, the banana is inert.
+
+ So for each banana, its "state" is either:
+ - A: third arg is `plum` (reducible by rule 5)
+ - B_k: third arg is `grape^k(n)` where `n` is not `grape` (reducible by rule 6 k times)
+ - C: third arg is neither `plum` nor `grape` (inert)
+ - D: third arg is something that reduces to `plum` or `grape` eventually (reducible inside)
+
+ If we consider the term tree, rule 6 on a banana with state B_k (k>0) produces a `pear` and a new banana with state B_{k-1} (or state A if k=1 and n=plum, or state C if n is not plum/grape). The original banana disappears. The new banana is inside `pear`. The first copy of `s` is also inside `pear`. Since `pear` is inert, the new banana is in a context that doesn't affect its reducibility. So from the perspective of banana states, we replaced one banana of level B_k with one banana of level B_{k-1} (embedded). The other copy of `s` is just some term inside `pear`.
+
+ However, the duplication of `s` means that any bananas inside `s` are duplicated. So the multiset of banana states can increase in cardinality. But the new bananas are inside `s`, which is now inside `pear`. The `pear` doesn't affect their reduction. So we have more bananas, but each of those bananas has its own state. If we define a measure as the multiset of states of all bananas, ordered by multiset ordering (which is well-founded on natural numbers), does rule 6 decrease it?
+
+ Let's formalize: assign to each banana a weight based on its third argument:
+ - w(banana b s plum) = 1 (since it can reduce in one step to b).
+ - w(banana b s (grape n)) = 2 (or something larger than the weight after reduction).
+ But rule 6 doesn't reduce the banana to nothing; it replaces it with a pear containing a smaller banana. So the banana persists.
+
+ Alternatively, assign to each term an ordinal based on the structure.
+
+ Let's think about the subsystem involving only `banana`, `pear`, `grape`, `plum` and rule 5 and 6. Ignore other constructors for a moment.
+
+ Subsystem:
+ - banana(b, s, plum) → b
+ - banana(b, s, grape(n)) → pear(s, banana(b, s, n))
+
+ This is a standalone subsystem. Is it SN?
+
+ It looks like a primitive recursive definition of a function f(b, s, n) where n is a natural number in unary via grape/plum. Specifically:
+ - f(b, s, 0) = b  (where 0 is plum)
+ - f(b, s, S(n)) = pear(s, f(b, s, n))  (where S is grape)
+
+ This is exactly the iteration function. It terminates because n is a natural number (well-founded). The duplication of s is just that s is passed along unchanged. So this subsystem is clearly SN.
+
+ Now, the full system includes other constructors that can appear inside b, s, n. But those constructors don't interact with the banana rules. That is, the banana rules don't inspect the internal structure of b, s, n (except for the top constructor of the third argument). So any reductions inside b, s, n happen independently.
+
+ The only interaction is that other rules might create banana or pear or grape, but looking at the RHS of all rules:
+ 1. plum
+ 2. t
+ 3. t
+ 4. t
+ 5. b
+ 6. pear(s, banana(b,s,n))
+ 7. plum
+ 8. mango(peach(a,b))
+
+ No rule creates a `grape`, `banana`, or `pear` except rule 6 creates `pear` and `banana`, and rule 8 creates `mango` and `peach`. So no new grapes are ever created. Grape constructors only appear if present initially or inside subterms that are duplicated.
+
+ Since grapes are never created, the "natural number" argument to banana is non-increasing in the sense that the number of grapes at the head of the third argument of any banana is fixed unless reduced by rule 6. Duplicating s might duplicate grapes elsewhere, but those grapes are not at the head of the third argument of the banana; they are inside s or deeper.
+
+ For the banana subsystem, we can think of each banana as having a counter (the number of leading grapes in its third argument). Rule 6 decrements this counter. Rule 5 ends it when counter reaches 0 (i.e., third arg is plum). Since no rule can increment the counter of a given banana (because no rule creates a grape at a specific position, and the banana is either consumed or nested inside pear where its third arg is untouched except by internal reduction), each banana can only undergo rule 6 finitely many times.
+
+ But is it possible for a banana to be created with a larger counter? Rule 6 creates a banana with third argument n, which has a smaller counter. So new bananas have smaller counters. Thus, the banana creation process is well-founded.
+
+ Now consider the rest of the system. We have rules for `mango`, `peach`, `cherry`. These are independent of `banana` except that they share subterms.
+
+ Let's analyze each constructor's behavior:
+ - `plum`: normal form.
+ - `grape(t)`: can be reduced inside `t`. Additionally, `grape(t)` is part of redex for rule 1 and rule 6. But rule 1 consumes `mango(grape(t))`, rule 6 consumes `banana(b,s,grape(n))`. A `grape` by itself is inert.
+ - `mango(t)`: inert unless `t` is `grape(u)`, in which case rule 1 applies. After rule 1, it's `plum`. Rule 8 creates `mango(peach(a,b))`. This is inert because `peach(a,b)` is not `grape`. Unless `peach(a,b)` reduces to `grape`? No, `peach` reduces to one of its arguments or stays. Its arguments could be `grape`, but the result is the argument itself, which is some term. So `mango` of that result could be active if the result is `grape`. So: if `a` reduces to `grape(u)`, then `mango(peach(a,b))` could become `mango(a)` (if a=b or a=plum etc.) and then if `a` is `grape(u)`, it reduces. But this requires reduction inside `a` or `b`.
+
+ Let's think about whether there can be an infinite reduction involving rule 8 and rule 1.
+
+ Rule 8: cherry(a,b) → mango(peach(a,b))  (a ≠ b)
+ Rule 1: mango(grape(t)) → plum
+
+ Could we have a cycle? Suppose we start with `cherry(a,b)`. Apply rule 8. We get `mango(peach(a,b))`. If `a` and `b` are such that `peach(a,b)` reduces to `grape(t)`, then rule 1 applies. But `peach` only reduces to `a` or `b`. So we need `a` or `b` to be `grape(t)`. Say `a = grape(t)`. Then `peach(a,b)` might reduce to `a` if `a = b` (rule 4) or `a = plum` (impossible) or `b = plum` (rule 3). If `b = plum`, then `peach(grape(t), plum) → grape(t)`. Then `mango(grape(t)) → plum`. So we used rule 8 then rule 3 (inside) then rule 1. That's finite.
+
+ If `a ≠ b` and `b ≠ plum`, then `peach(grape(t), b)` is inert. So `mango(peach(grape(t), b))` is inert (unless `peach` reduces, which it doesn't). So no further reduction at root. Reductions can continue inside `a` or `b`. But `a` and `b` are subterms; if they have infinite reduction, that would be an infinite reduction in a smaller term. By induction on size? Not straightforward because rule 8 increases size.
+
+ However, we can use a measure that decreases: for `cherry`, we can assign a weight that is larger than any weight of its reducts.
+
+ Let's try to define a weight function using recursion on the type, but with a twist to handle duplication. Actually, because there is no recursion in the type definitions (the type is just an inductive tree, not a recursive function type), the term structure is well-founded. But rewrite steps can increase size. Still, we might define a measure based on the depth of certain constructors.
+
+ Another approach: since the system is non-overlapping (or has limited overlap) and each rule either eliminates a constructor or recurses on a subterm, maybe we can prove SN by induction on a suitable interpretation.
+
+ Let's attempt a polynomial interpretation that handles rule 6.
+
+ We need:
+ P_banana(b, s, grape(n)) > P_pear(s, P_banana(b, s, n))
+
+ And we need monotonicity: all polynomials must be strictly monotone in each argument.
+
+ Let's try to assign:
+ P_plum = 1
+ P_grape(x) = x + c  (c ≥ 1)
+ P_mango(x) = d * x + e
+ P_peach(x,y) = x + y + f
+ P_pear(x,y) = g * x + h * y + i
+ P_banana(x,y,z) = A * x + B * y + C * z + D
+ P_cherry(x,y) = j * x + k * y + l
+
+ For rule 6:
+ LHS: A*b + B*s + C*(n + c) + D = A*b + B*s + C*n + C*c + D
+ RHS: g*s + h*(A*b + B*s + C*n + D) + i = h*A*b + (g + h*B)*s + h*C*n + h*D + i
+
+ Need: A*b + B*s + C*n + C*c + D > h*A*b + (g + h*B)*s + h*C*n + h*D + i for all b,s,n ≥ 1 (or ≥ some base value).
+
+ If we set h = 0, then RHS = g*s + i. Then we need:
+ A*b + B*s + C*n + C*c + D > g*s + i for all b,s,n.
+ This can be achieved if A, C > 0 and we choose parameters appropriately. For example, if h=0, then P_pear(x,y) = g*x + i, which is monotone in x but not in y! We need strict monotonicity in all arguments. So h > 0.
+
+ If h > 0, then the RHS has h*A*b. To dominate that, we need A > h*A, which implies h < 1, impossible for natural coefficients with h>0. Unless we use non-linear polynomials.
+
+ So linear polynomials won't work because rule 6 duplicates `s` and embeds `banana` inside `pear`, and we need monotonicity in the second argument of `pear`.
+
+ Let's try quadratic or higher.
+
+ Let P_pear(x,y) = y + x (linear). Then h=1. RHS = s + banana(b,s,n). The banana term contains b and s. So we get banana(b,s,n) + s. If banana is linear in s, then RHS has coefficient B+1 for s, while LHS has B. So unless the banana coefficient on s is 0, it grows. But if banana coefficient on s is 0, then banana doesn't increase with s, which violates monotonicity.
+
+ What if banana is not linear? For example, P_banana(x,y,z) = x + z + 1? Then no y, not monotone in y. Not allowed.
+
+ What if P_banana(x,y,z) = x * y + z? Then it's monotone if coefficients are positive. Let's try non-linear.
+
+ Let:
+ P_plum = 1
+ P_grape(x) = x + 1
+ P_pear(x,y) = x + y + 1
+ P_banana(x,y,z) = x * y + z + 1  (monotone in each argument if x,y,z ≥ 1)
+
+ Rule 6:
+ LHS = b*s + (n+1) + 1 = b*s + n + 2
+ RHS = s + (b*s + n + 1) + 1 = s + b*s + n + 2 = b*s + n + s + 2
+ Need: b*s + n + 2 > b*s + n + s + 2 => 0 > s. Impossible since s ≥ 1.
+
+ Try P_banana(x,y,z) = x + y*z + 1.
+ LHS = b + s*(n+1) + 1 = b + s*n + s + 1
+ RHS = s + (b + s*n + 1) + 1 = b + s*n + s + 2
+ Need: b + s*n + s + 1 > b + s*n + s + 2 => 1 > 2. Impossible.
+
+ Try P_banana(x,y,z) = x * (y + z) + 1.
+ LHS = b * (s + n + 1) + 1 = b*s + b*n + b + 1
+ RHS = s + [b * (s + n) + 1] + 1 = s + b*s + b*n + 2
+ Need: b*s + b*n + b + 1 > s + b*s + b*n + 2 => b + 1 > s + 2 => b > s + 1. Not true for all b,s.
+
+ Try P_banana(x,y,z) = (x + 1) * (z + 1) + y? No, need to handle duplication.
+
+ The duplication of `s` is tricky. In general, a polynomial interpretation cannot handle duplication of a variable unless the function's weight in that variable is 0, but monotonicity forbids that. However, higher-order interpretations or interpretations using max can work.
+
+ For example, use max:
+ P_banana(x,y,z) = max(x, y, z) + 1
+ P_pear(x,y) = max(x,y) + 1
+ LHS = max(b, s, n+1) + 1
+ RHS = max(s, max(b,s,n)+1) + 1 = max(s, b, s, n) + 1 + 1? Wait, max(x,y) is monotone.
+ RHS = max(s, max(b,s,n)+1) + 1 = max(s, b, n) + 2 (assuming max(b,s,n) ≥ s, which it is, so max(s, max(b,s,n)+1) = max(b,s,n)+1). So RHS = max(b,s,n) + 2.
+ LHS = max(b,s,n+1) + 1.
+ If n is the largest, LHS = n+1+1 = n+2, RHS = n+2. Not strictly greater. If b is largest, LHS = b+1, RHS = b+2? Wait, if b is largest, max(b,s,n) = b. RHS = b+2. LHS = max(b,s,n+1)+1 = b+1. Then LHS < RHS. So max doesn't work.
+
+ What about assigning an ordinal weight, like ω? We can't use ordinals in a standard polynomial interpretation over naturals.
+
+ Another method: dependency pairs. For a first-order TRS, we can use the dependency pair framework to prove SN. The system is a constructor system? Not exactly, because `peach`, `mango`, etc. are constructors, but rules like `peach t t → t` are not constructor rules (they have a defined symbol `peach` and the result is a variable). This is a standard TRS.
+
+ Let's check if the system is orthogonal or at least confluent? Not necessary for SN.
+
+ Let's list the function symbols and their arities:
+ Defined symbols (appear at root of LHS): mango, peach, banana, cherry. Also grape appears in LHS inside patterns, but not at root. `plum` is a constant. `pear` appears only on RHS.
+
+ Actually, defined symbols: mango, peach, banana, cherry. `grape` is a constructor (since it only appears in LHS as part of a pattern, not at the root of a defined symbol's rule? Wait, `grape` is not at the root of any LHS, so it's a constructor. Similarly `pear` is a constructor (never on LHS). `plum` is a constructor.
+
+ So the defined symbols are: mango, peach, banana, cherry.
+
+ Rules:
+ 1. mango(grape(x)) -> plum
+ 2. peach(plum, x) -> x
+ 3. peach(x, plum) -> x
+ 4. peach(x, x) -> x
+ 5. banana(x, y, plum) -> x
+ 6. banana(x, y, grape(z)) -> pear(y, banana(x, y, z))
+ 7. cherry(x, x) -> plum
+ 8. cherry(x, y) -> mango(peach(x, y))  if x ≠ y
+
+ Wait, rule 8 is a conditional rule: it requires x ≠ y. In the dependency pair approach, conditional rules are trickier. But we can think of it as two unconditional rules if we assume terms are ground? No, x and y are variables. In a first-order TRS, equality and disequality conditions are usually handled by adding rules for equality or using a specific DP framework. However, since the system is defined in Lean with a proof of disequality, we can treat it as a rule that applies only when x and y are not unifiable? Actually, for variables, x ≠ y means the terms bound to x and y are not equal. This is a semantic condition. For ground terms, either x=y or x≠y. For open terms, it's more complex. But strong normalization usually means for all terms (possibly open? Or closed?). The Lean relation is on all terms.
+
+ Actually, the relation `Step` is defined as a proposition on arbitrary terms. The `R_cherry_diff` constructor requires a proof of `a ≠ b`. Since `Trace` is an inductive type with no axioms, equality is standard. For open terms (with variables? Wait, there are no variables in the meta-theory; `∀ a b` means all terms). So for any two terms `a` and `b`, either `a = b` or `a ≠ b` (classically). Constructively, we might not know, but the inductive definition has both constructors, so for any `a,b`, we can apply one of them if we can prove equality or disequality. In Lean, for an inductive type, equality is decidable, so we can always apply one.
+
+ For SN, we consider all reduction sequences. If `a = b`, only rule 7 applies. If `a ≠ b`, only rule 8 applies. So cherry is always reducible.
+
+ Back to dependency pairs. Let's ignore the conditional for a moment and think about the rewrite rules as a standard TRS. The DPs would be:
+ From rule 1: mango#(grape(x)) -> ... none? Since RHS has no defined symbols. So no DP.
+ From rule 2: peach#(plum, x) -> ... none.
+ From rule 3: peach#(x, plum) -> ... none.
+ From rule 4: peach#(x, x) -> ... none.
+ From rule 5: banana#(x,y,plum) -> ... none.
+ From rule 6: banana#(x,y,grape(z)) -> banana#(x,y,z). This is a DP! Because RHS has banana at root inside pear. The DP is banana#(x,y,grape(z)) -> banana#(x,y,z).
+ From rule 7: cherry#(x,x) -> ... none.
+ From rule 8: cherry#(x,y) -> mango#(peach(x,y)) and cherry#(x,y) -> peach#(x,y). Since RHS is mango(peach(x,y)), the defined symbols are mango and peach.
+
+ Actually, the dependency pairs are:
+ - banana#(x, y, grape(z)) -> banana#(x, y, z)
+ - cherry#(x, y) -> mango#(peach(x, y))
+ - cherry#(x, y) -> peach#(x, y)
+
+ For the first DP, we need to show that there is no infinite chain. This DP corresponds to a recursive call that strips one `grape` from the third argument. This is clearly terminating because `grape` is a constructor and the third argument gets structurally smaller in terms of the number of leading grapes. We can use a simple numeric measure: interpret banana#(x,y,z) as the number of leading grapes in z plus 1. Or just the size of z. Since z decreases (from grape(z) to z), the chain is finite.
+
+ For the other two DPs:
+ - cherry#(x,y) -> mango#(peach(x,y)): Since the RHS has mango applied to peach(x,y), and mango# only has a DP from rule 1 which is terminating, we need to see if there is a chain cherry# -> mango# -> ... The DP from mango would be mango#(grape(x)) -> ... but there is no DP from rule 1 because the RHS of rule 1 is plum (no defined symbol). So mango# has no DPs. Similarly, peach# has no DPs (rules 2,3,4 have no defined symbols on RHS). So the chains from cherry# are length 1. Thus they are finite.
+
+ Therefore, by the dependency pair theorem (if applicable), the system is SN.
+
+ However, the DP framework usually requires the TRS to be finite and unconditional (or conditional with special treatment). Our system is finite. Rule 8 is conditional: x ≠ y. But we can split it: for ground terms, the condition is either true or false. For the DP analysis, we can consider that cherry#(x,y) -> mango#(peach(x,y)) is only applicable when x ≠ y. Since the condition is purely semantic (equality), and the system is deterministic in the sense that for any ground instance either rule 7 or rule 8 applies, we can handle it.
+
+ Actually, there is a potential issue: rule 4 is `peach(x,x) -> x`. This requires the two arguments to be identical. In a first-order TRS, this is a non-left-linear rule. Non-left-linear rules can cause problems: they require matching with equality. Similarly, rule 7 is non-left-linear. The dependency pair framework usually assumes left-linear TRSs or uses special handling for non-left-linear rules. However, non-left-linear rules don't necessarily break SN.
+
+ Rule 4: `peach t t → t`. This is a collapsing rule. It deletes `t` but also requires equality. If `t` is a large term, it reduces size. It cannot cause non-termination because it strictly decreases size.
+
+ Rule 7: `cherry a a → plum`. Also decreases size.
+
+ So even though there are non-left-linear rules, they are size-decreasing.
+
+ The main challenge is rule 6. But as argued, rule 6 is structurally recursive on the number of `grape` constructors in the third argument. Even though it duplicates `s`, the recursive call is on a smaller `z` (inside grape). Since no rule can introduce a `grape` constructor at that position (the third argument of that specific banana), the recursion terminates.
+
+ Wait, could a rule introduce a `grape` at that position? The banana is inside `pear` after the step. The only way to change its third argument is by reducing inside it. The third argument is `z` (the subterm of `grape z`). Reducing inside `z` cannot increase the number of leading grapes; it can only change `z` to some other term. If `z` reduces to `grape(z')`, then the banana's third argument becomes `grape(z')`, so we could apply rule 6 again! Ah! This is critical.
+
+ Suppose `z` reduces to `grape(z')`. Then `banana(b, s, z)` reduces inside to `banana(b, s, grape(z'))`. Then rule 6 applies again! But note: `z` was originally the direct subterm of `grape` on the LHS. The LHS was `banana(b, s, grape(z))`. Rule 6 requires the third argument to be exactly `grape(n)`. On the RHS, we have `banana(b, s, n)`. If `n` later reduces to `grape(n')`, then the banana becomes active again with a new grape at the head. But `n` is a subterm of `z`. So the new banana has third argument `n`, which is a proper subterm of `grape(z)`. If `n` can reduce to `grape(n')`, then the measure based just on the immediate head doesn't decrease enough.
+
+ However, we can define the measure as the set of paths or something. But more simply: can `n` reduce to a term with more leading grapes than `grape(z)` had? No, because `grape(z)` had exactly one leading grape. `n` is `z` (without the grape). If `z` reduces to `grape(n')`, then `n` now has one leading grape. But before, the original banana had third argument `grape(z)`, which had one leading grape. After rule 6, the new banana has third argument `z`, which after reduction becomes `grape(n')`, so again one leading grape. So the number of leading grapes is the same (1). But the content `n'` vs `z` is smaller? Not necessarily.
+
+ Wait, the original third argument was `grape(z)`. The new third argument is `z`. If `z` reduces to `grape(n')`, the new third argument becomes `grape(n')`. So we are back to a banana with third argument `grape(something)`. This seems like it could loop if the "something" doesn't decrease.
+
+ But note: to reduce `z` to `grape(n')`, we need to apply some rule. Which rules produce `grape`? None of the RHS produce `grape`. So `z` cannot reduce to a term whose head is `grape` unless `z` already had head `grape` or is a variable that becomes `grape`. But `z` is a concrete term. Since no rule creates `grape`, the only way `z` can become `grape(n')` is if `z` already is `grape(n')` or reduces to it. But `z` is a subterm; if it is `grape(n')`, then the original term was `banana(b, s, grape(grape(n')))`. Then rule 6 would apply to the outer banana, stripping the outer grape and yielding `pear(s, banana(b, s, grape(n')))`. Then the inner banana has third argument `grape(n')`, so rule 6 applies again, stripping it. So two nested grapes lead to two applications. In general, the number of applications equals the number of nested grapes originally present. Because no new grapes are created.
+
+ Crucially, if `z` is not of the form `grape(...)`, then `banana(b, s, z)` is inert (unless `z = plum`, then rule 5). If `z` reduces to something that is not `grape` or `plum`, the banana becomes inert. Since no rule creates `grape`, `z` cannot become `grape` unless it already was. Therefore, the number of times rule 6 can apply to a given banana is bounded by the number of `grape` constructors along the left spine of the original third argument. Actually, it's bounded by the number of nested `grape`s at the head of the original third argument. Since no new `grape`s are created, this is finite.
+
+ Similarly, rule 1: `mango(grape(t)) → plum`. Since no new grapes are created, a `mango` can only reduce if its argument is already `grape(t)`. If `t` reduces to `grape(t')`, the argument becomes `grape(grape(t'))`, and rule 1 applies again? Wait, rule 1 applies to `mango(grape(t))`. If `t` reduces to `grape(t')`, the term is `mango(grape(grape(t')))`. This still matches rule 1, because the argument is `grape(...)` regardless of what the inner `...` is. So `mango(grape(t))` reduces to `plum` in one step, no matter what `t` is. Rule 1 doesn't inspect `t` at all. So it consumes the `mango` and the outermost `grape`, producing `plum`. Thus the `grape` chain doesn't matter; rule 1 removes one `grape` and the `mango` immediately.
+
+ Wait, rule 1 is `mango(grape(t)) → plum`. It doesn't care about `t`. So any `mango` with argument headed by `grape` reduces to `plum` in one step. So it's not recursive.
+
+ So the only recursive rule is rule 6, and it recurses on the number of leading grapes in the third argument. Since no new grapes are created, this is bounded.
+
+ Now, what about rule 8: `cherry a b → mango(peach(a,b))` when `a ≠ b`. Could this lead to an infinite loop? It increases size by adding `mango` and `peach`. But it consumes `cherry`. Since no rule creates `cherry`, the number of cherries is bounded by the initial number. Duplication in rule 6 can duplicate cherries if `s` contains cherries. But each duplicated cherry can then reduce. However, the total number of cherry reductions is bounded by the initial number of cherries times something? Actually, rule 6 can duplicate `s` arbitrarily many times if there is a nested banana with many grapes. Each duplication creates a fresh copy of any cherries in `s`. Those copies can then reduce via rule 7 or 8. So the number of cherry reductions could be unbounded if `s` contains cherries and is duplicated many times.
+
+ Example: Let `s = cherry(plum, mango(plum))`. Actually, `cherry` requires two args. Let's say `s = cherry(plum, mango plum)`. Then `s` contains one cherry. If we have `banana(b, s, grape^n(plum))`, then rule 6 applies n times, each time duplicating `s`. After n steps, we have n+1 copies of `s` (one in each `pear` wrapper and one in the final banana). Wait, let's trace:
+ Start: `banana(b, s, grape(grape(...grape(plum)...)))` with n grapes.
+ Step 1: `pear(s, banana(b, s, grape^{n-1}(plum)))`
+ Step 2: `pear(s, pear(s, banana(b, s, grape^{n-2}(plum))))`
+ ...
+ Step n: `pear(s, pear(s, ... pear(s, banana(b, s, plum))...))`.
+ Then rule 5 applies: `banana(b, s, plum) → b`.
+ Final: `pear(s, pear(s, ... pear(s, b)...))` with n pears.
+
+ So there are n copies of `s` (each inside a `pear`). Actually, n copies from the n applications, plus the final `b` replacing the banana. The copies of `s` are all inside `pear`, which is inert. Inside each `s`, there is a cherry. So we have n cherries that can reduce. Each cherry reduces to either `plum` (if args equal) or `mango(peach(a,b))`. This doesn't create new grapes or bananas or cherries. So after reducing all cherries, we get a term with only `plum`, `mango`, `peach`, `pear`, and `b` subterms. No infinite loop.
+
+ But could the reduction of a cherry inside `s` create a new banana? No, because no rule creates banana.
+
+ Could it create a new mango that leads to something? Rule 8 creates mango. But mango is only reducible if its argument is grape. Since no grapes are created, and the original `s` might not have grapes, the new mango might be inert. If `s` did have grapes, they are just subterms; mango only cares if its direct argument is grape.
+
+ So the only source of unbounded growth is rule 6 duplicating terms that contain redexes. But each redex can only fire finitely many times because the resources (grapes, cherries) are consumed and not replenished.
+
+ Wait, rule 8 creates mango and peach. Rule 6 creates pear and banana. Banana consumes grapes. Cherry consumes cherries. Mango consumes grapes. Peach consumes peach/plum/equality.
+
+ Is there any rule that creates a grape? No.
+ Is there any rule that creates a cherry? No.
+ Is there any rule that creates a banana? Yes, rule 6 creates banana, but with fewer leading grapes.
+ Is there any rule that creates a mango? Yes, rule 8.
+
+ But mango is only reducible by rule 1, which consumes a grape. Since grapes are not created, each mango reduction consumes a grape that was already present. So the number of mango reductions is bounded by the initial number of grapes.
+
+ Similarly, the number of banana rule 6 reductions is bounded by the initial number of grapes (each strips one grape from some banana's third argument). Actually, it's bounded by the total number of grapes that are the third argument of some banana when it becomes active. Since bananas are only created by rule 6 with fewer grapes, the total number of rule 6 applications across all bananas is bounded by the initial number of grapes in the original term? Not exactly, because duplication of `s` could duplicate grapes into new positions. But those grapes are inside `pear`, not inside banana third arguments. Rule 6 only cares about the third argument of banana. Grapes inside `s` (which becomes duplicated) are inside `pear` arguments and cannot become the third argument of a banana unless some rule moves them. No rule moves subterms out of `pear` or into banana arguments. So grapes inside `s` are "inert" with respect to rule 6. They can only be consumed by rule 1 if they become the argument of `mango`. But they are inside `pear`, and `pear` is inert. So they are stuck.
+
+ Therefore, the only grapes that matter for rule 6 are those in the third argument of bananas. Rule 6 creates a new banana with third argument `n`, which had one fewer grape than the original third argument. Since no rule introduces a grape into the third argument of a banana (the banana is either consumed or nested inside `pear`), the number of rule 6 applications for each banana is bounded by the number of leading grapes in its original third argument. And the new bananas created have strictly fewer leading grapes. So the total number of rule 6 applications is bounded.
+
+ Let's formalize: define the "potential" of a term as the sum over all banana subterms of the number of leading grapes in their third argument. This is a natural number. Rule 6 reduces this potential by 1 for the banana it acts on (since it consumes one leading grape). It may create a new banana with potential one less. It also duplicates `s`, which may contain bananas with their own potentials. However, those potentials are unchanged (the bananas inside `s` are not affected). So the total potential of the term: we remove the old banana (potential p) and add a new banana (potential p-1). The net change is -1. The duplication of `s` duplicates any bananas inside `s`, so their potentials are added again. Thus the total potential could increase if `s` contains bananas with high potential!
+
+ Example: Let `s = banana(b', s', grape(grape(plum)))`. This banana has potential 2. Suppose the outer banana is `banana(b, s, grape(n))`. The total potential initially includes outer banana (potential 1) + inner banana (potential 2). After rule 6, we get `pear(s, banana(b, s, n))`. The inner banana inside `s` is duplicated: there is one in the first argument of `pear` (from `s`) and one in the second argument of `pear` (from `s` inside the new banana? No, the new banana has second argument `s`, so it contains the inner banana too!). Wait, the new banana is `banana(b, s, n)`. Its second argument is `s`, which contains `banana(b', s', grape(grape(plum)))`. So the new banana contains the inner banana. The first argument of `pear` is `s`, which also contains the inner banana. So after one step, the inner banana appears twice. Its potential is still 2 for each copy. So total potential = 2*2 + potential of new outer banana (which is 0 if n is not grape, or something). The old outer banana had potential 1. So total potential increased from 1+2=3 to 4 + 0 = 4. So potential increased!
+
+ So a simple sum of potentials doesn't work because duplication inside `s` can increase the number of high-potential bananas.
+
+ But note: the inner banana inside `s` has its own third argument. To apply rule 6 to it, we need it to be at the root of a banana subterm. In the duplicated `s` inside `pear`, the inner banana is still there, but now there are two copies. Each copy can undergo rule 6, stripping its grapes. But each copy's rule 6 applications are bounded by its own leading grapes (2 in this case). Since there are now two copies, the total number of rule 6 applications for this inner banana across all copies is 2 * 2 = 4. Initially, there was only one copy, so at most 2 applications. So the total number of banana reductions can increase due to duplication.
+
+ However, the duplication is caused by rule 6 on the outer banana. The outer banana's rule 6 can happen at most its own number of leading grapes times. In this case, outer banana had potential 1. So it applies once, creating two copies of the inner banana. Then each inner banana applies twice. Total banana steps: 1 + 4 = 5. If we had nested bananas, could this explode? Yes, it's like a tree of bananas where each banana's duplication factor is the number of leading grapes in its parent.
+
+ But is it still finite? Yes, because the nesting depth is finite, and each banana has finite leading grapes. The total number of rule 6 applications is bounded by the product of leading grapes along paths in the banana tree? Actually, it's a finite tree that gets expanded. Since each banana node can only spawn a finite number of copies of its children (equal to the number of times rule 6 fires on it, which is bounded by its leading grape count), and each child is a banana inside `s`. But wait, `s` could contain the outer banana itself? No, because the outer banana is being reduced; it doesn't contain itself. However, `s` could contain a banana that contains `s` again? That's possible if the term has cycles? No, terms are finite trees. So there is no infinite descent.
+
+ The duplication creates multiple copies of subterms, but each copy is a finite term. The total number of rule applications is bounded by a function of the initial term's structure. Specifically, we can define a measure by induction on the term structure that accounts for the maximum number of reductions.
+
+ Let's try to define a measure `μ(t)` as an ordinal or a natural number that bounds the length of the longest reduction sequence starting from `t`.
+
+ Since the system is finitely branching and acyclic in some sense, we can define `μ(t)` recursively.
+
+ For each term `t`, define `μ(t)` as the maximum number of steps to normal form. But we need to show it's well-defined.
+
+ We can try to prove SN by induction on a weighted tree size where `banana` nodes have weights that depend on their third argument.
+
+ Let's assign to each term `t` a value in the set of natural numbers, but with a special handling for banana:
+
+ Define `|t|` as the usual size.
+ Define `δ(t)` as the maximum length of a reduction sequence from `t`.
+
+ If we can show `δ(t)` is finite for all `t` by structural induction, we are done. But rule 6 produces `pear(s, banana(b,s,n))`. The size of the result can be larger than the size of the original. However, `banana(b,s,n)` is "smaller" in the sense that the third argument is smaller (no outer grape). But `s` is duplicated.
+
+ We can try to define a measure `μ(t)` as follows:
+ - `μ(plum) = 1`
+ - `μ(grape(t)) = μ(t) + 1`
+ - `μ(mango(t)) = μ(t) + 1`
+ - `μ(peach(t1,t2)) = μ(t1) + μ(t2) + 1`
+ - `μ(pear(t1,t2)) = μ(t1) * μ(t2) + 1`? Or something to make duplication manageable.
+ - `μ(banana(b,s,n))` depends on `n`.
+ - `μ(cherry(t1,t2)) = ...`
+
+ Actually, for rule 6: `banana(b, s, grape(n)) → pear(s, banana(b, s, n))`.
+ We want `μ(banana(b, s, grape(n))) > μ(pear(s, banana(b, s, n)))`.
+
+ If we define `μ(banana(b,s,n)) = μ(b) * (μ(s) + 1)^{g(n)+1}` or something, where `g(n)` is the number of leading grapes. But `n` is arbitrary.
+
+ Let's think combinatorially. Rule 6 is like iterating a function. If we define `μ(banana(b,s,n)) = (μ(s)+1)^{g(n)} * φ(b,n)`? This is getting complicated.
+
+ Another angle: since `Trace` is an inductive type with only first-order constructors, and the rewrite system is a set of rules that are all "primitive recursive" in nature, we can interpret each defined function as a primitive recursive function that terminates.
+
+ In particular, we can think of the rewrite system as defining functions:
+ - mango checks if its arg is grape, returns plum.
+ - peach returns left/right arg if other is plum, or any arg if equal.
+ - banana recurses on the third arg: if plum, return b; if grape n, return pear(s, banana(b,s,n)). This is a primitive recursive function.
+ - cherry returns plum if args equal, else mango(peach(a,b)).
+
+ These are all structurally recursive functions! The only issue is that in Lean, `banana` is not a function; it's a constructor, and the rewrite rule is not a definition but a relation. However, the relation is deterministic? Let's check.
+
+ Is the system confluent? Not necessarily. But is it deterministic (orthogonal)? Let's see:
+ - `mango` has one rule.
+ - `peach` has three rules. They overlap: if both args are plum, both rule 2 and rule 3 and rule 4 could apply? Actually, rule 2: `peach plum t` applies. Rule 3: `peach t plum` applies. If `t = plum`, then `peach plum plum` matches all three rules. So the system is not deterministic. There can be critical pairs.
+
+ But strong normalization doesn't require determinism. It just requires no infinite sequences.
+
+ The overlapping rules for `peach` all produce `t` (or `plum` if t=plum). Actually:
+ - `peach plum plum`: rule 2 gives `plum`. Rule 3 gives `plum`. Rule 4 gives `plum`. So they all agree.
+ - `peach t t` with `t = plum`: rule 4 gives `plum`, rule 2 gives `plum`, rule 3 gives `plum`.
+ So the overlaps are trivial (all yield same result). Thus `peach` is deterministic in effect.
+
+ Similarly, `cherry` rules are disjoint by condition `a = b` vs `a ≠ b`. So deterministic.
+
+ `banana` rules: disjoint by third arg pattern (`plum` vs `grape n` vs other). So deterministic.
+
+ `mango`: one rule.
+
+ So the system is actually deterministic for ground terms (modulo the non-left-linear equality check, but that's deterministic). For any ground term, at most one rule applies at each position.
+
+ Since it's deterministic, each term has at most one normal form, and reduction is essentially a functional evaluation.
+
+ Given that, we can define a function `eval(t)` that computes the normal form. But to prove SN, we need to show `eval` terminates.
+
+ Let's think of the rewrite system as an interpreter for a simple language. The "program" is the term. The constructors are operators. The rewrite rules are evaluation rules.
+
+ Since there is no recursion that loops (no rule creates a larger version of the same redex at the root), and all recursion is structural (on grapes for banana, on equality for peach/cherry), the system should be strongly normalizing.
+
+ But we need to be rigorous. Can we establish SN from the presented calculus alone without extra assumptions?
+
+ Let's try to construct a model: assign to each term a natural number such that each step decreases it.
+
+ We can use the concept of "height" or "depth" but with a weight on `grape` and `plum` to make banana decrease.
+
+ Consider the following interpretation into the natural numbers:
+ - [[plum]] = 1
+ - [[grape(x)]] = [[x]] + 2
+ - [[mango(x)]] = [[x]] + 1
+ - [[peach(x,y)]] = max([[x]], [[y]]) + 1
+ - [[pear(x,y)]] = [[x]] + [[y]] + 1
+ - [[banana(x,y,z)]] = [[x]] + f([[y]], [[z]])
+ - [[cherry(x,y)]] = max([[x]], [[y]]) + 2
+
+ We need to choose f such that rule 6 decreases.
+
+ Rule 6: banana(b, s, grape(n)) -> pear(s, banana(b, s, n)).
+ We need: [[b]] + f([[s]], [[n]]+2) > [[s]] + [[b]] + f([[s]], [[n]]) + 1.
+ i.e., f(s, n+2) > s + f(s, n) + 1.
+
+ This is a recurrence: f(s, z+2) > f(s, z) + s + 1.
+ We can choose f(s, z) = (s+1) * z.
+ Then LHS: (s+1)*(n+2) = (s+1)*n + 2(s+1).
+ RHS: s + (s+1)*n + 1 = (s+1)*n + s + 1.
+ Difference: 2s + 2 - s - 1 = s + 1 > 0. Good!
+
+ But we need monotonicity in all arguments. If f(s,z) = (s+1)*z, then banana(x,y,z) = x + (y+1)*z. This is monotone in x, y, z (since y+1 ≥ 1, z ≥ 1, etc.).
+
+ Let's check other rules with this interpretation.
+
+ Define:
+ [[plum]] = 1
+ [[grape(x)]] = [[x]] + 2
+ [[mango(x)]] = [[x]] + 1
+ [[peach(x,y)]] = max([[x]], [[y]]) + 1
+ [[pear(x,y)]] = [[x]] + [[y]] + 1
+ [[banana(x,y,z)]] = x + (y+1)*z   (using x,y,z for the values)
+ [[cherry(x,y)]] = max(x,y) + 2
+
+ Check rule 1: mango(grape(t)) -> plum.
+ LHS: [[grape(t)]] + 1 = ([[t]]+2) + 1 = [[t]] + 3.
+ RHS: 1.
+ Need [[t]] + 3 > 1. True.
+
+ Rule 2: peach(plum, t) -> t.
+ LHS: max(1, [[t]]) + 1.
+ RHS: [[t]].
+ Need max(1, [[t]]) + 1 > [[t]].
+ If [[t]] ≥ 1, max(1,[[t]]) = [[t]], so [[t]] + 1 > [[t]]. True.
+
+ Rule 3: peach(t, plum) -> t.
+ LHS: max([[t]], 1) + 1 > [[t]]. Same.
+
+ Rule 4: peach(t, t) -> t.
+ LHS: max([[t]], [[t]]) + 1 = [[t]] + 1 > [[t]]. True.
+
+ Rule 5: banana(b, s, plum) -> b.
+ LHS: [[b]] + ([[s]]+1)*1 = [[b]] + [[s]] + 1.
+ RHS: [[b]].
+ Need [[b]] + [[s]] + 1 > [[b]]. Since [[s]] ≥ 1, true.
+
+ Rule 6: banana(b, s, grape(n)) -> pear(s, banana(b,s,n)).
+ LHS: [[b]] + ([[s]]+1)*([[n]]+2) = [[b]] + ([[s]]+1)*[[n]] + 2([[s]]+1).
+ RHS: [[s]] + ([[b]] + ([[s]]+1)*[[n]]) + 1 = [[s]] + [[b]] + ([[s]]+1)*[[n]] + 1.
+ Need: [[b]] + ([[s]]+1)*[[n]] + 2[[s]] + 2 > [[b]] + ([[s]]+1)*[[n]] + [[s]] + 1.
+ Simplify: 2[[s]] + 2 > [[s]] + 1 => [[s]] + 1 > 0. True since [[s]] ≥ 1.
+
+ Great! Rule 6 works.
+
+ Rule 7: cherry(a,a) -> plum.
+ LHS: max([[a]],[[a]]) + 2 = [[a]] + 2.
+ RHS: 1.
+ Need [[a]] + 2 > 1. True.
+
+ Rule 8: cherry(a,b) -> mango(peach(a,b)) when a ≠ b.
+ LHS: max([[a]], [[b]]) + 2.
+ RHS: [[peach(a,b)]] + 1 = max([[a]], [[b]]) + 1 + 1 = max([[a]], [[b]]) + 2.
+ Wait! LHS = max(a,b) + 2. RHS = max(a,b) + 2. So they are equal! We need strict inequality. This doesn't work.
+
+ We need cherry to decrease. Let's adjust [[cherry(x,y)]] to be larger.
+
+ Set [[cherry(x,y)]] = max(x,y) + 3.
+ Then rule 7: max(a,a)+3 = a+3 > 1. True.
+ Rule 8: max(a,b)+3 > max(a,b)+2. True!
+
+ Now check if this affects anything else. No, because cherry only appears in these two rules.
+
+ But wait, does cherry appear in any other rule's RHS? No. So adjusting cherry doesn't break other rules.
+
+ However, we need to check that the interpretation is valid for all constructors and that monotonicity holds. Since banana uses (y+1)*z, it's monotone in y and z. Pear is monotone. Grape, mango are monotone. Peach uses max, which is monotone.
+
+ But we need to ensure that the interpretation is defined for all terms and gives natural numbers. Yes.
+
+ Let's double-check rule 8 with a=plum, b=plum. But rule 8 requires a ≠ b, so a=b=plum is not applicable. The measure for cherry(a,b) is max(a,b)+3. For rule 8, a ≠ b, so it's fine.
+
+ Actually, we must be careful: in a polynomial interpretation, we need the interpretation to be a polynomial (or at least a function) that is strictly monotone in each argument. `max` is not a polynomial, but it is a strictly monotone function in each argument (over natural numbers). In the context of termination proofs, monotone algebra interpretations can use any monotone functions, not just polynomials. The standard monotone algebra approach requires that for each function symbol f, the interpretation is monotone in each argument, and for each rewrite rule l → r, [[l]] > [[r]] for all assignments. This is sufficient for SN.
+
+ So we can define:
+ - [[plum]] = 1
+ - [[grape]](x) = x + 2
+ - [[mango]](x) = x + 1
+ - [[peach]](x,y) = max(x,y) + 1
+ - [[pear]](x,y) = x + y + 1
+ - [[banana]](x,y,z) = x + (y+1) * z
+ - [[cherry]](x,y) = max(x,y) + 3
+
+ Let's verify monotonicity:
+ - grape: x+2 is strictly monotone.
+ - mango: x+1 is strictly monotone.
+ - peach: max(x,y)+1 is strictly monotone in x and y.
+ - pear: x+y+1 is strictly monotone.
+ - banana: x + (y+1)*z. Partial derivative w.r.t x is 1 > 0. w.r.t y is z > 0 (since z ≥ 1). w.r.t z is y+1 > 0 (since y ≥ 1). So strictly monotone.
+ - cherry: max(x,y)+3 is strictly monotone.
+
+ Base case: plum = 1 > 0. All interpretations are ≥ 1.
+
+ Now verify all rules:
+
+ 1. mango(grape(t)): [[mango]]([[grape(t)]]) = ([[t]]+2) + 1 = [[t]] + 3. RHS [[plum]] = 1. Since [[t]] ≥ 1, LHS ≥ 4 > 1. Good.
+
+ 2. peach(plum, t): [[peach]](1, [[t]]) = max(1, [[t]]) + 1. Since [[t]] ≥ 1, max = [[t]], so = [[t]] + 1 > [[t]].
+
+ 3. peach(t, plum): = max([[t]], 1) + 1 = [[t]] + 1 > [[t]].
+
+ 4. peach(t, t): = max([[t]], [[t]]) + 1 = [[t]] + 1 > [[t]].
+
+ 5. banana(b, s, plum): [[banana]]([[b]], [[s]], 1) = [[b]] + ([[s]]+1)*1 = [[b]] + [[s]] + 1 > [[b]].
+
+ 6. banana(b, s, grape(n)): [[banana]]([[b]], [[s]], [[n]]+2) = [[b]] + ([[s]]+1)*([[n]]+2) = [[b]] + ([[s]]+1)*[[n]] + 2[[s]] + 2.
+    RHS: [[pear]]([[s]], [[banana]]([[b]], [[s]], [[n]])) = [[s]] + ([[b]] + ([[s]]+1)*[[n]]) + 1 = [[s]] + [[b]] + ([[s]]+1)*[[n]] + 1.
+    Difference: (2[[s]] + 2) - ([[s]] + 1) = [[s]] + 1 ≥ 2 > 0. Good.
+
+ 7. cherry(a,a): [[cherry]]([[a]], [[a]]) = [[a]] + 3 > 1.
+
+ 8. cherry(a,b) with a≠b: [[cherry]]([[a]], [[b]]) = max([[a]], [[b]]) + 3.
+    RHS: [[mango]]([[peach]]([[a]], [[b]])) = (max([[a]], [[b]]) + 1) + 1 = max([[a]], [[b]]) + 2.
+    So LHS = M + 3 > M + 2 = RHS. Good.
+
+ This interpretation works! It proves strong normalization using the monotone algebra method (a standard proof method). The key was using multiplication for banana to absorb the duplication of s, and using max for peach and cherry, and a larger constant for cherry to handle rule 8.
+
+ Since we have a concrete monotone algebra over the natural numbers that strictly decreases with every rewrite step, the system is strongly normalizing.
+
+ Wait, is there any subtlety with rule 8 requiring a ≠ b? The monotone algebra condition must hold for all assignments, regardless of whether a = b or not. Since we have a uniform interpretation that works for all a,b, it's fine. The condition a ≠ b is handled by the fact that the rule only applies when a ≠ b, but the inequality [[l]] > [[r]] holds for all a,b, so in particular when a ≠ b.
+
+ One more check: are there any other hidden rules or constructors? No.
+
+ So the answer is: Yes, strong normalization can be established from the presented calculus alone. The reasoning is that there exists a strictly monotone interpretation into the natural numbers (a monotone algebra) that decreases with every rewrite rule. Specifically, using the interpretation:
+ - plum ↦ 1
+ - grape(x) ↦ x+2
+ - mango(x) ↦ x+1
+ - peach(x,y) ↦ max(x,y)+1
+ - pear(x,y) ↦ x+y+1
+ - banana(x,y,z) ↦ x + (y+1)·z
+ - cherry(x,y) ↦ max(x,y)+3
+
+ This interpretation assigns a natural number to every term and strictly decreases with each rewrite step. Since the natural numbers are well-founded, there are no infinite reduction sequences. Thus the system is strongly normalizing, provable by standard monotone algebra (or polynomial/max interpretation) without any extra axioms or rules.
+
+ Therefore, the assessment is: Yes, SN can be established.
+
+ The user asks: "Give your raw assessment: can strong normalization of this system be established from the presented calculus alone...? Provide your assessment and briefly explain the reasoning, staying within that boundary."
+
+ So I should answer: Yes. Briefly explain that a monotone algebra interpretation into natural numbers works, giving the interpretation or describing it. Mention that banana's duplication is handled by a multiplicative interpretation, cherry needs a larger offset, and max handles peach. No extra assumptions needed.
+
+ I should also mention that the system is first-order, no binding, and standard termination methods (monotone algebra / interpretation) apply directly.
+
+ Let's write the final answer concisely but with enough detail.
+
+ Important: The prompt says "Do not read any other files in the workspace or search the web." So I only use the given file.
+
+ I should also consider if there is any reason why SN might NOT hold. Let's double-check if any rule can loop.
+
+ Could rule 4 `peach t t → t` be applied infinitely? No, because it decreases size.
+
+ Could rule 2 and 3 be applied infinitely? Only if there is an infinite supply of `peach plum t` patterns. But each application removes a `peach`. So no.
+
+ Could there be an infinite sequence due to rule 8 creating a `peach` that reduces, and the result is a larger term that again becomes a cherry? Rule 8 creates `mango(peach(a,b))`. To get a cherry again, we need a rule that produces cherry. None do. So cherries are consumed, never created.
+
+ Bananas are created by rule 6, but each new banana has a third argument that is a proper subterm of the original third argument (removing one grape). Since no rule creates grape, the "fuel" for banana rule 6 is finite.
+
+ The only subtlety is duplication of s containing bananas. But the multiplication interpretation shows that the measure still decreases.
+
+ Thus, yes, SN holds.
+
+ I will present the answer: Yes, by a monotone algebra interpretation.
+
+ Let's formulate the interpretation clearly:
+ - [plum] = 1
+ - [grape](x) = x + 2
+ - [mango](x) = x + 1
+ - [peach](x,y) = max(x,y) + 1
+ - [pear](x,y) = x + y + 1
+ - [banana](x,y,z) = x + (y+1) * z
+ - [cherry](x,y) = max(x,y) + 3
+
+ Then check each rule. The multiplication in banana handles the duplication of s in rule 6 because the extra factor (y+1) makes the LHS larger than the RHS even though s is duplicated.
+
+ Actually, let me verify rule 6 arithmetic again carefully.
+ LHS = b + (s+1)*(n+2) = b + (s+1)*n + 2s + 2.
+ RHS = s + (b + (s+1)*n) + 1 = b + (s+1)*n + s + 1.
+ LHS - RHS = (2s+2) - (s+1) = s+1.
+ Since s ≥ [plum] = 1, s+1 ≥ 2 > 0. So yes.
+
+ For rule 8: cherry a b → mango(peach(a,b)) (a≠b).
+ [cherry](a,b) = max(a,b) + 3.
+ [mango]([peach](a,b)) = (max(a,b) + 1) + 1 = max(a,b) + 2.
+ So LHS > RHS by 1. Good.
+
+ Everything else is straightforward.
+
+ Therefore, the assessment is definitively yes.
+
+ I will write a concise but complete explanation.

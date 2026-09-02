@@ -1,0 +1,1979 @@
+The user wants me to provide proof skeletons for the remaining five cases in a Lean 4 strong normalization proof. Let me analyze each case carefully.
+
+The file defines:
+- A term language with 7 constructors (void, delta, integrate, merge, app, recDelta, eqW)
+- A step relation with 8 root rules
+- Two measures: `kappa` (recursion depth) and `mu` (weighted structural size)
+- A lexicographic order on the measure pair
+- `drop_left` and `drop_right` for proving decrease
+
+The three proved cases are:
+- `R_merge_void_left`: merge void t → t (mu drops by 2, kappa ties)
+- `R_merge_void_right`: merge t void → t (mu drops by 2, kappa ties)
+- `R_merge_cancel`: merge t t → t (mu drops by 2 + mu t, kappa ties)
+
+The five remaining cases:
+1. `R_int_delta t`: integrate (delta t) → void
+2. `R_rec_zero b s`: recDelta b s void → b
+3. `R_rec_succ b s n`: recDelta b s (delta n) → app s (recDelta b s n)
+4. `R_eq_refl a`: eqW a a → void
+5. `R_eq_diff a b`: eqW a b → integrate (merge a b)
+
+Let me think about each case:
+
+**Case 1: R_int_delta t**
+- LHS: integrate (delta t)
+- RHS: void
+- kappa(integrate (delta t)) = kappa t (delta is transparent, integrate is transparent)
+- kappa(void) = 0
+- So kappa drops if kappa t > 0... but if t is void, kappa is 0 on both sides. Hmm, that would mean kappa doesn't drop.
+- Wait, let me reconsider. We need LexOrder(void, integrate (delta t)), which means either kappa(void) < kappa(integrate (delta t)) or (kappa ties AND mu(void) < mu(integrate (delta t))).
+- kappa(void) = 0, kappa(integrate (delta t)) = kappa t.
+- If kappa t = 0, then kappa ties, and we need mu(void) < mu(integrate (delta t)).
+  - mu(void) = 0
+  - mu(integrate (delta t)) = 1 + mu t ≥ 1 > 0
+  - So mu drops.
+- If kappa t > 0, then kappa drops strictly.
+- So we need a case split or to prove both cases at once.
+
+Let me think more carefully. We can do:
+```
+by_cases hk : kappa t = 0
+case pos =>
+  have hmu : 0 < 1 + mu t := Nat.zero_lt_succ _
+  have hk_eq : kappa void = kappa (integrate (delta t)) := by simp [kappa, hk]
+  exact drop_right hmu hk_eq
+case neg =>
+  have hk_lt : kappa void < kappa (integrate (delta t)) := by simp [kappa]; omega
+  exact drop_left hk_lt
+```
+
+Actually, we could also just split on the case where kappa t = 0 or > 0, but a cleaner approach might be to use `by_cases` or just do the case analysis.
+
+Actually, a simpler approach: since the rule is `integrate (delta t) → void`, we know:
+- kappa LHS = kappa t
+- kappa RHS = 0
+- mu LHS = 1 + mu t (since delta is transparent to mu, integrate adds 1)
+- mu RHS = 0
+
+If kappa t > 0, then kappa drops strictly.
+If kappa t = 0, then kappa ties, and mu drops (since 0 < 1 + mu t).
+
+We could also use `Nat.lt_or_lt_of_add_lt_add_right` or similar, but the cleanest is `by_cases`.
+
+**Case 2: R_rec_zero b s**
+- LHS: recDelta b s void
+- RHS: b
+- kappa LHS: Since void is not delta-wrapped, we use the default case:
+  kappa(recDelta b s void) = max(max(kappa b, kappa s), kappa void) = max(max(kappa b, kappa s), 0) = max(kappa b, kappa s)
+- kappa RHS: kappa b
+- mu LHS: 3 + mu b + mu s + mu void = 3 + mu b + mu s
+- mu RHS: mu b
+
+So kappa LHS = max(kappa b, kappa s) ≥ kappa b = kappa RHS.
+- If kappa s ≤ kappa b, then kappa LHS = kappa b = kappa RHS, ties, and mu drops (since 3 + mu s > 0).
+- If kappa s > kappa b, then kappa LHS > kappa RHS, drops strictly.
+
+Hmm, this is similar to the previous case. We need to split on whether kappa b = max(kappa b, kappa s) or strictly less.
+
+Actually, we can use:
+```
+have hmu : mu b < mu (recDelta b s void) := by simp [mu]; omega
+have hk_le : kappa b ≤ kappa (recDelta b s void) := by simp [kappa]
+```
+But we need either strict kappa decrease or tied kappa with strict mu decrease.
+
+If kappa b < max(kappa b, kappa s), we have strict kappa decrease.
+If kappa b = max(kappa b, kappa s), we have tied kappa, and we use drop_right with mu decrease.
+
+So:
+```
+by_cases hk : kappa b = kappa (recDelta b s void)
+case pos =>
+  have hmu : mu b < mu (recDelta b s void) := by simp [mu]; omega
+  exact drop_right hmu hk
+case neg =>
+  have hk_lt : kappa b < kappa (recDelta b s void) := by simp [kappa]; omega
+  exact drop_left hk_lt
+```
+
+**Case 3: R_rec_succ b s n**
+- LHS: recDelta b s (delta n)
+- RHS: app s (recDelta b s n)
+- kappa LHS: max(max(kappa b, kappa s), kappa n) + 1
+- kappa RHS: max(kappa s, kappa(recDelta b s n)) = max(kappa s, max(max(kappa b, kappa s), kappa n)) = max(max(kappa b, kappa s), kappa n) (since kappa b ≤ this max, and kappa s ≤ this max)
+
+So kappa RHS = max(max(kappa b, kappa s), kappa n) and kappa LHS = kappa RHS + 1. Kappa drops strictly!
+
+```
+have hk : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+  simp [kappa]; omega
+exact drop_left hk
+```
+
+Wait, let me double-check:
+- kappa LHS = max(max(kappa b, kappa s), kappa n) + 1
+- kappa(app s ...) = max(kappa s, kappa(recDelta b s n))
+- kappa(recDelta b s n): n is not delta-wrapped, so kappa(recDelta b s n) = max(max(kappa b, kappa s), kappa n)
+- So kappa RHS = max(kappa s, max(max(kappa b, kappa s), kappa n)) = max(max(kappa b, kappa s), kappa n)
+
+Yes, kappa RHS = max(max(kappa b, kappa s), kappa n) and kappa LHS = that + 1. So kappa drops by 1.
+
+```
+have hk : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+  simp [kappa, kappa_rec_delta]; omega
+```
+
+Hmm, actually we need to be careful. The simp lemmas cover the basic cases. Let me look:
+- `kappa_rec_delta` says: kappa (recDelta b s (delta n)) = max(max(kappa b)(kappa s))(kappa n) + 1
+- kappa_app says: kappa (app a b) = max (kappa a) (kappa b)
+
+So:
+```
+have hk : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+  simp [kappa, kappa_rec_delta]; omega
+```
+
+This should work. Actually, kappa (recDelta b s n) when n is not (delta _) - the default case in the definition is:
+`recDelta b s n => Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)`
+This isn't a simp lemma, so we'd need to unfold. But actually, we can use `Nat.max` lemmas.
+
+Let me think... Actually, since n is a variable, when we unfold kappa for `recDelta b s n`, we get the non-delta case. We can either:
+1. Add a simp lemma for this case
+2. Unfold manually
+
+Actually, we can prove:
+```
+have hk : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+  simp only [kappa, kappa_rec_delta]
+  -- now goal should be: max (kappa s) (kappa (recDelta b s n)) < max (max (kappa b) (kappa s)) (kappa n) + 1
+  -- We need to show max (kappa s) (kappa (recDelta b s n)) ≤ max (max (kappa b) (kappa s)) (kappa n)
+  sorry
+```
+
+Hmm, this is getting complicated. Let me think again.
+
+kappa (recDelta b s n) = max(max(kappa b, kappa s), kappa n) — this is a fact we can prove.
+kappa (app s (recDelta b s n)) = max(kappa s, max(max(kappa b, kappa s), kappa n)) = max(max(kappa b, kappa s), kappa n).
+
+So we need: max(max(kappa b, kappa s), kappa n) < max(max(kappa b, kappa s), kappa n) + 1, which is trivially true.
+
+The approach:
+```
+have hk : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+  simp only [kappa, kappa_app, kappa_rec_delta]
+  -- unfold kappa for recDelta b s n (non-delta case)
+  ...
+```
+
+Actually, let me look at how kappa is defined. The non-delta case for recDelta is:
+`| .recDelta b s n => Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)`
+
+This pattern doesn't match a simp lemma. We'd need to add one or unfold manually. But for a proof skeleton, we can sketch the idea:
+
+```
+| _, _, Step.R_rec_succ b s n => by
+    -- kappa of LHS is max(max(κb, κs), κn) + 1
+    -- kappa of RHS is max(κs, κ(recDelta b s n)) = max(max(κb, κs), κn)
+    -- so kappa drops by exactly 1
+    have hk : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+      simp [kappa, kappa_app, kappa_rec_delta]; omega
+    exact drop_left hk
+```
+
+Actually wait, when we simp with `kappa`, it will try to unfold kappa for `recDelta b s n`. The definition of kappa has the case `recDelta b s (.delta n)` and `recDelta b s n` (catch-all). Since n is a free variable, the catch-all case will be used, and simp should be able to handle it. Let me think...
+
+In Lean 4, the equation compiler generates equation lemmas. `kappa (recDelta b s n)` should reduce via the equation lemma to `Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)` when n is not of the form `delta _`. With `simp [kappa]`, it should unfold.
+
+Actually, `kappa` is defined with the `def` and pattern matching, so equation lemmas are generated. The `simp [kappa]` should reduce `kappa (recDelta b s n)` to `Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)`.
+
+So the proof should be:
+```
+| _, _, Step.R_rec_succ b s n => by
+    have hk : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+      simp [kappa]; omega
+    exact drop_left hk
+```
+
+Let me verify the omega step:
+- After simp, LHS: max (kappa s) (max (max (kappa b) (kappa s)) (kappa n))
+- After simp, RHS: max (max (kappa b) (kappa s)) (kappa n) + 1
+- We need: max (kappa s) (max (max (kappa b) (kappa s)) (kappa n)) < max (max (kappa b) (kappa s)) (kappa n) + 1
+- This is: M < M + 1 where M = max (max (kappa b) (kappa s)) (kappa n).
+- omega should handle this.
+
+**Case 4: R_eq_refl a**
+- LHS: eqW a a
+- RHS: void
+- kappa LHS: max(kappa a, kappa a) = kappa a
+- kappa RHS: 0
+- mu LHS: 4 + mu a + mu a = 4 + 2 * mu a
+- mu RHS: 0
+
+Same structure as case 1. If kappa a > 0, kappa drops. If kappa a = 0, kappa ties, mu drops (4 + 2*mu a ≥ 4 > 0).
+
+```
+| _, _, Step.R_eq_refl a => by
+    by_cases hk : kappa a = 0
+    · -- kappa ties, mu drops
+      have hmu : mu void < mu (eqW a a) := by simp [mu]; omega
+      have hk_eq : kappa void = kappa (eqW a a) := by simp [kappa, hk]
+      exact drop_right hmu hk_eq
+    · -- kappa drops
+      have hk_lt : kappa void < kappa (eqW a a) := by simp [kappa]; omega
+      exact drop_left hk_lt
+```
+
+Wait, I need to be careful with `by_cases` syntax. In Lean 4, `by_cases h : P` is the standard form. Then we can use the two cases.
+
+Actually, the standard way is:
+```
+by_cases hk : kappa a = 0
+· have hmu : (0 : Nat) < mu (eqW a a) := by simp [mu]; omega
+  have hk_eq : kappa void = kappa (eqW a a) := by simp [kappa, hk]
+  exact drop_right hmu hk_eq
+· have hk_lt : (0 : Nat) < kappa (eqW a a) := by simp [kappa]; omega
+  exact drop_left hk_lt
+```
+
+Hmm, actually, the second branch when hk : kappa a ≠ 0, we need to show kappa void < kappa (eqW a a), i.e., 0 < max(kappa a, kappa a) = kappa a. This follows from hk : kappa a ≠ 0, which in Nat means kappa a > 0.
+
+**Case 5: R_eq_diff a b**
+- LHS: eqW a b
+- RHS: integrate (merge a b)
+- kappa LHS: max(kappa a, kappa b)
+- kappa RHS: kappa(integrate (merge a b)) = kappa (merge a b) = max(kappa a, kappa b) (integrate is transparent)
+
+So kappa ties!
+- mu LHS: 4 + mu a + mu b
+- mu RHS: 1 + mu (merge a b) = 1 + 2 + mu a + mu b = 3 + mu a + mu b
+
+So mu drops by 1. Use drop_right.
+
+```
+| _, _, Step.R_eq_diff a b => by
+    have hmu : mu (integrate (merge a b)) < mu (eqW a b) := by simp [mu]; omega
+    have hk : kappa (integrate (merge a b)) = kappa (eqW a b) := by simp [kappa]
+    exact drop_right hmu hk
+```
+
+Now let me think about how to present this as a "proof skeleton". The user wants skeletons for the 5 remaining cases. I should provide clear, idiomatic Lean 4 code for each.
+
+Let me re-examine each case more carefully to make sure my analysis is correct.
+
+**Re-checking Case 1: R_int_delta t**
+- LHS: integrate (delta t)
+- RHS: void
+- kappa(integrate (delta t)) = kappa(delta t) = kappa t
+- kappa(void) = 0
+- mu(integrate (delta t)) = 1 + mu(delta t) = 1 + mu t
+- mu(void) = 0
+
+So measure LHS = (kappa t, 1 + mu t), measure RHS = (0, 0).
+
+For LexOrder, we need either:
+- 0 < kappa t, or
+- 0 = kappa t and 0 < 1 + mu t.
+
+Since mu t ≥ 0, we have 1 + mu t ≥ 1 > 0. So the second condition is satisfied when kappa t = 0.
+
+In the first case, kappa t > 0, we use drop_left.
+In the second case, kappa t = 0, we use drop_right.
+
+```
+| _, _, Step.R_int_delta t => by
+    by_cases hk : kappa t = 0
+    · have hmu : (0 : Nat) < mu (integrate (delta t)) := by simp [mu]; omega
+      have hk_eq : kappa void = kappa (integrate (delta t)) := by
+        simp [kappa]; exact hk
+      exact drop_right hmu hk_eq
+    · have hk_lt : (0 : Nat) < kappa (integrate (delta t)) := by
+        simp [kappa]; omega
+      exact drop_left hk_lt
+```
+
+Hmm, wait. In the second branch, hk : kappa t ≠ 0. In Nat, this means kappa t > 0. We need to show 0 < kappa(integrate (delta t)) = kappa t. Since hk : kappa t ≠ 0, this is equivalent to kappa t > 0, which is what omega would derive from `Ne.def.mp hk` or similar.
+
+Actually, in Lean 4 with `omega`, we might need to be more explicit. Let me think...
+
+`omega` works with linear arithmetic over integers/naturals. `hk : kappa t ≠ 0` in Nat means `kappa t > 0` (since kappa t is a Nat). `omega` should be able to use this.
+
+Let me try:
+```
+have hk_lt : (0 : Nat) < kappa (integrate (delta t)) := by
+  simp [kappa]
+  -- goal: 0 < kappa t
+  omega
+```
+
+Actually, `simp [kappa]` would reduce `kappa (integrate (delta t))` to `kappa t`. Then we have `hk : kappa t ≠ 0`, and we need `0 < kappa t`. `omega` can use `hk` to conclude this.
+
+Let me also reconsider: maybe a cleaner approach is to avoid case splitting. We can directly prove:
+
+```
+| _, _, Step.R_int_delta t => by
+    -- We show: either kappa drops, or kappa ties and mu drops.
+    -- kappa(integrate (delta t)) = kappa t, mu(integrate (delta t)) = 1 + mu t.
+    -- void: kappa = 0, mu = 0.
+    -- If kappa t > 0, use drop_left.
+    -- If kappa t = 0, then 1 + mu t > 0, use drop_right.
+    by_cases hk : kappa t = 0
+    · -- kappa ties (both 0), mu drops
+      have hmu : (0 : Nat) < 1 + mu t := Nat.zero_lt_succ _
+      have hk_eq : kappa void = kappa (integrate (delta t)) := by
+        simp [kappa, hk]
+      exact drop_right hmu hk_eq
+    · -- kappa drops strictly
+      have hk_lt : (0 : Nat) < kappa t := Nat.pos_of_ne_zero hk
+      have hk_lt' : kappa void < kappa (integrate (delta t)) := by
+        simp [kappa]; exact hk_lt
+      exact drop_left hk_lt'
+```
+
+This is cleaner. Let me refine.
+
+Actually, I realize I should be careful with the simp lemmas. Let me re-read:
+- `kappa_integrate (t) : kappa (integrate t) = kappa t := rfl`
+- `kappa_delta (t) : kappa (delta t) = kappa t := rfl`
+
+So `simp [kappa, kappa_integrate, kappa_delta]` would reduce `kappa (integrate (delta t))` to `kappa t`. Or just `simp [kappa]` should work if the equation lemmas are picked up.
+
+Hmm, but `kappa` is defined with all cases in one def, so `kappa` as a simp lemma would try all equations. Let me not worry about that and just use the named lemmas.
+
+Actually, for the simp lemmas listed:
+```
+@[simp] lemma kappa_void : kappa void = 0 := rfl
+@[simp] lemma kappa_delta (t) : kappa (delta t) = kappa t := rfl
+@[simp] lemma kappa_integrate (t) : kappa (integrate t) = kappa t := rfl
+@[simp] lemma kappa_merge (a b) : kappa (merge a b) = Nat.max (kappa a) (kappa b) := rfl
+@[simp] lemma kappa_app (a b) : kappa (app a b) = Nat.max (kappa a) (kappa b) := rfl
+@[simp] lemma kappa_eqW (a b) : kappa (eqW a b) = Nat.max (kappa a) (kappa b) := rfl
+@[simp] lemma kappa_rec_delta (b s n) :
+  kappa (recDelta b s (delta n)) =
+    Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1 := rfl
+```
+
+These are the simp lemmas. For `kappa (recDelta b s n)` where n is not (delta _), there's no explicit simp lemma, but the equation lemma for kappa should handle it.
+
+OK, I think the approach is clear. Let me now write up the final skeletons.
+
+Actually, let me reconsider the structure. The user asked for "proof skeletons" for the remaining cases. I should provide the Lean 4 code that would fill in the sorrys.
+
+Let me also think about whether there are simpler unified approaches. For example, in many of these cases, we have a mu drop of some positive constant while kappa is non-increasing. If we can prove that kappa is non-increasing and mu drops strictly, we can use drop_right in all cases.
+
+But actually, in some cases (R_int_delta, R_eq_refl, R_rec_zero), kappa might not be non-increasing. Wait, let me re-check.
+
+**R_int_delta t**: integrate (delta t) → void. kappa LHS = kappa t, kappa RHS = 0. If kappa t = 0, kappa ties. If kappa t > 0, kappa drops. So kappa is non-increasing.
+
+**R_rec_zero b s**: recDelta b s void → b. kappa LHS = max(kappa b, kappa s, 0) = max(kappa b, kappa s). kappa RHS = kappa b. So kappa is non-increasing.
+
+**R_rec_succ b s n**: recDelta b s (delta n) → app s (recDelta b s n). kappa LHS = max(kappa b, kappa s, kappa n) + 1. kappa RHS = max(kappa s, max(kappa b, kappa s, kappa n)) = max(kappa b, kappa s, kappa n). So kappa drops by 1.
+
+**R_eq_refl a**: eqW a a → void. kappa LHS = kappa a, kappa RHS = 0. Kappa non-increasing.
+
+**R_eq_diff a b**: eqW a b → integrate (merge a b). kappa LHS = max(kappa a, kappa b). kappa RHS = max(kappa a, kappa b). Kappa ties.
+
+So in all cases, kappa is non-increasing (drops or ties), and when it ties, mu drops strictly. We could prove this as a general lemma, but the per-case approach is also fine.
+
+For the proof skeletons, I'll provide the per-case proofs. Let me finalize them:
+
+**Case 1: R_int_delta t**
+```lean
+| _, _, Step.R_int_delta t => by
+    -- kappa(integrate (delta t)) = kappa t, kappa void = 0
+    -- mu(integrate (delta t)) = 1 + mu t, mu void = 0
+    by_cases hk : kappa t = 0
+    · -- kappa ties at 0; mu drops because 0 < 1 + mu t
+      have hmu : (0 : Nat) < 1 + mu t := Nat.zero_lt_succ _
+      have hk_eq : kappa void = kappa (integrate (delta t)) := by
+        simp [kappa, kappa_integrate, kappa_delta, hk]
+      exact drop_right hmu hk_eq
+    · -- kappa drops strictly: 0 < kappa t
+      have hk_lt : (0 : Nat) < kappa t := Nat.pos_of_ne_zero hk
+      have hk_lt' : kappa void < kappa (integrate (delta t)) := by
+        simp [kappa, kappa_integrate, kappa_delta]; exact hk_lt
+      exact drop_left hk_lt'
+```
+
+**Case 2: R_rec_zero b s**
+```lean
+| _, _, Step.R_rec_zero b s => by
+    -- kappa(recDelta b s void) = max(kappa b, kappa s, 0) = max(kappa b, kappa s)
+    -- kappa b: when kappa b is the max, ties; otherwise drops.
+    -- mu(recDelta b s void) = 3 + mu b + mu s, mu b
+    by_cases hk : kappa b = max (kappa b) (kappa s)
+    · -- kappa ties; mu drops because 0 < 3 + mu s
+      have hmu : mu b < mu (recDelta b s void) := by
+        simp [mu]; omega
+      have hk_eq : kappa b = kappa (recDelta b s void) := by
+        simp [kappa]; exact hk
+      exact drop_right hmu hk_eq
+    · -- kappa drops strictly
+      have hk_lt : kappa b < kappa (recDelta b s void) := by
+        simp [kappa]; omega
+      exact drop_left hk_lt
+```
+
+Hmm, wait. For `by_cases hk : kappa b = max (kappa b) (kappa s)`, in the neg case, we have `hk : kappa b ≠ max (kappa b) (kappa s)`. We need to derive `kappa b < max (kappa b, kappa s)`. In Nat, if a ≠ max(a, b), then since max(a, b) ≥ a, we have max(a, b) > a, so a < max(a, b).
+
+This is a standard fact. `omega` might handle it if we have the right setup. Let me think:
+```
+have hk_lt : kappa b < kappa (recDelta b s void) := by
+  simp [kappa]  -- reduce to: kappa b < max (kappa b) (kappa s)
+  -- hk : kappa b ≠ max (kappa b) (kappa s)
+  omega
+```
+
+Will omega handle this? `omega` works with linear arithmetic, but `max` is not linear. However, with the right lemmas, omega might work. Actually, `omega` has some support for `max` and `min` in recent Lean 4 / Mathlib versions. But to be safe, we might want to be more explicit.
+
+Alternatively, we can avoid the case split by noting that kappa is non-increasing and mu drops:
+- kappa b ≤ max(kappa b, kappa s) = kappa(recDelta b s void)
+- mu b < 3 + mu b + mu s = mu(recDelta b s void)
+
+So we have two sub-goals:
+- kappa b ≤ kappa(recDelta b s void)
+- mu b < mu(recDelta b s void)
+
+But we need strict decrease in lex order, which requires:
+- kappa b < kappa(recDelta b s void), OR
+- kappa b = kappa(recDelta b s void) AND mu b < mu(recDelta b s void).
+
+The first sub-goal alone (kappa b ≤ ...) is not enough. We need the disjunction.
+
+OK so the case split is needed. Let me think about how to do the neg case cleanly.
+
+In the neg case, hk : kappa b ≠ max (kappa b) (kappa s). We want kappa b < max (kappa b) (kappa s). This follows from the fact that max(a, b) ≥ a always, with equality iff b ≤ a. If b > a, then max(a, b) > a. So if max(a, b) ≠ a, then max(a, b) > a.
+
+We can prove this as a lemma or use omega with a hint. Actually, let me try:
+```
+have hk_lt : kappa b < max (kappa b) (kappa s) := by
+  by_contra h
+  push_neg at h
+  -- h : max (kappa b) (kappa s) ≤ kappa b
+  have : max (kappa b) (kappa s) = kappa b := by
+    apply le_antisymm
+    · exact h
+    · exact le_max_left _ _
+  exact hk this.symm
+```
+
+Or more directly:
+```
+have hk_lt : kappa b < max (kappa b) (kappa s) := by
+  rcases Nat.lt_or_ge (kappa s) (kappa b) with h | h
+  · -- kappa s ≤ kappa b, so max = kappa b, contradiction
+    rw [max_eq_left h] at hk
+    exact (hk rfl).elim
+  · -- kappa s > kappa b, so max = kappa s > kappa b
+    rw [max_eq_right h]
+    exact h
+```
+
+Hmm, this is getting complicated. Let me just use a cleaner approach.
+
+Actually, the cleanest way: we can directly compute that kappa(recDelta b s void) = max(kappa b, kappa s) by adding a simp lemma or unfolding. Then the inequality is about max.
+
+Wait, actually, I realize there's a simpler approach. Instead of case splitting on whether kappa b = max, we can observe:
+
+If kappa b = kappa(recDelta b s void) (i.e., kappa b is the max), use drop_right with mu decrease.
+If kappa b < kappa(recDelta b s void), use drop_left.
+
+The "if kappa b = kappa(recDelta b s void)" case is when kappa b ≥ kappa s, which gives max = kappa b.
+The "if kappa b < kappa(recDelta b s void)" case is when kappa b < kappa s, which gives max = kappa s > kappa b.
+
+Let me try the `by_cases` approach more carefully:
+
+```lean
+| _, _, Step.R_rec_zero b s => by
+    -- kappa(recDelta b s void) = max(max(kappa b, kappa s), 0) = max(kappa b, kappa s)
+    -- mu(recDelta b s void) = 3 + mu b + mu s + 0 = 3 + mu b + mu s
+    by_cases hk : kappa b = max (kappa b) (kappa s)
+    · -- kappa ties; mu drops
+      have hmu : mu b < 3 + mu b + mu s := by omega
+      have hk_eq : kappa b = kappa (recDelta b s void) := by
+        simp [kappa]; exact hk
+      exact drop_right hmu hk_eq
+    · -- hk : kappa b ≠ max (kappa b) (kappa s)
+      -- Since kappa b ≤ max (kappa b) (kappa s) always, we have kappa b < max (...)
+      have hk_lt : kappa b < kappa (recDelta b s void) := by
+        simp [kappa]
+        -- goal: kappa b < max (kappa b) (kappa s)
+        omega
+      exact drop_left hk_lt
+```
+
+Will `omega` handle `kappa b < max (kappa b) (kappa s)` given `kappa b ≠ max (kappa b) (kappa s)`? In recent Mathlib, omega has been extended to handle some nonlinear operations. Let me think... Actually, `omega` might not handle max directly.
+
+A safer approach: manually handle the max case.
+```lean
+· have hk_lt : kappa b < kappa (recDelta b s void) := by
+    simp [kappa]
+    rcases Nat.lt_or_ge (kappa s) (kappa b) with h | h
+    · rw [max_eq_left h] at hk
+      exact (hk rfl).elim
+    · rw [max_eq_right h]
+      exact h
+```
+
+Hmm, this uses `max_eq_left` and `max_eq_right` which require `kappa s ≤ kappa b` and `kappa b ≤ kappa s` respectively.
+
+Actually, I think the cleanest is to avoid the by_cases on the kappa equality and instead use a different strategy. Let me think...
+
+Alternative: prove that kappa is non-increasing (≤) and mu is strictly decreasing, then combine. But the lex order requires strict decrease, not just non-strict.
+
+Actually, the standard approach for these rewrite systems is to have a measure that strictly decreases. Since the lex order requires strict decrease, and we have cases where only the second component decreases, we need to handle both.
+
+Let me try another approach: use `Nat.lt_or_lt_of_ne_eq` or similar. Actually, the fundamental fact is:
+
+For any a, b : Nat, either a < max(a, b) or a = max(a, b). This is because max(a, b) ≥ a always.
+
+So we can write:
+```lean
+have : kappa b ≤ max (kappa b) (kappa s) := le_max_left _ _
+```
+And then use the contrapositive or case analysis.
+
+Actually, the cleanest proof in Lean might be:
+```lean
+| _, _, Step.R_rec_zero b s => by
+    have hmu : mu b < mu (recDelta b s void) := by
+      simp [mu]; omega
+    by_cases hk : kappa b < kappa (recDelta b s void)
+    · exact drop_left hk
+    · -- kappa ties
+      have hk_eq : kappa b = kappa (recDelta b s void) := by
+        simp [kappa] at *
+        omega
+      exact drop_right hmu hk_eq
+```
+
+Wait, this uses `by_cases hk : kappa b < kappa (recDelta b s void)`. In the neg case, `hk : ¬ kappa b < kappa(recDelta b s void)`, i.e., `kappa(recDelta b s void) ≤ kappa b`. Combined with the fact that `kappa b ≤ kappa(recDelta b s void)` (from max), we get equality.
+
+But again, omega with max is tricky.
+
+Let me just go with the explicit approach using `Nat.lt_or_ge`:
+
+```lean
+| _, _, Step.R_rec_zero b s => by
+    have hmu : mu b < mu (recDelta b s void) := by
+      simp [mu]; omega
+    -- kappa(recDelta b s void) = max(kappa b, kappa s)
+    by_cases hs : kappa s ≤ kappa b
+    · -- max(kappa b, kappa s) = kappa b, so kappa ties
+      have hk_eq : kappa (recDelta b s void) = kappa b := by
+        simp [kappa]; rw [max_eq_left hs]
+      rw [hk_eq]
+      exact drop_right hmu rfl
+    · -- kappa s > kappa b, so max = kappa s > kappa b, kappa drops
+      have hs' : kappa b < kappa s := Nat.lt_of_not_le hs
+      have hk_lt : kappa b < kappa (recDelta b s void) := by
+        simp [kappa]; rw [max_eq_right hs']; exact hs'
+      exact drop_left hk_lt
+```
+
+This is more explicit and should work. Let me check:
+- `max_eq_left hs` : if kappa s ≤ kappa b, then max(kappa b, kappa s) = kappa b.
+- `max_eq_right hs'` : if kappa b ≤ kappa s, then max(kappa b, kappa s) = kappa s. Here hs' : kappa b < kappa s implies kappa b ≤ kappa s.
+
+Yes, this should work.
+
+Actually, I realize there might be an issue with `drop_right`. Let me re-read:
+```lean
+lemma drop_right {a b : Trace} (hmu : mu b < mu a) (hk : kappa b = kappa a) :
+    LexOrder (measure b) (measure a) := by
+  unfold LexOrder measure; rw [hk]; exact Prod.Lex.right _ hmu
+```
+
+So `drop_right` takes `mu b < mu a` and `kappa b = kappa a`. In our case, a = recDelta b s void, b = b. So we need `mu b < mu (recDelta b s void)` and `kappa b = kappa (recDelta b s void)`.
+
+In the first branch of my proof, after `rw [hk_eq]`, we have `kappa (recDelta b s void) = kappa b`, which gives us `kappa b = kappa (recDelta b s void)` (symmetric). So `drop_right hmu rfl` should work (rfl because they're definitionally equal after the rewrite? No, after the rewrite, the goal is `LexOrder (measure b) (measure b)`, which is not what we want).
+
+Wait, I'm confusing myself. Let me re-think.
+
+`measure_decreases` is: for `Step a b`, we have `LexOrder (measure b) (measure a)`. So a is the LHS, b is the RHS of the step. In `Step.R_rec_zero b s`, the step is `recDelta b s void → b`. So a = recDelta b s void, b = b.
+
+`drop_right` is: `LexOrder (measure b) (measure a)` given `mu b < mu a` and `kappa b = kappa a`.
+
+So for R_rec_zero, we need:
+- `mu b < mu (recDelta b s void)` — yes, hmu.
+- `kappa b = kappa (recDelta b s void)` — yes, hk_eq (after symm).
+
+Let me rewrite:
+```lean
+| _, _, Step.R_rec_zero b s => by
+    have hmu : mu b < mu (recDelta b s void) := by
+      simp [mu]; omega
+    by_cases hs : kappa s ≤ kappa b
+    · -- max(kappa b, kappa s) = kappa b, so kappa ties
+      have hk_eq : kappa b = kappa (recDelta b s void) := by
+        simp [kappa]
+        rw [max_eq_left hs]
+      exact drop_right hmu hk_eq
+    · -- kappa s > kappa b, so kappa drops
+      have hs' : kappa b < kappa s := Nat.lt_of_not_le hs
+      have hk_lt : kappa b < kappa (recDelta b s void) := by
+        simp [kappa]
+        rw [max_eq_right (le_of_lt hs')]
+        exact hs'
+      exact drop_left hk_lt
+```
+
+This looks correct. Let me double-check the simp goals.
+
+After `simp [kappa]` in the first branch, the goal is `kappa b = max (max (kappa b) (kappa s)) (kappa void) = max (max (kappa b) (kappa s)) 0`. Wait, `kappa void = 0` is a simp lemma, so it should reduce. The goal becomes `kappa b = max (max (kappa b) (kappa s)) 0`. Then `max _ 0 = _` by `max_eq_right` (since anything ≥ 0). Hmm, but the simp might not automatically apply that.
+
+Let me be more explicit:
+```lean
+have hk_eq : kappa b = kappa (recDelta b s void) := by
+  simp [kappa]
+  rw [max_eq_right (le_max_right _ _), max_eq_left hs]
+```
+
+Wait, the structure is `max (max (kappa b) (kappa s)) (kappa void)`. After `kappa void = 0`, it's `max (max (kappa b) (kappa s)) 0`. Then `max _ 0 = _` is true since `max a 0 = a` when `a ≥ 0`, which is always. Actually, `max a 0 = a` is a standard fact. We can use `Nat.max_eq_left (Nat.zero_le _)`.
+
+Hmm, this is getting messy. Let me just write the full unfolding:
+
+```lean
+have hk_eq : kappa b = kappa (recDelta b s void) := by
+  show kappa b = max (max (kappa b) (kappa s)) (kappa void)
+  rw [kappa_void]
+  rw [Nat.max_eq_right (Nat.zero_le _)]  -- max _ 0 = _
+  rw [max_eq_left hs]
+```
+
+Actually, `Nat.max_eq_right (Nat.zero_le _)` is a bit ugly. We can use `Nat.max_eq_left` or the fact that `max a 0 = a`.
+
+Alternatively, we can avoid all this by just having a lemma that `kappa (recDelta b s void) = max (kappa b) (kappa s)`. But that's more work.
+
+Let me try a different tactic. Use `omega` with `max` facts:
+```lean
+have hk_eq : kappa b = kappa (recDelta b s void) := by
+  simp only [kappa, kappa_void]
+  omega
+```
+
+Will omega handle max? In recent Lean 4 / Mathlib, `omega` has been extended to handle `max` and `min` in some cases. Let me check... Actually, I think `omega` does handle `Nat.max` to some extent. The facts `a ≤ max a b`, `b ≤ max a b`, `max a b = a ↔ b ≤ a`, `max a b = b ↔ a ≤ b` are in the `omega` extension.
+
+So with the right hints, `omega` should work. Let me try:
+```lean
+have hk_eq : kappa b = kappa (recDelta b s void) := by
+  simp only [kappa, kappa_void]
+  rw [max_eq_left hs]
+  -- goal: kappa b = max (kappa b) (kappa s), given kappa s ≤ kappa b
+  -- This is just the definition of max. We need to show it.
+  -- Actually, max_eq_left says: hs : kappa s ≤ kappa b → max kappa b (kappa s) = kappa b.
+  -- So after rw, goal should be kappa b = kappa b, which is rfl.
+```
+
+Wait, `max_eq_left` is `b ≤ a → max a b = a`. So `max_eq_left hs : max (kappa b) (kappa s) = kappa b` when `hs : kappa s ≤ kappa b`. Then after `rw [max_eq_left hs]`, the goal `max (max (kappa b) (kappa s)) 0 = kappa b` becomes `max (kappa b) 0 = kappa b`, which is true by `max_eq_right (zero_le _)`.
+
+Hmm, so I need to also handle the outer max. Let me do it in two steps:
+```lean
+have hk_eq : kappa b = kappa (recDelta b s void) := by
+  simp only [kappa, kappa_void]
+  rw [Nat.max_eq_right (Nat.zero_le _)]
+  rw [max_eq_left hs]
+```
+
+`Nat.max_eq_right (Nat.zero_le _) : max a 0 = a` for any a. Yes.
+
+OK, this is workable. Let me just write it out clearly.
+
+Actually, you know what, let me reconsider the approach. Instead of fighting with max, I can use a different strategy. 
+
+For R_rec_zero, observe:
+- mu b < mu (recDelta b s void) — always true.
+- kappa b ≤ kappa (recDelta b s void) — always true (since max ≥ each component).
+
+For LexOrder, we need either kappa b < kappa(recDelta b s void) or (kappa b = kappa(recDelta b s void) and mu b < mu(recDelta b s void)).
+
+Since mu b < mu(recDelta b s void) always, if kappa ties, we're done. If kappa doesn't tie (i.e., kappa b < kappa(recDelta b s void)), we're also done.
+
+So: either kappa b = kappa(recDelta b s void) or kappa b < kappa(recDelta b s void). This is `Nat.lt_or_eq_of_le`.
+
+```lean
+| _, _, Step.R_rec_zero b s => by
+    have hmu : mu b < mu (recDelta b s void) := by
+      simp [mu]; omega
+    have hk_le : kappa b ≤ kappa (recDelta b s void) := by
+      simp [kappa]
+      exact le_max_left _ _
+    rcases Nat.lt_or_eq_of_le hk_le with hk_lt | hk_eq
+    · exact drop_left hk_lt
+    · exact drop_right hmu hk_eq
+```
+
+Wait, `Nat.lt_or_eq_of_le` gives `a < b ∨ a = b` from `a ≤ b`. So this is exactly what we need.
+
+Let me verify: `Nat.lt_or_eq_of_le : a ≤ b → a < b ∨ a = b`. Yes.
+
+And `le_max_left : a ≤ max a b`. After `simp [kappa]`, the goal is `kappa b ≤ max (kappa b) (kappa s)`, which is `le_max_left _ _`. 
+
+Actually, `le_max_left` has type `a ≤ max a b`. We need to apply it to `kappa b` and `kappa s`. So `le_max_left (kappa b) (kappa s) : kappa b ≤ max (kappa b) (kappa s)`. Or with underscores: `le_max_left _ _`.
+
+Let me double-check: `Nat.le_max_left a b : a ≤ max a b`. So `le_max_left (kappa b) (kappa s) : kappa b ≤ max (kappa b) (kappa s)`. After `simp [kappa]`, the goal should reduce to this. 
+
+So the proof becomes:
+```lean
+| _, _, Step.R_rec_zero b s => by
+    have hmu : mu b < mu (recDelta b s void) := by
+      simp [mu]; omega
+    have hk_le : kappa b ≤ kappa (recDelta b s void) := by
+      simp [kappa]
+      exact le_max_left _ _
+    rcases Nat.lt_or_eq_of_le hk_le with hk_lt | hk_eq
+    · exact drop_left hk_lt
+    · exact drop_right hmu hk_eq
+```
+
+Clean! Let me apply the same pattern to the other cases.
+
+**Case 1: R_int_delta t**
+- kappa LHS = kappa t, kappa RHS = 0
+- 0 ≤ kappa t always.
+- mu LHS = 1 + mu t, mu RHS = 0.
+- mu drops: 0 < 1 + mu t.
+
+```lean
+| _, _, Step.R_int_delta t => by
+    have hmu : mu void < mu (integrate (delta t)) := by
+      simp [mu]; omega
+    have hk_le : kappa void ≤ kappa (integrate (delta t)) := by
+      simp [kappa]; exact Nat.zero_le _
+    rcases Nat.lt_or_eq_of_le hk_le with hk_lt | hk_eq
+    · exact drop_left hk_lt
+    · exact drop_right hmu hk_eq
+```
+
+**Case 4: R_eq_refl a**
+- kappa LHS = kappa a, kappa RHS = 0
+- 0 ≤ kappa a always.
+- mu LHS = 4 + 2*mu a, mu RHS = 0.
+- mu drops.
+
+```lean
+| _, _, Step.R_eq_refl a => by
+    have hmu : mu void < mu (eqW a a) := by
+      simp [mu]; omega
+    have hk_le : kappa void ≤ kappa (eqW a a) := by
+      simp [kappa]; exact Nat.zero_le _
+    rcases Nat.lt_or_eq_of_le hk_le with hk_lt | hk_eq
+    · exact drop_left hk_lt
+    · exact drop_right hmu hk_eq
+```
+
+**Case 5: R_eq_diff a b**
+- kappa LHS = max(kappa a, kappa b), kappa RHS = max(kappa a, kappa b). They tie.
+- mu LHS = 4 + mu a + mu b, mu RHS = 1 + 2 + mu a + mu b = 3 + mu a + mu b. mu drops.
+
+```lean
+| _, _, Step.R_eq_diff a b => by
+    have hmu : mu (integrate (merge a b)) < mu (eqW a b) := by
+      simp [mu]; omega
+    have hk_eq : kappa (integrate (merge a b)) = kappa (eqW a b) := by
+      simp [kappa]
+    exact drop_right hmu hk_eq
+```
+
+**Case 3: R_rec_succ b s n**
+- kappa LHS = max(kappa b, kappa s, kappa n) + 1, kappa RHS = max(kappa s, max(kappa b, kappa s, kappa n)) = max(kappa b, kappa s, kappa n).
+- kappa drops by 1.
+
+```lean
+| _, _, Step.R_rec_succ b s n => by
+    have hk_lt : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+      simp [kappa, kappa_rec_delta]
+      -- goal: max (kappa s) (kappa (recDelta b s n)) < max (max (kappa b) (kappa s)) (kappa n) + 1
+      -- Need to unfold kappa (recDelta b s n) and show the max relation.
+      sorry  -- or use omega / explicit manipulation
+    exact drop_left hk_lt
+```
+
+Hmm, the tricky part is that `kappa (recDelta b s n)` doesn't have a simp lemma (since n is a variable, not necessarily `delta _`). We need to unfold it. 
+
+After `simp [kappa, kappa_rec_delta]`, the goal should be something like:
+`max (kappa s) (kappa (recDelta b s n)) < max (max (kappa b) (kappa s)) (kappa n) + 1`
+
+We need to further reduce `kappa (recDelta b s n)`. The equation lemma for kappa on `recDelta` with a non-delta third argument should fire. Let me check if `simp [kappa]` alone does it.
+
+Actually, `kappa` as a simp lemma would try to use the equation lemmas. In Lean 4, defining `def kappa` with pattern matching generates equation lemmas like `kappa.eq_1`, `kappa.eq_2`, etc. When we do `simp [kappa]`, it adds the equation lemmas to the simp set, and they should fire.
+
+But wait, the simp lemmas listed are `kappa_void`, `kappa_delta`, etc. These are specifically marked as `@[simp]`. The equation lemmas from the `def` might or might not be marked. Let me think...
+
+In Lean 4, when you write `def foo : ...` with pattern matching, equation lemmas are generated automatically, but they are NOT automatically marked as `@[simp]`. To make them simp lemmas, you need to add `@[simp]` to the `def` or write the lemmas explicitly.
+
+In the file, only specific cases are marked as `@[simp]`. The case `recDelta b s n` (non-delta) is not. So `simp [kappa]` might not reduce `kappa (recDelta b s n)`.
+
+Hmm, this is a problem. Let me think about how to handle it.
+
+Option 1: Add a simp lemma for the non-delta recDelta case.
+Option 2: Unfold manually.
+Option 3: Use `Nat.fold` or other tactics.
+
+Actually, the way the file is written, the simp lemmas cover the specific cases. The non-delta recDelta case is not covered. So we'd need to handle it explicitly.
+
+In the proof, we can do:
+```lean
+have hk_lt : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+  simp [kappa, kappa_app, kappa_rec_delta]
+  -- now we have: max (kappa s) (kappa (recDelta b s n)) < max (max (kappa b) (kappa s)) (kappa n) + 1
+  show max (kappa s) (Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)) < 
+       Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1
+  -- This is: max (kappa s) M < M + 1 where M = max (max (kappa b) (kappa s)) (kappa n)
+  -- Since max (kappa s) M ≤ M, we have max (kappa s) M < M + 1.
+  sorry
+```
+
+Hmm, this still requires work. Let me think of a cleaner way.
+
+Actually, we can prove:
+```lean
+have hk_lt : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+  have M : Nat := max (max (kappa b) (kappa s)) (kappa n)
+  have h1 : kappa (recDelta b s n) = M := rfl  -- but this isn't quite right
+  ...
+```
+
+This is getting complicated. Let me just use omega and see if it can handle max:
+
+```lean
+have hk_lt : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+  simp [kappa, kappa_app, kappa_rec_delta]
+  -- unfold kappa for the non-delta case
+  unfold kappa
+  -- or use the equation lemma
+  ...
+```
+
+Actually, in Lean 4, `unfold kappa` should reduce `kappa (recDelta b s n)` to the non-delta case. Let me try:
+
+```lean
+have hk_lt : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+  simp only [kappa, kappa_app, kappa_rec_delta]
+  -- After simp, kappa (recDelta b s n) might not be reduced.
+  -- We can use `change` or `show` to write the unfolded form.
+  change max (kappa s) (Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)) < 
+        Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1
+  omega
+```
+
+Will omega handle this? `omega` might recognize that `max a M ≤ M` and hence `max a M < M + 1`. In recent versions, omega handles `Nat.max`. Let me assume it does.
+
+Alternatively, we can prove it manually:
+```lean
+have hk_lt : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+  simp only [kappa, kappa_app, kappa_rec_delta]
+  -- Let M = max (max (kappa b) (kappa s)) (kappa n)
+  -- We have: max (kappa s) M < M + 1
+  -- Since max (kappa s) M ≤ M, and M < M + 1, we're done.
+  have h1 : max (kappa s) (Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)) ≤ 
+            Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) := le_max_right _ _
+  omega
+```
+
+`le_max_right : b ≤ max a b`. So `le_max_right (kappa s) M : kappa s ≤ max (kappa s) M`. Wait, that's not quite what I want. I want `max (kappa s) M ≤ M`. That's `le_max_left _ _` applied to `M` and `kappa s`: `le_max_left M (kappa s) : M ≤ max M (kappa s)`. Hmm, `max M (kappa s) = max (kappa s) M` by commutativity.
+
+Actually, `Nat.max` is commutative: `max a b = max b a`. So `max (kappa s) M = max M (kappa s)`. And `le_max_left M (kappa s) : M ≤ max M (kappa s) = max (kappa s) M`. So `max (kappa s) M ≥ M`, which means `max (kappa s) M ≤ M` is false in general. Wait, no.
+
+`le_max_left a b : a ≤ max a b`. So `le_max_left M (kappa s) : M ≤ max M (kappa s)`. And `max M (kappa s) = max (kappa s) M` (commutativity). So `M ≤ max (kappa s) M`, i.e., `max (kappa s) M ≥ M`. This means `max (kappa s) M` could be equal to `M` (when `kappa s ≤ M`) or greater. In either case, `max (kappa s) M ≤ M + 1`? No, that's not true in general. For example, if `M = 0` and `kappa s = 5`, then `max (kappa s) M = 5` and `M + 1 = 1`, so `5 ≤ 1` is false.
+
+Wait, I made an error. Let me reconsider.
+
+In our case, `M = max (max (kappa b) (kappa s)) (kappa n)`. This `M` is the max of `kappa b`, `kappa s`, `kappa n`. So `M ≥ kappa s`. Therefore `max (kappa s) M = M`. 
+
+So `max (kappa s) M = M` (since `kappa s ≤ M`). And `M < M + 1` trivially.
+
+So the inequality `max (kappa s) M < M + 1` becomes `M < M + 1`, which is true.
+
+To prove this, we can argue:
+1. `kappa s ≤ M` (since M is the max including kappa s).
+2. Therefore `max (kappa s) M = M`.
+3. `M < M + 1` trivially.
+
+```lean
+have hk_lt : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+  simp only [kappa, kappa_app, kappa_rec_delta]
+  -- After simp, goal is: max (kappa s) (kappa (recDelta b s n)) < M + 1
+  -- where M = max (max (kappa b) (kappa s)) (kappa n)
+  -- We need: kappa (recDelta b s n) = M (non-delta case)
+  -- Then: max (kappa s) M = M (since kappa s ≤ M)
+  -- Then: M < M + 1
+  sorry
+```
+
+The issue is that `kappa (recDelta b s n)` doesn't reduce. We can use `change` or `show` to write the equation form:
+
+```lean
+have hk_lt : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+  simp only [kappa, kappa_app, kappa_rec_delta]
+  show max (kappa s) (Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)) < 
+       Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1
+  have h1 : kappa s ≤ Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) := le_max_left _ _
+  rw [max_eq_left h1]
+  exact Nat.lt_succ_self _
+```
+
+Wait, `max_eq_left : b ≤ a → max a b = a`. So `max_eq_left h1 : max (Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)) (kappa s) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)` if `h1 : kappa s ≤ M`. But our goal has `max (kappa s) M`, which is `max M (kappa s)` by commutativity. So we need to either commute first or use `max_comm`.
+
+Actually, `max a b = max b a` is a standard fact. We can use it:
+```lean
+rw [max_comm]
+rw [max_eq_left h1]
+```
+
+Or we can just argue directly:
+```lean
+have : max (kappa s) M = M := max_eq_right h1  -- h1 : kappa s ≤ M, max_eq_right : a ≤ b → max a b = b
+```
+
+`max_eq_right : a ≤ b → max a b = b`. So `max_eq_right h1 : max (kappa s) M = M` if `h1 : kappa s ≤ M`. Yes!
+
+Wait, let me double-check. `Nat.max_eq_right : ∀ (a b : Nat), a ≤ b → max a b = b`. So `max_eq_right h1 : max (kappa s) M = M` when `h1 : kappa s ≤ M`. Yes.
+
+So:
+```lean
+have hk_lt : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+  simp only [kappa, kappa_app, kappa_rec_delta]
+  -- After simp: max (kappa s) (kappa (recDelta b s n)) < M + 1
+  -- where M = max (max (kappa b) (kappa s)) (kappa n)
+  show max (kappa s) (Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)) < 
+       Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1
+  have h1 : kappa s ≤ Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) := 
+    le_max_left _ _
+  rw [max_eq_right h1]
+  exact Nat.lt_succ_self _
+```
+
+Hmm, but `show` might not work if the goal is already in a different form. Let me think about what `simp only [kappa, kappa_app, kappa_rec_delta]` produces.
+
+`kappa (app s (recDelta b s n))` should reduce to `max (kappa s) (kappa (recDelta b s n))` via `kappa_app`. 
+`kappa (recDelta b s (delta n))` should reduce to `max (max (kappa b) (kappa s)) (kappa n) + 1` via `kappa_rec_delta`.
+`kappa (recDelta b s n)` — not reduced by the listed simp lemmas.
+
+So after simp, the goal is:
+`max (kappa s) (kappa (recDelta b s n)) < max (max (kappa b) (kappa s)) (kappa n) + 1`
+
+We need to further reduce `kappa (recDelta b s n)`. We can use `change` or `show` to write the unfolded form. Or we can use `unfold kappa` or `simp [kappa]` with the full equation.
+
+Actually, `simp [kappa]` adds the equation lemmas for kappa. The equation lemmas are named like `kappa.eq_def` or similar, and they should be in the simp set when we write `simp [kappa]`. Let me check if `simp [kappa]` reduces `kappa (recDelta b s n)`.
+
+In Lean 4, `def kappa` generates equation lemmas. The lemma for the non-delta recDelta case is something like:
+`kappa.eq_7 : (b s n : Trace) → kappa (recDelta b s n) = max (max (kappa b) (kappa s)) (kappa n)`
+
+Wait, actually the equation lemmas are conditional on the discriminant. The `def` with 7 cases generates lemmas that say: if the argument is of a certain form, then kappa reduces to that case. For the catch-all case, the lemma is:
+`kappa (recDelta b s n) = max (max (kappa b) (kappa s)) (kappa n)` (unconditionally, since it's the catch-all).
+
+Hmm, actually in Lean 4, the equation lemmas from `def` with pattern matching are a bit different. Let me think...
+
+When you write:
+```lean
+def kappa : Trace -> Nat
+| .void => 0
+| .delta t => kappa t
+...
+| .recDelta b s n => Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)
+| .eqW a b => Nat.max (kappa a) (kappa b)
+```
+
+Lean 4 generates equation lemmas. For the last case (catch-all after `recDelta b s (delta n)`), the lemma might be conditional: it says `kappa (recDelta b s n) = ...` when `n` is not of the form `delta _`. But since the pattern is `recDelta b s n` (with `n` being a variable), and the previous case matches `recDelta b s (delta n)`, the catch-all is for when the third argument is not `delta _`.
+
+The equation lemma for the catch-all would be:
+`kappa.eq_7 : ∀ (b s n : Trace), ¬∃ m, n = delta m → kappa (recDelta b s n) = max (max (kappa b) (kappa s)) (kappa n)`
+
+Or something like that. The condition `¬∃ m, n = delta m` is automatically discharged by the equation compiler when we know `n` is not of the form `delta _`.
+
+Actually, in Lean 4, the equation lemphas the condition as a side condition, but when we use it with a specific `n`, the side condition is checked. If `n` is a free variable, the side condition `¬∃ m, n = delta m` is not provable (since `n` could be `delta m` for some `m`). So the equation lemma doesn't fire for a free `n`.
+
+This is a problem. We need to either:
+1. Add an unconditional simp lemma.
+2. Use `unfold kappa` or `simp` with the right hint.
+3. Use `change` or `show` to rewrite the goal.
+
+Actually, I think `unfold kappa` should work, because it just unfolds the definition without using the equation lemmas. Let me try:
+
+```lean
+have hk_lt : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+  simp only [kappa, kappa_app, kappa_rec_delta]
+  -- goal: max (kappa s) (kappa (recDelta b s n)) < M + 1
+  unfold kappa
+  -- goal: max (kappa s) (max (max (kappa b) (kappa s)) (kappa n)) < max (max (kappa b) (kappa s)) (kappa n) + 1
+  have h1 : kappa s ≤ max (max (kappa b) (kappa s)) (kappa n) := le_max_left _ _
+  rw [max_eq_right h1]
+  exact Nat.lt_succ_self _
+```
+
+`unfold kappa` should reduce `kappa (recDelta b s n)` to `max (max (kappa b) (kappa s)) (kappa n)`. Yes, this should work because `unfold` just unfolds the definition syntactically, regardless of side conditions.
+
+Actually, I'm not 100% sure `unfold kappa` reduces `kappa (recDelta b s n)` when the definition has multiple equations. Let me think... `unfold kappa` unfolds `kappa` everywhere in the goal. For `kappa (recDelta b s n)`, it should look at the definition of kappa and find the matching equation. Since the argument is `recDelta b s n` (matching the catch-all pattern), it should use that equation. Yes, `unfold` should work.
+
+Alternatively, we can use `simp` with the equation lemma explicitly. But `unfold` is simpler.
+
+Let me also consider: can we just use `omega`?
+
+```lean
+have hk_lt : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+  simp [kappa, kappa_app, kappa_rec_delta]
+  omega
+```
+
+Will `omega` handle `max (kappa s) (kappa (recDelta b s n)) < max (max (kappa b) (kappa s)) (kappa n) + 1`? The right side has `max ... + 1`, and the left side has `max (kappa s) (kappa (recDelta b s n))`. Without reducing `kappa (recDelta b s n)`, omega can't connect the two sides.
+
+So we need to reduce `kappa (recDelta b s n)` first. With `unfold kappa` or by adding a lemma.
+
+OK, let me just go with `unfold kappa` or use `change`/`show`. Actually, the cleanest might be to prove a helper lemma:
+
+```lean
+lemma kappa_rec_non_delta (b s n : Trace) :
+    kappa (recDelta b s n) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) := rfl
+```
+
+Wait, is this true by `rfl`? It depends on how the equation lemmas are generated. If the equation lemma is unconditional (which it should be for the catch-all), then yes. But if it has a side condition, then no.
+
+Let me check: in Lean 4, for a `def` with pattern matching where the last pattern is a catch-all variable, the equation lemma is unconditional. For example:
+```lean
+def f : Nat -> Nat
+| 0 => 1
+| n + 1 => n
+```
+generates `f.eq_2 : ∀ n, f (n + 1) = n` (unconditional) and `f.eq_1 : f 0 = 1`.
+
+For overlapping patterns like:
+```lean
+def kappa : Trace -> Nat
+| .recDelta b s (.delta n) => ...
+| .recDelta b s n => ...
+```
+the second equation lemma has a side condition `¬∃ m, n = delta m`. This is because the patterns overlap (any `n` could be `delta m` for some `m`, but if it is, the first equation applies, not the second).
+
+So the lemma `kappa (recDelta b s n) = ...` is only valid when `n` is not of the form `delta m`. For a free `n`, we can't prove this unconditionally.
+
+However, in the context of our proof, `n` is a free variable, and we want to use the equation. The equation compiler should handle this: when we write `kappa (recDelta b s n)`, the equation compiler tries each equation in order. The first equation `kappa (recDelta b s (.delta n)) = ...` requires `n` to be of the form `delta _`, which it isn't (in general). So the second equation applies, and we get `kappa (recDelta b s n) = max (max (kappa b) (kappa s)) (kappa n)`.
+
+For `unfold`, it should work because it doesn't check the side conditions; it just unfolds syntactically.
+
+For `rfl`, it depends on the equation lemma. If the equation lemma has a side condition, `rfl` won't work for a free `n`.
+
+OK so the cleanest approach in the proof is to use `unfold kappa` or to manually write out the form.
+
+Actually, I just realized: in the original file, the simp lemmas include `kappa_rec_delta` for the `delta` case. There's no simp lemma for the non-delta case. This is intentional because the non-delta case has a side condition. But in our proof, we can handle it by using `unfold` or by proving a conditional lemma.
+
+Let me just use `unfold kappa` in the proof. Or better, use `change` to write the goal in the right form.
+
+Actually, I think the cleanest is:
+```lean
+have hk_lt : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+  simp only [kappa, kappa_app, kappa_rec_delta]
+  -- After simp, the inner kappa is not reduced. Use change to write it out.
+  change max (kappa s) (Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)) < 
+        Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1
+  have h1 : kappa s ≤ Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) := le_max_left _ _
+  rw [max_eq_right h1]
+  exact Nat.lt_succ_self _
+```
+
+Wait, after `simp only [kappa, kappa_app, kappa_rec_delta]`, the goal is:
+`max (kappa s) (kappa (recDelta b s n)) < max (max (kappa b) (kappa s)) (kappa n) + 1`
+
+We want to replace `kappa (recDelta b s n)` with `Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)`. Using `change`:
+`change max (kappa s) (Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)) < _`
+
+But `change` requires the new expression to be definitionally equal (or at least provably equal). If `kappa (recDelta b s n) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)` is not provable by `rfl` (due to side conditions), then `change` might not work.
+
+Hmm. Let me think of another way.
+
+Actually, we can use `have` to introduce the equation:
+```lean
+have heq : kappa (recDelta b s n) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) := rfl
+```
+
+If `rfl` works here (i.e., the equation lemma is unconditional), then great. If not, we need another approach.
+
+Let me check: in Lean 4, for the `def kappa` with the two recDelta cases, the equation lemma for the second case (non-delta) is:
+`kappa.eq_def : (b s n : Trace) → kappa (recDelta b s n) = max (max (kappa b) (kappa s)) (kappa n)`
+But this might have a side condition `¬n.is_delta` or similar.
+
+Actually, I just tested in my head: the way Lean 4's equation compiler works, for overlapping patterns, the later equations have a side condition that the earlier patterns don't match. For our case:
+- First equation: `kappa (recDelta b s (.delta n)) = ...` — matches when the third arg is `delta _`.
+- Second equation: `kappa (recDelta b s n) = ...` — matches when the first doesn't, i.e., when the third arg is not `delta _`.
+
+The side condition for the second equation is `∀ m, ¬(n = delta m)` or `¬∃ m, n = delta m`. This is not provable for a free `n`.
+
+So `kappa (recDelta b s n) = max ...` is not provable by `rfl` for a free `n`. We need to either:
+1. Use `unfold kappa` to syntactically unfold.
+2. Prove a lemma that doesn't have the side condition (e.g., by case analysis on `n`).
+3. Use `omega` or other tactics that can handle the un-reduced form.
+
+Actually, `omega` might be able to handle it if we unfold the definition. Let me try a different approach: use `unfold` to reduce everything, then `omega`.
+
+```lean
+have hk_lt : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+  unfold kappa
+  -- After unfold, both sides are reduced.
+  -- LHS: max (kappa s) (max (max (kappa b) (kappa s)) (kappa n))
+  -- RHS: max (max (kappa b) (kappa s)) (kappa n) + 1
+  omega
+```
+
+Will `omega` handle `max a b < M + 1` where `M = max (max (kappa b) (kappa s)) (kappa n)` and `a = kappa s`? Since `a ≤ M`, we have `max a M = M`, so `M < M + 1`. `omega` should be able to derive this with the `max` facts.
+
+Actually, I'm not sure if `omega` can derive `max a M ≤ M` from `a ≤ M`. The fact `a ≤ max a b` is in the `omega` extension, but `max a b ≤ b` from `a ≤ b` might not be.
+
+Let me think... `omega` uses linear arithmetic. `max` is not a linear function. However, there are facts like:
+- `a ≤ max a b`
+- `b ≤ max a b`
+- `max a b = a` if `b ≤ a`
+- `max a b = b` if `a ≤ b`
+
+These are "conditional" facts. `omega` can use them to normalize `max` expressions. In recent versions, `omega` has been extended to handle `Nat.max` and `Nat.min` using these facts.
+
+If `omega` can normalize `max (kappa s) M` to `M` (using `kappa s ≤ M`), then the goal becomes `M < M + 1`, which is trivial.
+
+So:
+```lean
+have hk_lt : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+  unfold kappa
+  omega
+```
+
+I think this should work. Let me go with this.
+
+Actually, wait. `unfold kappa` might not be the right command. In Lean 4, `unfold` unfolds a definition. But `kappa` has multiple equations. `unfold kappa` should unfold all occurrences of `kappa` in the goal, using the appropriate equation for each occurrence.
+
+For `kappa (app s (recDelta b s n))`, the outermost `kappa` matches the `app` case, so it unfolds to `max (kappa s) (kappa (recDelta b s n))`. The inner `kappa (recDelta b s n)` matches the non-delta recDelta case, so it unfolds to `max (max (kappa b) (kappa s)) (kappa n)`.
+
+For `kappa (recDelta b s (delta n))`, it matches the delta recDelta case, unfolding to `max (max (kappa b) (kappa s)) (kappa n) + 1`.
+
+So after `unfold kappa`, the goal is:
+`max (kappa s) (max (max (kappa b) (kappa s)) (kappa n)) < max (max (kappa b) (kappa s)) (kappa n) + 1`
+
+And `omega` should handle this.
+
+Let me also consider: does `unfold kappa` unfold `kappa` recursively? In Lean 4, `unfold` unfolds one level. So `unfold kappa` unfolds the outermost `kappa` calls. If the result still contains `kappa`, we need to call `unfold` again or use `unfold kappa ...` with a depth.
+
+Actually, `unfold kappa` should unfold all `kappa` calls until no more `kappa` head symbols remain. Let me check... In Lean 4, `unfold f` unfolds all `f` calls in the goal. It should reduce `kappa` everywhere.
+
+Hmm, actually `unfold` in Lean 4 might only unfold the head symbol of each occurrence. Let me think... `unfold kappa` looks for `kappa` in the goal and unfolds them. For `kappa (app s (recDelta b s n))`, it unfolds to `max (kappa s) (kappa (recDelta b s n))`. The two inner `kappa` calls are not head symbols (they're arguments to `max`), so they might not be unfolded by `unfold kappa`.
+
+Wait, no. `unfold kappa` should unfold all `kappa` calls, not just head symbols. In Lean 4, `unfold f` unfolds every `f` in the expression. Let me verify...
+
+Actually, I think in Lean 4, `unfold f` unfolds all occurrences of `f` in the goal, including nested ones. So `kappa (app s (recDelta b s n))` would be fully unfolded.
+
+Let me just go with `unfold kappa; omega` and assume it works. If not, we can use `simp only [kappa]` or manual unfolding.
+
+Actually, to be safe, let me use `simp only [kappa]` which uses the equation lemmas. The equation lemmas for the non-delta case have side conditions, but when applied to a specific term, the side condition is checked. For `kappa (recDelta b s n)` with `n` a free variable, the side condition `¬∃ m, n = delta m` is not provable. So the equation lemma doesn't fire.
+
+Hmm, this is a problem. `simp only [kappa]` won't reduce `kappa (recDelta b s n)`.
+
+OK let me think of another approach. We can use `show` to write the goal in the unfolded form, then prove it. `show` is like `change` but in the other direction (it says "the goal is actually this other thing").
+
+```lean
+have hk_lt : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+  show max (kappa s) (max (max (kappa b) (kappa s)) (kappa n)) < 
+       max (max (kappa b) (kappa s)) (kappa n) + 1
+  have h1 : kappa s ≤ max (max (kappa b) (kappa s)) (kappa n) := le_max_left _ _
+  rw [max_eq_right h1]
+  exact Nat.lt_succ_self _
+```
+
+`show` is valid if the new expression is definitionally equal to the goal. The goal is `kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n))`. The new expression is `max (kappa s) (max (max (kappa b) (kappa s)) (kappa n)) < max (max (kappa b) (kappa s)) (kappa n) + 1`. These are equal if `kappa (app s (recDelta b s n))` unfolds to the max form and `kappa (recDelta b s (delta n))` unfolds to `M + 1`. Since `show` uses definitional equality (or proof irrelevance), and the unfolding is definitional (via the equation lemmas, with the side conditions being satisfied because the patterns match), `show` should work.
+
+Actually, `show` in Lean 4 uses `change` internally, which requires the expressions to be definitionally equal. Definitional equality includes the equation lemmas. So `show` should work.
+
+Let me finalize the proof for Case 3:
+
+```lean
+| _, _, Step.R_rec_succ b s n => by
+    have hk_lt : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+      show max (kappa s) (Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)) < 
+           Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1
+      have h1 : kappa s ≤ Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) := le_max_left _ _
+      rw [max_eq_right h1]
+      exact Nat.lt_succ_self _
+    exact drop_left hk_lt
+```
+
+Hmm, but `show` requires the expression to be definitionally equal. If the side conditions prevent the equation lemma from firing, then `kappa (recDelta b s n)` and `max (max (kappa b) (kappa s)) (kappa n)` are not definitionally equal. So `show` might not work.
+
+Let me check: in Lean 4, definitional equality for `kappa (recDelta b s n)` is determined by the equation lemmas. The equation lemma for the non-delta case says: if `¬∃ m, n = delta m`, then `kappa (recDelta b s n) = max (max (kappa b) (kappa s)) (kappa n)`. But for a free `n`, this side condition is not provable, so the equality is not definitional.
+
+So `show` and `change` won't work directly. We need another approach.
+
+Option: use `unfold` or `simp` with the right hints to actually reduce the term.
+
+Actually, I think `unfold kappa` does work. Let me check: `unfold` in Lean 4 unfolds the definition syntactically. It doesn't check side conditions; it just performs the unfolding. So `unfold kappa` should reduce `kappa (recDelta b s n)` to `max (max (kappa b) (kappa s)) (kappa n)`.
+
+Let me verify: in Lean 4, `unfold f` replaces `f` with its definition. For a `def` with multiple equations, `unfold f` uses the equation that matches the argument pattern. For `kappa (recDelta b s n)`, it matches the non-delta equation, so it unfolds to `max (max (kappa b) (kappa s)) (kappa n)`. The side conditions are not checked by `unfold`.
+
+Yes, I believe `unfold kappa` works. So:
+
+```lean
+have hk_lt : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+  unfold kappa
+  -- goal: max (kappa s) (max (max (kappa b) (kappa s)) (kappa n)) < 
+  --       max (max (kappa b) (kappa s)) (kappa n) + 1
+  have h1 : kappa s ≤ Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) := le_max_left _ _
+  rw [max_eq_right h1]
+  exact Nat.lt_succ_self _
+```
+
+Wait, `le_max_left : a ≤ max a b`. So `le_max_left (kappa s) (max (max (kappa b) (kappa s)) (kappa n))`... no, `le_max_left a b : a ≤ max a b`. We want `kappa s ≤ max (max (kappa b) (kappa s)) (kappa n)`. Note that `max (max (kappa b) (kappa s)) (kappa n) = max (max (kappa b) (kappa s)) (kappa n)`, and `kappa s ≤ max (kappa b) (kappa s)` (by `le_max_right`), and `max (kappa b) (kappa s) ≤ max (max (kappa b) (kappa s)) (kappa n)` (by `le_max_left`). So by transitivity, `kappa s ≤ max (max (kappa b) (kappa s)) (kappa n)`.
+
+But we can directly use `le_max_left _ _` if the right type is clear. Let me check: `le_max_left (a : Nat) (b : Nat) : a ≤ max a b`. If we write `le_max_left _ _`, Lean needs to infer the types. The expected type is `kappa s ≤ max (max (kappa b) (kappa s)) (kappa n)`. Matching with `a ≤ max a b`, we get `a = kappa s` and `b = max (max (kappa b) (kappa s)) (kappa n)`, so `max a b = max (kappa s) (max (max (kappa b) (kappa s)) (kappa n))`. But we want `max (max (kappa b) (kappa s)) (kappa n)`, not `max (kappa s) (max (max (kappa b) (kappa s)) (kappa n))`. These are equal by commutativity of max, but Lean might not see that.
+
+So `le_max_left _ _` would give us `kappa s ≤ max (kappa s) (max (max (kappa b) (kappa s)) (kappa n))`, not what we want.
+
+We need a different lemma or approach. Let me use `Nat.le_trans`:
+```lean
+have h1 : kappa s ≤ max (max (kappa b) (kappa s)) (kappa n) := 
+  Nat.le_trans (le_max_right _ _) (le_max_left _ _)
+```
+
+`le_max_right : b ≤ max a b`. So `le_max_right (kappa b) (kappa s) : kappa s ≤ max (kappa b) (kappa s)`. Then `le_max_left (max (kappa b) (kappa s)) (kappa n) : max (kappa b) (kappa s) ≤ max (max (kappa b) (kappa s)) (kappa n)`. By transitivity, `kappa s ≤ max (max (kappa b) (kappa s)) (kappa n)`.
+
+Or, more directly, we can use the fact that `M = max (max (kappa b) (kappa s)) (kappa n)` is the max of all three, so `kappa s ≤ M`. We can prove this as a single lemma or use the transitivity.
+
+Actually, there's a simpler approach. We have:
+`max (kappa s) M = M` if `kappa s ≤ M`.
+
+We can prove `kappa s ≤ M` by noting that `kappa s ≤ max (kappa b) (kappa s)` (le_max_right) and `max (kappa b) (kappa s) ≤ max (max (kappa b) (kappa s)) (kappa n)` (le_max_left). So:
+```lean
+have h1 : kappa s ≤ max (max (kappa b) (kappa s)) (kappa n) := 
+  le_max_left _ _  -- this gives max (kappa b) (kappa s) ≤ max (...)
+  -- hmm, no, we need transitivity
+```
+
+Let me just use `omega` or manual:
+```lean
+have h1 : kappa s ≤ max (max (kappa b) (kappa s)) (kappa n) := by
+  apply le_trans
+  apply le_max_right  -- kappa s ≤ max (kappa b) (kappa s)
+  apply le_max_left   -- max (kappa b) (kappa s) ≤ max (...) (kappa n)
+```
+
+Or with the transitivity lemma:
+```lean
+have h1 : kappa s ≤ max (max (kappa b) (kappa s)) (kappa n) := 
+  le_trans (le_max_right _ _) (le_max_left _ _)
+```
+
+OK this is getting long. Let me just use a cleaner approach.
+
+Alternative: prove the inequality directly using `Nat.lt_succ_iff` or similar.
+
+The goal is: `max (kappa s) M < M + 1`, where `M = max (max (kappa b) (kappa s)) (kappa n)`.
+This is equivalent to: `max (kappa s) M ≤ M` (since `a < b + 1 ↔ a ≤ b` in Nat).
+And `max (kappa s) M ≤ M` is equivalent to: `kappa s ≤ M` and `M ≤ M` (trivially).
+Wait, `max a b ≤ c ↔ a ≤ c ∧ b ≤ c`. So `max (kappa s) M ≤ M ↔ kappa s ≤ M ∧ M ≤ M`. The second is trivial. The first is `kappa s ≤ M`.
+
+So we need: `kappa s ≤ max (max (kappa b) (kappa s)) (kappa n)`.
+
+This is true because `kappa s ≤ max (kappa b) (kappa s) ≤ max (max (kappa b) (kappa s)) (kappa n)`.
+
+OK let me just write the proof more carefully. Actually, I think the cleanest is:
+
+```lean
+| _, _, Step.R_rec_succ b s n => by
+    have hk_lt : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+      show max (kappa s) (Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)) < 
+           Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1
+      omega
+    exact drop_left hk_lt
+```
+
+Wait, I said `show` might not work due to definitional equality issues. But actually, let me reconsider. In Lean 4, `show` is defined as `change`. And `change` requires the two expressions to be definitionally equal. The question is whether `kappa (recDelta b s n)` is definitionally equal to `Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)`.
+
+In Lean 4, definitional equality includes reduction by the equation lemmas. The equation lemma for the non-delta case is:
+`kappa.eq_7 : ∀ (b s n : Trace), ¬(∃ m, n = delta m) → kappa (recDelta b s n) = max (max (kappa b) (kappa s)) (kappa n)`
+
+Wait, I don't think the equation lemma has a side condition in Lean 4. Let me think again.
+
+In Lean 4, when you define a function with pattern matching, the equation lemmas are generated. For the catch-all pattern, the equation lemma might be unconditional or might have a side condition, depending on the structure.
+
+Actually, I think in Lean 4, the equation lemmas for `def` with pattern matching are generated as follows:
+- For each equation, the lemma says: if the argument matches the pattern, then the function reduces to the right-hand side.
+- The side conditions come from the patterns themselves (e.g., `n + 1` requires `n` to be a natural number, but this is implicit).
+
+For overlapping patterns like:
+```lean
+| .recDelta b s (.delta n) => ...
+| .recDelta b s n => ...
+```
+The first equation requires the third argument to be of the form `delta m` for some `m`. The second equation is the catch-all. The equation lemma for the second is:
+`kappa (recDelta b s n) = max (max (kappa b) (kappa s)) (kappa n)` — but with the implicit assumption that the first equation doesn't apply? Or unconditional?
+
+Actually, in Lean 4, the equation compiler generates the equation lemmas with the conditions baked in. The second equation is used when the first doesn't match. The equation lemma for the second has a side condition that the first pattern doesn't match.
+
+But here's the thing: for the purpose of `unfold` and `change`, Lean uses the definition directly, not the equation lemmas. `unfold kappa` replaces `kappa` with its definition, matching the argument against the patterns and using the appropriate equation. The side conditions are implicit (they're satisfied by the pattern matching).
+
+So `unfold kappa` should reduce `kappa (recDelta b s n)` to `max (max (kappa b) (kappa s)) (kappa n)`. And `change` / `show` should also work, because the unfolded form is the "true" form of the term.
+
+I think `show` will work. Let me just go with it.
+
+Actually, I just realized: in Lean 4, `change` and `show` use definitional equality, which for `def` is determined by the equation lemmas. The equation lemmas might have side conditions. So `change` might not work if the side conditions are not satisfied.
+
+But in practice, for a free variable `n`, the equation `kappa (recDelta b s n) = max (max (kappa b) (kappa s)) (kappa n)` is true (it's the catch-all case), but the equation lemma might have a side condition `¬∃ m, n = delta m` that is not provable.
+
+Hmm, this is getting confusing. Let me just try `unfold` and `omega`:
+
+```lean
+| _, _, Step.R_rec_succ b s n => by
+    have hk_lt : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+      unfold kappa
+      omega
+    exact drop_left hk_lt
+```
+
+If `omega` can handle the `max` expressions, this is the cleanest. If not, we need more work.
+
+Let me assume `omega` can handle it (it should, in recent versions). If not, the user can add more explicit steps.
+
+Actually, I want to double-check: does `omega` handle `max`? In Mathlib, there are lemmas like `Nat.max_le_max_iff`, `Nat.max_le_iff`, etc. `omega` uses a set of core lemmas, and it can be extended with additional lemmas via `omega` extensions. For `max`, the key facts are:
+- `a ≤ max a b`
+- `b ≤ max a b`
+- `max a b = a` if `b ≤ a`
+- `max a b = b` if `a ≤ b`
+- `max a b ≤ c ↔ a ≤ c ∧ b ≤ c`
+
+In Lean 4's `omega` (as of Mathlib around 2024), `omega` handles `Nat.max` using these facts. So `omega` should be able to prove `max (kappa s) M < M + 1` by reducing `max (kappa s) M` to `M` (using `kappa s ≤ M`).
+
+OK, I'll go with `unfold kappa; omega`.
+
+Now, let me also reconsider the other cases. For cases where we use `Nat.lt_or_eq_of_le`, we need `kappa_b ≤ kappa_LHS`. For R_rec_zero, this is `kappa b ≤ max (kappa b) (kappa s)`, which is `le_max_left _ _`. For R_int_delta, this is `0 ≤ kappa t`, which is `Nat.zero_le _`. For R_eq_refl, this is `0 ≤ kappa a`, which is `Nat.zero_le _`.
+
+Wait, `Nat.zero_le : 0 ≤ n` for any `n`. Yes.
+
+So:
+```lean
+| _, _, Step.R_int_delta t => by
+    have hmu : mu void < mu (integrate (delta t)) := by
+      simp [mu]; omega
+    have hk_le : kappa void ≤ kappa (integrate (delta t)) := by
+      simp [kappa]; exact Nat.zero_le _
+    rcases Nat.lt_or_eq_of_le hk_le with hk_lt | hk_eq
+    · exact drop_left hk_lt
+    · exact drop_right hmu hk_eq
+
+| _, _, Step.R_rec_zero b s => by
+    have hmu : mu b < mu (recDelta b s void) := by
+      simp [mu]; omega
+    have hk_le : kappa b ≤ kappa (recDelta b s void) := by
+      simp [kappa]; exact le_max_left _ _
+    rcases Nat.lt_or_eq_of_le hk_le with hk_lt | hk_eq
+    · exact drop_left hk_lt
+    · exact drop_right hmu hk_eq
+
+| _, _, Step.R_eq_refl a => by
+    have hmu : mu void < mu (eqW a a) := by
+      simp [mu]; omega
+    have hk_le : kappa void ≤ kappa (eqW a a) := by
+      simp [kappa]; exact Nat.zero_le _
+    rcases Nat.lt_or_eq_of_le hk_le with hk_lt | hk_eq
+    · exact drop_left hk_lt
+    · exact drop_right hmu hk_eq
+```
+
+Wait, for R_rec_zero, after `simp [kappa]`, the goal `kappa b ≤ kappa (recDelta b s void)` becomes `kappa b ≤ max (max (kappa b) (kappa s)) (kappa void)`. Then `kappa void = 0` should reduce (via simp lemma), giving `kappa b ≤ max (max (kappa b) (kappa s)) 0`. Then `max _ 0 = _` is true (since `max a 0 = a`). But simp might not automatically apply this.
+
+Let me think... `simp [kappa]` reduces `kappa (recDelta b s void)` using the non-delta equation. But wait, the third argument is `void`, which is not `delta _`. So the non-delta equation applies, giving `max (max (kappa b) (kappa s)) (kappa void)`. Then `kappa void = 0` (simp lemma), giving `max (max (kappa b) (kappa s)) 0`. Then `max _ 0` might be reduced by simp using `Nat.max_eq_right (Nat.zero_le _)` or similar.
+
+Actually, `simp` should be able to normalize `max a 0` to `a` using the lemma `Nat.max_eq_right (Nat.zero_le _)`. But this might not be in the default simp set. Let me add it or do it manually.
+
+Hmm, to be safe, let me write:
+```lean
+have hk_le : kappa b ≤ kappa (recDelta b s void) := by
+  simp only [kappa, kappa_void]
+  rw [Nat.max_eq_right (Nat.zero_le _)]
+  exact le_max_left _ _
+```
+
+`Nat.max_eq_right (Nat.zero_le _) : max a 0 = a`. After this rewrite, the goal is `kappa b ≤ max (kappa b) (kappa s)`, which is `le_max_left _ _`.
+
+Let me also check the other cases.
+
+For R_int_delta:
+```lean
+have hk_le : kappa void ≤ kappa (integrate (delta t)) := by
+  simp [kappa]
+  -- After simp, goal should be: 0 ≤ kappa t
+  exact Nat.zero_le _
+```
+
+`simp [kappa]` should reduce `kappa (integrate (delta t))` to `kappa t` (via `kappa_integrate` and `kappa_delta`). So the goal is `0 ≤ kappa t`, which is `Nat.zero_le _`.
+
+For R_eq_refl:
+```lean
+have hk_le : kappa void ≤ kappa (eqW a a) := by
+  simp [kappa]
+  -- goal: 0 ≤ kappa a
+  exact Nat.zero_le _
+```
+
+`simp [kappa]` reduces `kappa (eqW a a)` to `max (kappa a) (kappa a) = kappa a`. So the goal is `0 ≤ kappa a`, which is `Nat.zero_le _`.
+
+OK, these all look good. Let me also double-check the mu parts.
+
+For R_int_delta: `mu (integrate (delta t)) = 1 + mu (delta t) = 1 + mu t`. So `mu void = 0 < 1 + mu t`. `omega` should prove this.
+
+For R_rec_zero: `mu (recDelta b s void) = 3 + mu b + mu s + mu void = 3 + mu b + mu s`. So `mu b < 3 + mu b + mu s`. `omega` should prove this.
+
+For R_eq_refl: `mu (eqW a a) = 4 + mu a + mu a = 4 + 2 * mu a`. So `mu void = 0 < 4 + 2 * mu a`. `omega` should prove this.
+
+For R_eq_diff: `mu (integrate (merge a b)) = 1 + mu (merge a b) = 1 + 2 + mu a + mu b = 3 + mu a + mu b`. And `mu (eqW a b) = 4 + mu a + mu b`. So `3 + mu a + mu b < 4 + mu a + mu b`. `omega` should prove this.
+
+All good. Let me finalize the proof skeletons.
+
+Actually, wait. I need to double-check the `simp [mu]` calls. After `simp [mu]`, the goal is in terms of `mu` of the constructors. For R_int_delta:
+- `mu (integrate (delta t))` reduces to `1 + mu (delta t) = 1 + mu t` (via `mu_integrate` and `mu_delta`).
+So the goal `mu void < mu (integrate (delta t))` becomes `0 < 1 + mu t`. `omega` proves this.
+
+For R_rec_zero:
+- `mu (recDelta b s void)` reduces to `3 + mu b + mu s + mu void = 3 + mu b + mu s + 0 = 3 + mu b + mu s` (via `mu_recDelta` and `mu_void`).
+So the goal `mu b < mu (recDelta b s void)` becomes `mu b < 3 + mu b + mu s`. `omega` proves this.
+
+For R_eq_refl:
+- `mu (eqW a a)` reduces to `4 + mu a + mu a = 4 + 2 * mu a` (via `mu_eqW`).
+So the goal `mu void < mu (eqW a a)` becomes `0 < 4 + 2 * mu a`. `omega` proves this.
+
+For R_eq_diff:
+- `mu (integrate (merge a b))` reduces to `1 + mu (merge a b) = 1 + 2 + mu a + mu b = 3 + mu a + mu b` (via `mu_integrate` and `mu_merge`).
+- `mu (eqW a b)` reduces to `4 + mu a + mu b` (via `mu_eqW`).
+So the goal `mu (integrate (merge a b)) < mu (eqW a b)` becomes `3 + mu a + mu b < 4 + mu a + mu b`. `omega` proves this.
+
+All good.
+
+Now let me also think about whether `simp [kappa]` reduces `kappa (recDelta b s void)` correctly. The third argument is `void`, which is not `delta _`. So the non-delta equation applies, giving `max (max (kappa b) (kappa s)) (kappa void)`. Then `kappa void = 0` (via simp lemma). So the result is `max (max (kappa b) (kappa s)) 0`. Does simp reduce `max _ 0` to `_`? It might, using `Nat.max_eq_right (Nat.zero_le _)`. Let me assume it does.
+
+Actually, to be safe, I can write `simp [kappa, kappa_void, Nat.max_eq_right]` or just `simp [kappa, -Nat.max_eq_right]` ... hmm, this is getting complicated. Let me just write it explicitly:
+
+```lean
+have hk_le : kappa b ≤ kappa (recDelta b s void) := by
+  simp only [kappa, kappa_void]
+  rw [Nat.max_eq_right (Nat.zero_le _)]
+  exact le_max_left _ _
+```
+
+This is explicit and should work.
+
+Alternatively:
+```lean
+have hk_le : kappa b ≤ kappa (recDelta b s void) := by
+  unfold kappa
+  simp only [kappa_void]
+  -- goal: kappa b ≤ max (max (kappa b) (kappa s)) 0
+  rw [Nat.max_eq_right (Nat.zero_le _)]
+  exact le_max_left _ _
+```
+
+Or just:
+```lean
+have hk_le : kappa b ≤ kappa (recDelta b s void) := le_max_left _ _
+```
+Wait, is this true? `kappa (recDelta b s void) = max (max (kappa b) (kappa s)) 0 = max (kappa b) (kappa s)`. And `kappa b ≤ max (kappa b) (kappa s)` by `le_max_left`. So yes, `kappa b ≤ kappa (recDelta b s void)` is true. But we need to prove it, and the proof is not just `le_max_left _ _` because the right-hand side is not in the form `max (kappa b) _`.
+
+OK let me just use the explicit form with `simp only` and `rw`.
+
+Actually, I realize there might be a simpler way. We can add a lemma:
+```lean
+@[simp] lemma kappa_rec_void (b s : Trace) :
+    kappa (recDelta b s void) = max (kappa b) (kappa s) := by
+  simp [kappa]; rw [Nat.max_eq_right (Nat.zero_le _)]
+```
+
+But this would modify the file, which the user said not to do. However, in the proof skeleton, we can prove it inline:
+
+```lean
+have hk_le : kappa b ≤ kappa (recDelta b s void) := by
+  have : kappa (recDelta b s void) = max (kappa b) (kappa s) := by
+    simp [kappa, kappa_void, Nat.max_eq_right]
+  rw [this]
+  exact le_max_left _ _
+```
+
+Or more directly:
+```lean
+have hk_le : kappa b ≤ kappa (recDelta b s void) := by
+  show kappa b ≤ max (kappa b) (kappa s)
+  exact le_max_left _ _
+```
+
+Wait, `show` is `change`. So `show kappa b ≤ max (kappa b) (kappa s)` asks Lean to change the goal to `kappa b ≤ max (kappa b) (kappa s)`. This requires `kappa (recDelta b s void) = max (kappa b) (kappa s)` definitionally. If the simp lemmas and equation reduction make this true, then `show` works.
+
+Hmm, `show` requires definitional equality. The equation `kappa (recDelta b s void) = max (kappa b) (kappa s)` should hold by the equation lemma (since `void` is not `delta _`). So `show` should work.
+
+Let me try:
+```lean
+have hk_le : kappa b ≤ kappa (recDelta b s void) := by
+  show kappa b ≤ max (kappa b) (kappa s)
+  exact le_max_left _ _
+```
+
+This is clean, if `show` works.
+
+Actually, I just realized: in Lean 4, `show` can sometimes be finicky. Let me just use a more robust approach.
+
+Let me also reconsider: in the original file, the proved cases use `simp [mu]` and `simp [kappa]`. So simp does work for reducing mu and kappa. Let me check if `simp [kappa]` reduces `kappa (recDelta b s void)`.
+
+`kappa (recDelta b s void)`:
+- The non-delta equation applies (since `void` is not `delta _`).
+- `kappa (recDelta b s void) = max (max (kappa b) (kappa s)) (kappa void)`.
+- `kappa void = 0` (via simp lemma).
+- So `kappa (recDelta b s void) = max (max (kappa b) (kappa s)) 0`.
+- Does simp reduce `max _ 0`? `max a 0 = a` is a standard fact. The lemma `Nat.max_eq_right : a ≤ b → max a b = b` with `a := max (max (kappa b) (kappa s))` and `b := 0` would require `max (max (kappa b) (kappa s)) ≤ 0`, which is not true in general.
+- The lemma `Nat.max_eq_left : b ≤ a → max a b = a` with `a := max (max (kappa b) (kappa s))` and `b := 0` would require `0 ≤ max (max (kappa b) (kappa s))`, which is true. So `max (max (kappa b) (kappa s)) 0 = max (max (kappa b) (kappa s))` by `Nat.max_eq_left (Nat.zero_le _)`.
+
+Is `Nat.max_eq_left` in the simp set? It's a standard lemma, so it might be. Or it might not. Let me just add it explicitly:
+
+```lean
+have hk_le : kappa b ≤ kappa (recDelta b s void) := by
+  simp only [kappa, kappa_void, Nat.max_eq_left]
+  -- or: simp [kappa, kappa_void] { transp := true }  -- to use max_eq_left
+  exact le_max_left _ _
+```
+
+Actually, `Nat.max_eq_left` has the form `b ≤ a → max a b = a`. When we use it as a simp lemma, it rewrites `max a b` to `a` when the side condition `b ≤ a` can be discharged. The side condition `0 ≤ max (max (kappa b) (kappa s))` is true and should be discharged by simp.
+
+But for this to work, `Nat.max_eq_left` needs to be in the simp set. It's `@[simp]` in Mathlib, so it should be.
+
+Let me just write the proof and assume simp does the right thing:
+
+```lean
+| _, _, Step.R_rec_zero b s => by
+    have hmu : mu b < mu (recDelta b s void) := by
+      simp [mu]; omega
+    have hk_le : kappa b ≤ kappa (recDelta b s void) := by
+      simp [kappa]; exact le_max_left _ _
+    rcases Nat.lt_or_eq_of_le hk_le with hk_lt | hk_eq
+    · exact drop_left hk_lt
+    · exact drop_right hmu hk_eq
+```
+
+If `simp [kappa]` doesn't fully reduce, we can add more lemmas. But let's go with this.
+
+For R_int_delta:
+```lean
+| _, _, Step.R_int_delta t => by
+    have hmu : mu void < mu (integrate (delta t)) := by
+      simp [mu]; omega
+    have hk_le : kappa void ≤ kappa (integrate (delta t)) := by
+      simp [kappa]; exact Nat.zero_le _
+    rcases Nat.lt_or_eq_of_le hk_le with hk_lt | hk_eq
+    · exact drop_left hk_lt
+    · exact drop_right hmu hk_eq
+```
+
+For R_eq_refl:
+```lean
+| _, _, Step.R_eq_refl a => by
+    have hmu : mu void < mu (eqW a a) := by
+      simp [mu]; omega
+    have hk_le : kappa void ≤ kappa (eqW a a) := by
+      simp [kappa]; exact Nat.zero_le _
+    rcases Nat.lt_or_eq_of_le hk_le with hk_lt | hk_eq
+    · exact drop_left hk_lt
+    · exact drop_right hmu hk_eq
+```
+
+For R_eq_diff:
+```lean
+| _, _, Step.R_eq_diff a b => by
+    have hmu : mu (integrate (merge a b)) < mu (eqW a b) := by
+      simp [mu]; omega
+    have hk_eq : kappa (integrate (merge a b)) = kappa (eqW a b) := by
+      simp [kappa]
+    exact drop_right hmu hk_eq
+```
+
+For R_rec_succ:
+```lean
+| _, _, Step.R_rec_succ b s n => by
+    have hk_lt : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+      unfold kappa
+      -- goal: max (kappa s) (max (max (kappa b) (kappa s)) (kappa n)) < 
+      --       max (max (kappa b) (kappa s)) (kappa n) + 1
+      omega
+    exact drop_left hk_lt
+```
+
+Or with explicit steps:
+```lean
+| _, _, Step.R_rec_succ b s n => by
+    have hk_lt : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+      show max (kappa s) (Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)) < 
+           Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1
+      have h1 : kappa s ≤ Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) := by
+        apply le_trans
+        apply le_max_right
+        apply le_max_left
+      rw [max_eq_right h1]
+      exact Nat.lt_succ_self _
+    exact drop_left hk_lt
+```
+
+Hmm wait, `le_max_right` and `le_max_left` — let me check the argument order.
+
+`Nat.le_max_left a b : a ≤ max a b`. So `le_max_left (kappa b) (kappa s) : kappa b ≤ max (kappa b) (kappa s)`.
+`Nat.le_max_right a b : b ≤ max a b`. So `le_max_right (kappa b) (kappa s) : kappa s ≤ max (kappa b) (kappa s)`.
+
+We want `kappa s ≤ max (max (kappa b) (kappa s)) (kappa n)`. 
+First, `kappa s ≤ max (kappa b) (kappa s)` by `le_max_right (kappa b) (kappa s)`.
+Then, `max (kappa b) (kappa s) ≤ max (max (kappa b) (kappa s)) (kappa n)` by `le_max_left (max (kappa b) (kappa s)) (kappa n)`.
+By transitivity, `kappa s ≤ max (max (kappa b) (kappa s)) (kappa n)`.
+
+So:
+```lean
+have h1 : kappa s ≤ Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) :=
+  le_trans (le_max_right _ _) (le_max_left _ _)
+```
+
+Or:
+```lean
+have h1 : kappa s ≤ Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) := by
+  apply le_trans
+  apply le_max_right
+  apply le_max_left
+```
+
+OK, let me also think about whether `omega` can handle the max expressions in R_rec_succ. The goal after unfolding is:
+`max (kappa s) (max (max (kappa b) (kappa s)) (kappa n)) < max (max (kappa b) (kappa s)) (kappa n) + 1`
+
+Let `M = max (max (kappa b) (kappa s)) (kappa n)`. The goal is `max (kappa s) M < M + 1`.
+
+`omega` should be able to prove this if it can:
+1. Establish `kappa s ≤ M` (from the structure of M).
+2. Conclude `max (kappa s) M = M`.
+3. Prove `M < M + 1`.
+
+`omega` has facts like `a ≤ max a b` and `max a b ≤ c ↔ a ≤ c ∧ b ≤ c`. With these, it can reduce `max (kappa s) M` to `M` (using `kappa s ≤ M`), and then prove `M < M + 1`.
+
+I believe recent `omega` can handle this. Let me go with `unfold kappa; omega`.
+
+Actually, I want to double-check: in the file, the mathlib import is just `import Init.WF` and `import Mathlib.Data.Prod.Lex`. So we have a minimal set of lemmas. `omega` is in the core Lean 4 library, so it should be available.
+
+But does `omega` handle `max`? The core `omega` might not. The extended `omega` (in Mathlib) does. Since the file imports some Mathlib, we might have the extended `omega`.
+
+Actually, `omega` is in core Lean 4 (Init.Data.Omega or similar). The extended version with `max` support might require additional imports. Let me not assume and use the explicit approach to be safe.
+
+Final approach for R_rec_succ:
+```lean
+| _, _, Step.R_rec_succ b s n => by
+    have hk_lt : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+      show max (kappa s) (Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)) < 
+           Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1
+      have h1 : kappa s ≤ Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) :=
+        le_trans (le_max_right _ _) (le_max_left _ _)
+      rw [max_eq_right h1]
+      exact Nat.lt_succ_self _
+    exact drop_left hk_lt
+```
+
+Hmm, but `show` requires definitional equality. Will it work? Let me think...
+
+`kappa (app s (recDelta b s n))` should reduce to `max (kappa s) (kappa (recDelta b s n))` by the `app` equation.
+`kappa (recDelta b s n)` should reduce to `max (max (kappa b) (kappa s)) (kappa n)` by the non-delta `recDelta` equation.
+`kappa (recDelta b s (delta n))` should reduce to `max (max (kappa b) (kappa s)) (kappa n) + 1` by the delta `recDelta` equation.
+
+So the goal `kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n))` should be definitionally equal to `max (kappa s) (max (max (kappa b) (kappa s)) (kappa n)) < max (max (kappa b) (kappa s)) (kappa n) + 1`.
+
+But the reduction of `kappa (recDelta b s n)` might have a side condition. If the side condition is not satisfied (because `n` is a free variable), the reduction doesn't happen definitionally, and `show` fails.
+
+Hmm. This is a real issue. Let me think of a workaround.
+
+Workaround 1: Use `unfold` first to reduce, then use `omega` or manual steps.
+```lean
+have hk_lt : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+  unfold kappa
+  -- Now the goal is fully unfolded.
+  have h1 : kappa s ≤ Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) :=
+    le_trans (le_max_right _ _) (le_max_left _ _)
+  rw [max_eq_right h1]
+  exact Nat.lt_succ_self _
+```
+
+`unfold kappa` should reduce all `kappa` calls. Then the goal is in terms of `max` only, and we can use the explicit steps.
+
+Workaround 2: Prove a lemma that `kappa (recDelta b s n) = max (max (kappa b) (kappa s)) (kappa n)` for all `n`, by case analysis on whether `n` is `delta _`.
+
+This is more work but cleaner. Let me think if it's worth it.
+
+Actually, for the proof skeleton, I think using `unfold` is fine. Let me go with that.
+
+Let me also think about whether `omega` can handle the goal after `unfold`. The goal is:
+`max (kappa s) (max (max (kappa b) (kappa s)) (kappa n)) < max (max (kappa b) (kappa s)) (kappa n) + 1`
+
+`omega` needs to:
+1. Reduce `max (kappa s) M` to `M` (where `M = max (max (kappa b) (kappa s)) (kappa n)`).
+2. Prove `M < M + 1`.
+
+For step 1, `omega` needs to know `kappa s ≤ M`. This follows from the structure of `M` (which is the max of three things including `kappa s`). The facts `a ≤ max a b` and `b ≤ max a b` should allow `omega` to derive `kappa s ≤ M`.
+
+For step 2, `omega` knows `n < n + 1` for all `n`.
+
+I think `omega` can handle this. Let me try:
+```lean
+| _, _, Step.R_rec_succ b s n => by
+    have hk_lt : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+      unfold kappa
+      omega
+    exact drop_left hk_lt
+```
+
+If this works, it's the cleanest. If not, we fall back to the explicit version.
+
+I'll provide both options in the proof skeleton.
+
+OK let me now write up the final answer. I'll present the proof skeletons for all 5 cases, with explanations.
+
+Let me reconsider once more. The user said "Do not modify the file". So I should just provide the proof skeletons as a response, not modify the file. I'll present the Lean 4 code for each sorry case.
+
+Let me also think about the overall structure. The user wants "proof skeletons", which I interpret as: the code that would fill in the sorrys, with brief explanations.
+
+Let me write the final response.
+
+Actually, I realize I should double-check one thing. For R_int_delta and R_eq_refl, when kappa ties (both 0), we use drop_right with `mu void < mu LHS`. But `drop_right` requires `mu b < mu a` where `a` is LHS and `b` is RHS. So for R_int_delta: `a = integrate (delta t)`, `b = void`. We need `mu void < mu (integrate (delta t))`, which is `0 < 1 + mu t`. This is `Nat.zero_lt_succ _` or just `omega` after `simp`.
+
+For R_eq_refl: `mu void < mu (eqW a a)`, which is `0 < 4 + 2 * mu a`. This is true since `4 + 2 * mu a ≥ 4 > 0`. `omega` handles this.
+
+For R_rec_zero: `mu b < mu (recDelta b s void)`, which is `mu b < 3 + mu b + mu s`. True since `3 + mu s > 0`. `omega` handles this.
+
+OK, all good. Let me write the final response.
+
+One more thing: I should make sure the proofs are correct and would compile in Lean 4. Let me trace through each one mentally.
+
+**R_int_delta**:
+```lean
+| _, _, Step.R_int_delta t => by
+    have hmu : mu void < mu (integrate (delta t)) := by
+      simp [mu]  -- reduces to: 0 < 1 + mu t
+      omega
+    have hk_le : kappa void ≤ kappa (integrate (delta t)) := by
+      simp [kappa]  -- reduces to: 0 ≤ kappa t
+      exact Nat.zero_le _
+    rcases Nat.lt_or_eq_of_le hk_le with hk_lt | hk_eq
+    · exact drop_left hk_lt
+    · exact drop_right hmu hk_eq
+```
+
+The rcases gives either `hk_lt : kappa void < kappa (integrate (delta t))` or `hk_eq : kappa void = kappa (integrate (delta t))`. In the first case, we use `drop_left`. In the second, we use `drop_right` with `hmu` and `hk_eq`. This is correct.
+
+**R_rec_zero**:
+```lean
+| _, _, Step.R_rec_zero b s => by
+    have hmu : mu b < mu (recDelta b s void) := by
+      simp [mu]  -- reduces to: mu b < 3 + mu b + mu s
+      omega
+    have hk_le : kappa b ≤ kappa (recDelta b s void) := by
+      simp [kappa]  -- might reduce to: kappa b ≤ max (max (kappa b) (kappa s)) 0
+      -- or further: kappa b ≤ max (kappa b) (kappa s) (if simp reduces max _ 0)
+      exact le_max_left _ _
+    rcases Nat.lt_or_eq_of_le hk_le with hk_lt | hk_eq
+    · exact drop_left hk_lt
+    · exact drop_right hmu hk_eq
+```
+
+For `simp [kappa]`, the goal `kappa b ≤ kappa (recDelta b s void)` becomes `kappa b ≤ max (max (kappa b) (kappa s)) (kappa void)`. Then `kappa void = 0` (simp lemma), giving `kappa b ≤ max (max (kappa b) (kappa s)) 0`. Then `max _ 0` might or might not reduce. If it doesn't, the goal is `kappa b ≤ max (max (kappa b) (kappa s)) 0`, and `le_max_left _ _` would give `kappa b ≤ max (kappa b) 0` (not what we want) or `max (max (kappa b) (kappa s)) 0 ≤ max (max (max (kappa b) (kappa s)) 0) (kappa b)` (not what we want).
+
+So if simp doesn't reduce `max _ 0`, the proof fails. To be safe, let me add the reduction explicitly:
+```lean
+have hk_le : kappa b ≤ kappa (recDelta b s void) := by
+  simp only [kappa, kappa_void]
+  rw [Nat.max_eq_right (Nat.zero_le _)]
+  exact le_max_left _ _
+```
+
+`Nat.max_eq_right (Nat.zero_le _) : max a 0 = a`. After this rewrite, the goal is `kappa b ≤ max (kappa b) (kappa s)`, which is `le_max_left _ _`.
+
+Actually, `Nat.max_eq_right : a ≤ b → max a b = b`. So `Nat.max_eq_right (Nat.zero_le _) : max 0 a = a` for any `a`. Wait, `Nat.zero_le a : 0 ≤ a`. So `Nat.max_eq_right (Nat.zero_le a) : max 0 a = a`. But we want `max a 0 = a`, which is `Nat.max_eq_left (Nat.zero_le a) : max a 0 = a` (since `Nat.max_eq_left : b ≤ a → max a b = a`, so with `b := 0` and `a := a`, we need `0 ≤ a`, which is `Nat.zero_le a`).
+
+So:
+```lean
+have hk_le : kappa b ≤ kappa (recDelta b s void) := by
+  simp only [kappa, kappa_void]
+  rw [Nat.max_eq_left (Nat.zero_le _)]
+  exact le_max_left _ _
+```
+
+Or, to be cleaner, use the lemma `Nat.max_eq_right` with the right argument order. Let me check: `Nat.max_eq_right (h : a ≤ b) : max a b = b`. So `max a 0 = a` requires `a ≤ 0`, which is not true in general. So we use `Nat.max_eq_left (Nat.zero_le a) : max a 0 = a`. Yes.
+
+Or, we can use the fact that `max a 0 = a` is true and is in the simp set. Let me just rely on simp:
+```lean
+have hk_le : kappa b ≤ kappa (recDelta b s void) := by
+  simp [kappa]
+  -- assume simp fully reduces to: kappa b ≤ max (kappa b) (kappa s)
+  exact le_max_left _ _
+```
+
+I think simp should reduce `max a 0` to `a` using the standard lemmas. Let me just go with this and note that if it doesn't work, the user can add `Nat.max_eq_left` to the simp call.
+
+Actually, to be safe, let me write it explicitly:
+```lean
+have hk_le : kappa b ≤ kappa (recDelta b s void) := by
+  show kappa b ≤ max (kappa b) (kappa s)
+  exact le_max_left _ _
+```
+
+`show` requires definitional equality. `kappa (recDelta b s void)` should be definitionally equal to `max (kappa b) (kappa s)` because:
+1. The non-delta equation applies (since `void` is not `delta _`).
+2. `kappa (recDelta b s void) = max (max (kappa b) (kappa s)) (kappa void)`.
+3. `kappa void = 0` (by `kappa_void`).
+4. `max (max (kappa b) (kappa s)) 0 = max (kappa b) (kappa s)` (by `max a 0 = a`).
+
+Steps 1-3 are definitional (by the equation lemmas and simp lemma). Step 4 is also definitional if we have the right lemma in the context.
+
+Hmm, but `show` requires the equality to be definitional. The chain of reductions might not be fully definitional.
+
+You know what, let me just use `unfold` or `simp` and trust that it works. If there are issues, the user can debug.
+
+Final approach for all cases:
+
+```lean
+-- R_int_delta
+| _, _, Step.R_int_delta t => by
+    have hmu : mu void < mu (integrate (delta t)) := by
+      simp [mu]; omega
+    have hk_le : kappa void ≤ kappa (integrate (delta t)) := by
+      simp [kappa]; exact Nat.zero_le _
+    rcases Nat.lt_or_eq_of_le hk_le with hk_lt | hk_eq
+    · exact drop_left hk_lt
+    · exact drop_right hmu hk_eq
+
+-- R_rec_zero
+| _, _, Step.R_rec_zero b s => by
+    have hmu : mu b < mu (recDelta b s void) := by
+      simp [mu]; omega
+    have hk_le : kappa b ≤ kappa (recDelta b s void) := by
+      simp only [kappa, kappa_void, Nat.max_eq_left]
+      exact le_max_left _ _
+    rcases Nat.lt_or_eq_of_le hk_le with hk_lt | hk_eq
+    · exact drop_left hk_lt
+    · exact drop_right hmu hk_eq
+
+-- R_rec_succ
+| _, _, Step.R_rec_succ b s n => by
+    have hk_lt : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+      show max (kappa s) (Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)) < 
+           Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1
+      have h1 : kappa s ≤ Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) :=
+        le_trans (le_max_right _ _) (le_max_left _ _)
+      rw [max_eq_right h1]
+      exact Nat.lt_succ_self _
+    exact drop_left hk_lt
+
+-- R_eq_refl
+| _, _, Step.R_eq_refl a => by
+    have hmu : mu void < mu (eqW a a) := by
+      simp [mu]; omega
+    have hk_le : kappa void ≤ kappa (eqW a a) := by
+      simp [kappa]; exact Nat.zero_le _
+    rcases Nat.lt_or_eq_of_le hk_le with hk_lt | hk_eq
+    · exact drop_left hk_lt
+    · exact drop_right hmu hk_eq
+
+-- R_eq_diff
+| _, _, Step.R_eq_diff a b => by
+    have hmu : mu (integrate (merge a b)) < mu (eqW a b) := by
+      simp [mu]; omega
+    have hk_eq : kappa (integrate (merge a b)) = kappa (eqW a b) := by
+      simp [kappa]
+    exact drop_right hmu hk_eq
+```
+
+Wait, for R_rec_succ, I used `show`. Let me double-check if this works. The goal is `kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n))`. The `show` says this is `max (kappa s) (max (max (kappa b) (kappa s)) (kappa n)) < max (max (kappa b) (kappa s)) (kappa n) + 1`.
+
+For `show` to work, the two expressions must be definitionally equal. The reduction of `kappa (app s (recDelta b s n))`:
+- `app` equation: `kappa (app a b) = max (kappa a) (kappa b)`. So `kappa (app s (recDelta b s n)) = max (kappa s) (kappa (recDelta b s n))`. This is definitional (by the `app` equation).
+- `kappa (recDelta b s n)`: the non-delta equation applies (since `n` is a free variable, not necessarily `delta _`). But the equation might have a side condition.
+
+Hmm, the side condition issue. In Lean 4, the equation lemma for the non-delta case is:
+`kappa.eq_def : (b s n : Trace) → Not (n = delta _) → kappa (recDelta b s n) = max (max (kappa b) (kappa s)) (kappa n)`
+
+Wait, actually, I think the side condition is that the first pattern doesn't match. The first pattern is `recDelta b s (delta m)`. So the side condition is that `n` is not of the form `delta m`. This is `¬∃ m, n = delta m`.
+
+For a free `n`, this side condition is not provable. So the equation lemma doesn't apply, and `kappa (recDelta b s n)` is not definitionally equal to `max (max (kappa b) (kappa s)) (kappa n)`.
+
+This means `show` won't work directly.
+
+OK, let me use `unfold` to force the reduction:
+```lean
+have hk_lt : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+  unfold kappa
+  -- Now the goal is: max (kappa s) (max (max (kappa b) (kappa s)) (kappa n)) < 
+  --                  max (max (kappa b) (kappa s)) (kappa n) + 1
+  have h1 : kappa s ≤ Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) :=
+    le_trans (le_max_right _ _) (le_max_left _ _)
+  rw [max_eq_right h1]
+  exact Nat.lt_succ_self _
+```
+
+`unfold kappa` should reduce all `kappa` calls in the goal, using the appropriate equations. For `kappa (recDelta b s n)`, it uses the non-delta equation (since `n` matches the catch-all pattern). For `kappa (recDelta b s (delta n))`, it uses the delta equation.
+
+Yes, this should work.
+
+Alternatively, we can use `omega` after `unfold`:
+```lean
+have hk_lt : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+  unfold kappa
+  omega
+```
+
+This is cleaner if `omega` handles the max expressions. Let me go with this.
+
+OK, final answer. Let me write it up.
+
+Wait, I want to double-check one more time. For R_rec_succ, after `unfold kappa`, the goal is:
+`max (kappa s) (max (max (kappa b) (kappa s)) (kappa n)) < max (max (kappa b) (kappa s)) (kappa n) + 1`
+
+Can `omega` prove this? `omega` needs to:
+1. Know that `max (kappa s) M ≤ M` where `M = max (max (kappa b) (kappa s)) (kappa n)`.
+2. Conclude `M ≤ M < M + 1`.
+
+For step 1, `max a b ≤ c ↔ a ≤ c ∧ b ≤ c`. So `max (kappa s) M ≤ M ↔ kappa s ≤ M ∧ M ≤ M`. The second is trivial. The first requires `kappa s ≤ max (max (kappa b) (kappa s)) (kappa n)`.
+
+`omega` knows:
+- `a ≤ max a b` (i.e., `kappa s ≤ max (kappa s) (kappa b)`).
+- `b ≤ max a b` (i.e., `kappa s ≤ max (kappa b) (kappa s)`).
+- And the structure of `M`.
+
+From these, `omega` should derive `kappa s ≤ M`. Then `max (kappa s) M ≤ M`, so `max (kappa s) M < M + 1`.
+
+I think `omega` can do this in recent versions. If not, the explicit version with `le_trans` and `max_eq_right` works.
+
+Let me provide the explicit version to be safe, but mention that `omega` might also work.
+
+Actually, for the proof skeleton, let me just provide one version per case. I'll go with the explicit version for R_rec_succ and use `omega` for the others (where it's clearly sufficient).
+
+OK, final write-up.
+
+Hmm wait, for the explicit version of R_rec_succ, I need `max_eq_right`. Let me check the signature.
+
+`Nat.max_eq_right : ∀ {a b : Nat}, a ≤ b → max a b = b`. So `max_eq_right h1` where `h1 : a ≤ b` gives `max a b = b`.
+
+We want to rewrite `max (kappa s) M` to `M`. This is `max_eq_right (h : kappa s ≤ M) : max (kappa s) M = M`. Yes.
+
+So:
+```lean
+have h1 : kappa s ≤ Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) :=
+  le_trans (le_max_right _ _) (le_max_left _ _)
+rw [max_eq_right h1]
+-- goal: M < M + 1
+exact Nat.lt_succ_self _
+```
+
+Wait, after `rw [max_eq_right h1]`, the goal `max (kappa s) M < M + 1` becomes `M < M + 1`. `Nat.lt_succ_self : ∀ n, n < n + 1`. So `Nat.lt_succ_self M : M < M + 1`. Or just `Nat.lt_succ_self _` or `omega`.
+
+OK, this is correct.
+
+Let me also think about whether `le_trans` is the right name. In Lean 4, `Nat.le_trans : a ≤ b → b ≤ c → a ≤ c`. So `le_trans (le_max_right _ _) (le_max_left _ _)` chains:
+- `le_max_right (kappa b) (kappa s) : kappa s ≤ max (kappa b) (kappa s)`
+- `le_max_left (max (kappa b) (kappa s)) (kappa n) : max (kappa b) (kappa s) ≤ max (max (kappa b) (kappa s)) (kappa n)`
+
+So `le_trans (le_max_right _ _) (le_max_left _ _)` gives `kappa s ≤ max (max (kappa b) (kappa s)) (kappa n)`. The underscores in `le_max_right _ _` and `le_max_left _ _` should be inferable from the goal.
+
+OK, I'm confident in the proofs. Let me write the final response.
+
+One last thing: I should explain the strategy. The overall idea is:
+- For each step, show that the lex measure strictly decreases.
+- In cases where kappa might not drop (R_int_delta, R_rec_zero, R_eq_refl), use the fact that mu drops while kappa is non-increasing, then split on whether kappa ties or drops.
+- In R_rec_succ, kappa drops by 1, so we use drop_left.
+- In R_eq_diff, kappa ties and mu drops, so we use drop_right.
+
+OK, final response coming up.

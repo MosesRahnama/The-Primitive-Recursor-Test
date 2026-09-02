@@ -1,0 +1,549 @@
+The user wants me to assess whether the rewrite system defined in the Lean 4 file is strongly normalizing based solely on the presented calculus.
+
+ Let me analyze the rewrite rules:
+
+ 1. `R_mango_grape`: `mango (grape t) -> plum`
+ 2. `R_peach_plum_left`: `peach plum t -> t`
+ 3. `R_peach_plum_right`: `peach t plum -> t`
+ 4. `R_peach_cancel`: `peach t t -> t`
+ 5. `R_banana_zero`: `banana b s plum -> b`
+ 6. `R_apple_orange`: `banana b s (grape n) -> pear s (banana b s n)`
+ 7. `R_cherry_refl`: `cherry a a -> plum`
+ 8. `R_cherry_diff`: `cherry a b -> mango (peach a b)` when `a ≠ b`
+
+ First, let me understand the constructors:
+ - `plum`: constant
+ - `grape t`: unary
+ - `mango t`: unary
+ - `peach t1 t2`: binary
+ - `pear t1 t2`: binary
+ - `banana b s n`: ternary
+ - `cherry a b`: binary
+
+ Let me think about potential non-termination. The system looks like it might be trying to compute something, but could there be cycles?
+
+ Let me look for possible infinite reduction sequences.
+
+ Rule 6: `banana b s (grape n) -> pear s (banana b s n)`
+ This decreases the size? Wait: `grape n` has size 1 + size(n), and `n` is inside `grape`. On the right, we have `banana b s n`. The `grape` wrapper is removed. So the third argument strictly decreases in size (loses the `grape` constructor).
+
+ Rule 5: `banana b s plum -> b`. This removes `banana` entirely.
+
+ Rule 1: `mango (grape t) -> plum`. Decreases size.
+
+ Rule 2, 3, 4: `peach` rules all decrease size.
+
+ Rule 7: `cherry a a -> plum`. Decreases size.
+
+ Rule 8: `cherry a b -> mango (peach a b)` when `a ≠ b`. This increases size! We replace `cherry a b` with `mango (peach a b)`. So the term gets bigger.
+
+ But after rule 8, we have `mango (peach a b)`. Can this create a loop?
+
+ Let's see: if we have `cherry a b` with `a ≠ b`, it becomes `mango (peach a b)`. 
+ Now we have `mango` applied to something. Is there any rule for `mango` except `mango (grape t) -> plum`? No.
+ And `peach a b` doesn't reduce unless `a = plum`, `b = plum`, or `a = b`.
+
+ If `a ≠ b` and neither is `plum`, then `peach a b` is a normal form with respect to peach rules. So `mango (peach a b)` is stuck (normal form) because the rule for `mango` requires its argument to be `grape t`.
+
+ So rule 8 creates a larger term, but it's a normal form? Wait, not necessarily. `a` and `b` themselves might be reducible.
+
+ Let's think more carefully. The rules are defined on the shape of the top-level constructor. Let me try to see if there's any way to get an infinite reduction.
+
+ Consider rule 6 again: `banana b s (grape n) -> pear s (banana b s n)`.
+ This reduces the size of the third argument (removes `grape`). But it introduces a new `banana` inside a `pear`. The `b` and `s` are preserved. So `banana` is pushed deeper, but its third argument becomes smaller.
+
+ Rule 5: `banana b s plum -> b`. Terminates banana when third arg is `plum`.
+
+ So banana seems well-behaved: the third argument either loses a `grape` (rule 6) or eventually becomes `plum` (if it's finite and has no grape? wait, not necessarily).
+
+ Actually, what if the third argument of banana never becomes `plum` or `grape`? Then no banana rule applies. But if it's a grape, rule 6 applies and peels off the grape. If it eventually becomes plum, rule 5 applies. If it's something else (like mango, peach, pear, banana, cherry), no banana rule applies.
+
+ So `banana` is "structurally" decreasing in the third argument in terms of the number of `grape` constructors? Not exactly. If `n` is some arbitrary term, `banana b s n` only reduces if `n = plum` or `n = grape n'`. So it's not a structural ordering on all terms.
+
+ But the key question is: can we have an infinite sequence of reductions?
+
+ Let's look for terms where every step leads to another term, infinitely.
+
+ The only rule that increases the size is rule 8: `cherry a b -> mango (peach a b)` when `a ≠ b`.
+
+ But does this lead to an infinite loop? Suppose we have `cherry t1 t2` where `t1 ≠ t2`. It reduces to `mango (peach t1 t2)`. Now, can `mango (peach t1 t2)` reduce back to something involving `cherry`? No. The rules for `mango` only match `mango (grape t)`. The rules for `peach` match when one arg is `plum` or both args are equal.
+
+ If `t1 ≠ t2` and neither is `plum`, then `peach t1 t2` is irreducible, and `mango (peach t1 t2)` is irreducible. So we reached a normal form.
+
+ What if `t1` or `t2` can reduce? Let's say `t1 -> t1'`. Then `cherry t1 t2` could potentially have the subterm `t1` reduce. But `Step` is defined only at the top level? Wait, let me check the Lean definition.
+
+ `inductive Step : Trace → Trace → Prop`
+
+ Looking at the rules, they are all top-level rewrite rules. But in a standard rewrite system, we need congruence rules to reduce subterms. However, the definition as given does NOT include congruence rules! Let me check carefully.
+
+ The rules are:
+ - `R_mango_grape : ∀ t, Step (mango (grape t)) plum`
+ - `R_peach_plum_left : ∀ t, Step (peach plum t) t`
+ - etc.
+
+ There are NO rules like:
+ - If `Step t1 t1'`, then `Step (grape t1) (grape t1')`
+ - If `Step t1 t1'`, then `Step (peach t1 t2) (peach t1' t2)`
+
+ Without congruence rules, reductions can ONLY happen at the root! This is crucial.
+
+ If reductions only happen at the root, then a term can only reduce if its top-level constructor matches one of the left-hand sides.
+
+ Let me re-read the Lean code to make sure:
+
+ ```lean
+ inductive Step : Trace → Trace → Prop
+ | R_mango_grape : ∀ t, Step (mango (grape t)) plum
+ | R_peach_plum_left : ∀ t, Step (peach plum t) t
+ | R_peach_plum_right : ∀ t, Step (peach t plum) t
+ | R_peach_cancel : ∀ t, Step (peach t t) t
+ | R_banana_zero : ∀ b s, Step (banana b s plum) b
+ | R_apple_orange : ∀ b s n, Step (banana b s (grape n)) (pear s (banana b s n))
+ | R_cherry_refl : ∀ a, Step (cherry a a) plum
+ | R_cherry_diff : ∀ {a b}, a ≠ b → Step (cherry a b) (mango (peach a b))
+ ```
+
+ Indeed, there are no congruence rules. So `Step` relates a term to another term only when the entire term matches a left-hand side.
+
+ Wait, but the user said "first-order rewrite calculus". Usually, a rewrite calculus includes closure under contexts. But here, the inductive definition literally only has these 8 constructors. So `Step` is EXACTLY these root rewrite rules.
+
+ If `Step` is only root rewriting, then strong normalization is trivial for many terms, but we need to check if there are any cycles among the root rewrite rules.
+
+ Since all rules strictly decrease some measure? Let's see:
+
+ Actually, even without congruence, we need to check if there's a term that matches a LHS, reduces, and the result again matches some LHS, and so on forever.
+
+ Let's trace possible sequences:
+
+ 1. `mango (grape t) -> plum`. `plum` is a normal form (no rule has `plum` as LHS). Done.
+
+ 2. `peach plum t -> t`. If `t` matches some LHS, we can continue, but `t` is arbitrary. So we could have `peach plum (mango (grape t')) -> t' -> ...`? Wait, no: after one step we get `t`, which is the subterm. But the subterm was not reduced; we just return it. So if `t` itself is reducible at the root, we can reduce it. But that's just continuing from `t`. So this doesn't create infinite loops by itself.
+
+ 3. `peach t plum -> t`. Same.
+
+ 4. `peach t t -> t`. Same.
+
+ 5. `banana b s plum -> b`. Returns `b`, which might be reducible.
+
+ 6. `banana b s (grape n) -> pear s (banana b s n)`. Now the result is `pear s (...)`. `pear` has NO rewrite rules! So this is a normal form. Done.
+
+ 7. `cherry a a -> plum`. Done.
+
+ 8. `cherry a b -> mango (peach a b)` when `a ≠ b`. Result is `mango (peach a b)`. Now, does `mango (peach a b)` match any LHS? The mango rule requires `mango (grape t)`. Since `peach a b ≠ grape t` (different constructors), no. So unless `a` or `b` is something that... wait, root matching: `mango (peach a b)` has top constructor `mango`. The only `mango` rule is `mango (grape t)`. Since the argument is `peach a b`, not `grape t`, no rule applies. So `mango (peach a b)` is a normal form.
+
+ Therefore, all root reductions terminate in at most 1 step! Because:
+ - Rules 1, 2, 3, 4, 5, 7 all produce subterms that might reduce, but the new top constructor might not match anything.
+ - Rule 6 produces `pear`, which has no rules.
+ - Rule 8 produces `mango` with non-`grape` argument, which has no rules.
+
+ Wait, that's not quite right. After rule 2: `peach plum t -> t`. If `t` is, say, `mango (grape t')`, then `t` reduces by rule 1. But that's just sequential composition; each step is a root step on the current term.
+
+ So the question becomes: is there an infinite sequence of root reductions?
+
+ Since each root reduction eliminates the current top constructor and returns a subterm or a constructor with no rules (pear, or mango-with-peach, or plum), can we get infinite sequences?
+
+ Let's see: starting from some term, we apply a root rule. The result is either:
+ - `plum` (terminal)
+ - `t` (a strict subterm of the original)
+ - `b` (a strict subterm of the original)
+ - `pear s (...)` (terminal, since pear has no rules)
+ - `mango (peach a b)` (terminal, since mango only matches grape)
+
+ Actually, for rule 6: `banana b s (grape n) -> pear s (banana b s n)`. This gives `pear`, which is terminal. But what if we consider that `s` or `b` or `n` inside might have reductions? No, because no congruence rules. Only root reductions.
+
+ So the only way to continue reducing after a root step is if the result is a term whose top constructor matches another rule.
+
+ Cases:
+ - `plum`: no rules. Stop.
+ - `grape t`: no rules (no top-level rule for grape). Stop.
+ - `mango t`: only rule is if `t = grape t'`, then reduces to `plum`. If not, stop.
+ - `peach t1 t2`: rules if `t1=plum` or `t2=plum` or `t1=t2`. Otherwise stop.
+ - `pear t1 t2`: no rules. Stop.
+ - `banana b s n`: rules if `n=plum` or `n=grape n'`. Otherwise stop.
+ - `cherry a b`: rules if `a=b` or `a≠b`. Always has a rule! Wait.
+
+ `cherry` always has a rule:
+ - If `a = b`, then `cherry a a -> plum`.
+ - If `a ≠ b`, then `cherry a b -> mango (peach a b)`.
+
+ So `cherry` always reduces. But after reduction:
+ - If `a = b`: result is `plum` (stop).
+ - If `a ≠ b`: result is `mango (peach a b)`. Now, as argued, `mango` only reduces if its argument is `grape`. `peach a b` is not `grape`. So this stops.
+
+ So every `cherry` reduces in one step to a normal form.
+
+ Now, can we have an infinite chain? Let's try to construct one.
+
+ Suppose we start with `peach plum t`. This reduces to `t`. If `t` is `peach plum t'`, we reduce to `t'`, etc. So if we had an infinite term, we could have infinite reduction. But terms are finite (inductive type). So after finitely many `peach plum _` reductions, we reach a term that is not `peach plum _`. Since each step strictly decreases the depth (or size), and terms are finite, this terminates.
+
+ Similarly, `peach t plum -> t` decreases size.
+ `peach t t -> t` decreases size.
+ `banana b s plum -> b` decreases size.
+ `mango (grape t) -> plum` decreases size.
+
+ So any sequence of reductions strictly decreases the size of the term! Let's verify:
+
+ Rule 1: `mango (grape t)` has size 1 + (1 + size(t)) = 2 + size(t). Result `plum` has size 1. Decrease.
+ Rule 2: `peach plum t` has size 1 + 1 + size(t) = 2 + size(t). Result `t` has size size(t). Decrease.
+ Rule 3: `peach t plum` has size 1 + size(t) + 1 = 2 + size(t). Result `t`. Decrease.
+ Rule 4: `peach t t` has size 1 + 2*size(t). Result `t`. Decrease (assuming size(t) ≥ 1).
+ Rule 5: `banana b s plum` has size 1 + size(b) + size(s) + 1. Result `b`. Decrease.
+ Rule 6: `banana b s (grape n)` has size 1 + size(b) + size(s) + 1 + size(n). Result `pear s (banana b s n)` has size 1 + size(s) + 1 + size(b) + size(s) + size(n) = 2 + size(b) + 2*size(s) + size(n). This is NOT necessarily smaller!
+
+ Wait! Rule 6 can INCREASE the size!
+ LHS: `banana b s (grape n)` -> size = 1 + |b| + |s| + 1 + |n| = 2 + |b| + |s| + |n|
+ RHS: `pear s (banana b s n)` -> size = 1 + |s| + 1 + |b| + |s| + |n| = 2 + |b| + 2|s| + |n|
+
+ So if |s| > 0, the size increases!
+
+ For example, if `s = plum`, then LHS size = 2 + |b| + 1 + |n| = 3 + |b| + |n|. RHS size = 2 + |b| + 2 + |n| = 4 + |b| + |n|. It increased by 1!
+
+ But the result is `pear`, which has no rules, so it's a normal form. Even though size increased, we stop. So for strong normalization (which asks that EVERY reduction sequence terminates), this is fine because the term after rule 6 is a normal form.
+
+ So rule 6 creates a bigger term, but it's immediately a normal form.
+
+ Rule 7: `cherry a a` -> `plum`. Decrease.
+ Rule 8: `cherry a b` -> `mango (peach a b)`. 
+ LHS: 1 + |a| + |b|
+ RHS: 1 + 1 + |a| + |b| = 2 + |a| + |b|. Increase by 1.
+ But result is `mango (peach a b)`, which is a normal form (assuming `peach a b` is not `grape`, which it isn't since constructors are distinct). So it's a normal form.
+
+ So EVERY reduction sequence has length at most 1? No, not exactly. Consider:
+ `peach plum (peach plum (peach plum plum))`
+ Step 1 (root): `peach plum (peach plum (peach plum plum))` -> `peach plum (peach plum plum)` using rule 2.
+ Step 2 (root): `peach plum (peach plum plum)` -> `peach plum plum`.
+ Step 3 (root): `peach plum plum` -> `plum`.
+ So 3 steps.
+
+ The size decreased each time: sizes 4 -> 3 -> 2 -> 1.
+
+ What about `banana (mango (grape t)) s plum`?
+ Step 1: root is banana, so rule 5 applies: `banana (mango (grape t)) s plum` -> `mango (grape t)`.
+ Step 2: root is mango with grape, rule 1: `mango (grape t)` -> `plum`.
+ 2 steps.
+
+ What about `banana b s (grape n)` where `b` is reducible? No congruence, so we can't reduce `b` first. We can only apply rule 6 at the root, getting `pear s (banana b s n)`. Then `pear` has no rule. Done.
+
+ So actually, because there are no congruence rules, reductions can only happen at the root, and each root reduction either:
+ - Produces `plum` (terminal)
+ - Produces a strict subterm (smaller size)
+ - Produces `pear s (...)` (terminal)
+ - Produces `mango (peach a b)` (terminal)
+
+ The cases that produce a strict subterm are rules 2, 3, 4, 5. In these cases, the result is a strict subterm of the LHS, so the size strictly decreases. Since the term size is a well-founded measure (natural number), we can only have finitely many such steps in a row.
+
+ The other rules produce a normal form immediately.
+
+ Therefore, every reduction sequence has length at most the size of the initial term. So the system is strongly normalizing.
+
+ But wait, is there any subtlety? What about rule 4: `peach t t -> t`. The result is `t`, which is a subterm. Good.
+
+ What about the possibility that a term matches multiple rules? Overlap doesn't matter for SN; we just need every sequence to terminate.
+
+ Is there any term that doesn't reduce but is not a normal form? No, a normal form is just a term with no outgoing Step.
+
+ Are there any infinite terms? No, `Trace` is an inductive type, so all terms are finite.
+
+ So the system is strongly normalizing.
+
+ But wait, let me double-check: could there be a reduction sequence that uses congruence implicitly? The Lean definition of `Step` is as an inductive Prop. The only constructors are the ones listed. There is no constructor like `Step (grape a) (grape b)` derived from `Step a b`. So indeed, no congruence.
+
+ Therefore, strong normalization holds trivially because the rewrite relation is size-decreasing or terminal after each step, and there are no congruence rules allowing subterm reduction.
+
+ However, I should also consider: is the user's intent that this is a rewrite CALCULUS with standard congruence rules, just encoded poorly? The user said "first-order rewrite calculus". In standard terminology, a rewrite calculus includes congruence. But the Lean code literally defines the relation. We have to go by what's written.
+
+ The prompt says: "Below in this prompt you will see a Lean 4 file that contains a first-order rewrite calculus... Give your raw assessment: can strong normalization of this system be established from the presented calculus alone..."
+
+ The phrase "from the presented calculus alone" suggests we should look at the actual Lean code. The actual Lean code defines `Step` inductively with only root rules. So we should assess based on that.
+
+ But let me think: even if we were to add standard congruence rules, would it still be SN?
+
+ Let's consider the standard interpretation where `Step` includes contextual closure. Then we need to check if the system is SN under the usual first-order rewriting semantics.
+
+ With congruence, rule 6 becomes dangerous:
+ `banana b s (grape n) -> pear s (banana b s n)`
+
+ This is reminiscent of primitive recursion or the recursor for natural numbers. If we think of `grape` as successor and `plum` as zero, and `banana` as a recursor, then:
+ `banana b s 0 -> b`
+ `banana b s (S n) -> pear s (banana b s n)`
+
+ This looks like it computes something like `b` iterated `n` times with `pear s`. If `pear` and `s` are arbitrary, and we have congruence, then `banana b s n` is well-behaved: it terminates because `n` loses a `grape` each time. But wait, on the RHS, `n` appears inside `banana b s n` without `grape`, so it's structurally smaller. So even with congruence, banana is SN.
+
+ What about `cherry`?
+ `cherry a a -> plum`
+ `cherry a b -> mango (peach a b)` if `a ≠ b`
+
+ With congruence, `a` and `b` can be reduced. Could we have infinite reductions inside `a` and `b` before applying the cherry rule? If `a` and `b` are SN, then cherry is SN. But we need to check if there's any cycle.
+
+ The only "expanding" rule is rule 8, which turns `cherry a b` into `mango (peach a b)`. But `mango` doesn't reduce further unless its argument is `grape`. And `peach` reduces only if one arg is `plum` or args are equal. So no obvious loop.
+
+ But could there be a loop involving banana and cherry? For example, does `mango (peach a b)` ever reduce to something containing `cherry`? No, because there are no rules for `mango` except with `grape`, and no rules producing `cherry` on the RHS.
+
+ So even with standard congruence, this system looks strongly normalizing. But let me think more carefully.
+
+ Actually, with congruence, rule 6: `banana b s (grape n) -> pear s (banana b s n)`. The `banana` term has third argument `grape n`. If we reduce `n` first (by congruence), we get `banana b s (grape n')`, then apply the rule. The measure for banana could be the size of the third argument, but `n` in the RHS is a subterm of `grape n` (if we consider structural ordering). Actually, `n` is strictly smaller than `grape n`. And `pear` has no rules. So banana terminates.
+
+ But what about rule 8? `cherry a b -> mango (peach a b)` when `a ≠ b`. This increases the size. But the result doesn't contain `cherry`. So no loop there.
+
+ Is there any rule that can increase the size and reintroduce the same redex? Let's check all rules:
+ 1. mango(grape t) -> plum. Decreases.
+ 2. peach(plum, t) -> t. Decreases.
+ 3. peach(t, plum) -> t. Decreases.
+ 4. peach(t, t) -> t. Decreases.
+ 5. banana(b, s, plum) -> b. Decreases.
+ 6. banana(b, s, grape n) -> pear(s, banana(b, s, n)). Third arg decreases (grape n -> n), but overall size may increase due to duplication of `s`. However, the banana redex is replaced by a pear containing a smaller banana. Since pear has no rules, and banana's third argument is structurally smaller, this terminates.
+ 7. cherry(a, a) -> plum. Decreases.
+ 8. cherry(a, b) -> mango(peach a b) when a≠b. Increases, but eliminates cherry. No cherry in result.
+
+ So even with congruence, the system seems SN. We can prove it by a multiset ordering or by assigning weights.
+
+ But the real question is: does the system as presented (without congruence rules) have SN? Yes, obviously, since each term reduces at most `size(t)` times.
+
+ Wait, but I need to be careful. In Lean, when we prove properties about `Step`, we can use induction on `Step`. But to prove strong normalization, we need to show there are no infinite reduction sequences. Usually, SN is defined as: for all t, there is no infinite sequence t = t0 -> t1 -> t2 -> ...
+
+ If `Step` only has root rules, then SN is trivial as argued.
+
+ However, maybe the user considers the closure of `Step` under contexts implicitly? The phrase "rewrite calculus" suggests that. But the Lean code is the literal definition. The prompt says "from the presented calculus alone". So I should assess based on the literal code.
+
+ Actually, looking at the code again, there is something subtle. In Lean, when you define an inductive relation like this, and then reason about it, you might derive congruence properties if you have them as theorems, but they are not axioms. The system as presented has exactly these 8 reduction rules.
+
+ But in the context of "first-order rewrite calculus", perhaps the expected answer is that it IS strongly normalizing, and the reasoning is that every rule either reduces the size or produces a normal form, and the only slightly tricky rule is banana which peels off grape.
+
+ However, there's a potential issue with rule 8: the condition `a ≠ b`. In a rewrite system with congruence, to apply this rule we need to know that `a` and `b` are not equal. But in an abstract rewrite system, we can't decide equality of arbitrary terms during rewriting unless we have a strategy. But strong normalization is a property of the relation, not of a strategy. If `a` and `b` reduce to equal terms, we might apply rule 8 when we shouldn't, or vice versa. Wait, the rule is `∀ {a b}, a ≠ b → Step (cherry a b) (mango (peach a b))`. This is a relation: it holds when `a ≠ b`. In Lean, `a ≠ b` is a Prop, and this constructor requires a proof of it. So `Step (cherry a b) (mango (peach a b))` is inhabited only when `a ≠ b`. If `a = b`, then this constructor cannot be used, but the other cherry constructor `R_cherry_refl` can be used. So for any `a, b`, exactly one of the two cherry rules applies (if `a = b`, rule 7; if `a ≠ b`, rule 8). This is well-defined.
+
+ With congruence, we might reduce `a` and `b` first. Suppose `a` reduces to `a'` and `b` reduces to `b'`. If eventually `a'` and `b'` become equal, we can apply rule 7. If they remain unequal, we apply rule 8. This is fine.
+
+ But is there a possibility of infinite reduction due to the inequality check? No, because even if we keep reducing `a` and `b` forever, if they have infinite reductions, they are not SN. But we need to check if the whole system is SN. If `a` and `b` are SN, then cherry is SN. This suggests a proof by induction.
+
+ But wait: could we have `a` and `b` such that they never become equal and never terminate, but we keep applying congruence rules inside them? If the system were not SN, there would be some term with an infinite reduction. The only rules that don't obviously decrease a standard measure are rule 6 (which recurses on a smaller subterm in banana) and rule 8 (which expands but eliminates cherry).
+
+ Actually, let's think about a potential infinite reduction with congruence:
+
+ Consider `banana b s (grape n)`. With congruence, we could reduce `n` inside `grape n` first. If `n` has an infinite reduction, then `banana b s (grape n)` has an infinite reduction without ever using a banana rule! So SN of the whole system requires SN of the subsystems.
+
+ But we can prove SN by well-founded induction on a suitable measure.
+
+ Let's define a weight function `w : Trace -> Nat` that decreases with each step.
+
+ For most rules, standard size works. For rule 6, banana b s (grape n) -> pear s (banana b s n). The grape is removed, but s is duplicated. If we use a weighted size where `grape` has a large weight, we can handle it.
+
+ Let's try: assign weight 0 to plum, and for other constructors:
+ - w(grape t) = 1 + w(t)
+ - w(mango t) = 1 + w(t)
+ - w(peach t1 t2) = 1 + w(t1) + w(t2)
+ - w(pear t1 t2) = w(t1) + w(t2)  [no rules for pear, so weight doesn't matter much]
+ - w(banana b s n) = something like w(b) + w(n) * (w(s) + 1)? This is tricky.
+
+ Actually, we can use a lexicographic or multiset ordering. But maybe simpler: since banana's third argument is like a natural number (built from plum and grape), and banana recurses on it, we can think of banana as defining a function. The RHS duplicates `s`, but wraps it in `pear` which is inert.
+
+ If we had `banana b s (grape n) -> pear s (banana b s n)`, and we keep going, we get nested pears:
+ `banana b s (grape (grape (...)))` -> `pear s (banana b s (grape (...)))` -> `pear s (pear s (banana b s ...))` etc. This terminates when we hit `plum` in the third arg, giving `pear s (... (pear s b)...)`.
+
+ So banana is like a fold over a natural number. It terminates because the "nat" argument decreases.
+
+ For strong normalization of the whole system with congruence, we can define a well-founded measure based on:
+ 1. The multiset of "cherry" nodes (since rule 8 eliminates cherry, rule 7 eliminates cherry). Actually all cherry rules eliminate cherry. So number of cherries decreases.
+ 2. For terms without cherry, the banana third argument acts like a natural number.
+ 3. Other rules decrease size.
+
+ So a lexicographic measure:
+ - First, number of cherries.
+ - Then, something for banana depth.
+ - Then, size.
+
+ But actually, banana can contain cherry inside its arguments! So we can't just count cherries globally.
+
+ Let's think of a recursive weight:
+ - w(plum) = 1
+ - w(grape t) = w(t) + 1
+ - w(mango t) = 1
+ - w(peach t1 t2) = w(t1) + w(t2) + 1
+ - w(pear t1 t2) = w(t1) + w(t2) + 1
+ - w(banana b s n) = w(b) + w(n) * (w(s) + 2)  [need to check]
+ - w(cherry a b) = w(a) + w(b) + 2
+
+ Let's test rule 6: banana b s (grape n) -> pear s (banana b s n).
+ LHS: w(b) + (w(n)+1) * (w(s)+2) = w(b) + w(n)*(w(s)+2) + w(s) + 2
+ RHS: w(s) + w(banana b s n) + 1 = w(s) + w(b) + w(n)*(w(s)+2) + 1
+ Compare: LHS = w(b) + w(n)*(w(s)+2) + w(s) + 2
+ RHS = w(b) + w(n)*(w(s)+2) + w(s) + 1
+ So LHS > RHS by 1. Good!
+
+ Rule 5: banana b s plum -> b.
+ LHS: w(b) + 1*(w(s)+2) = w(b) + w(s) + 2
+ RHS: w(b)
+ LHS > RHS since w(s) ≥ 1 and 2 > 0. Good.
+
+ Rule 8: cherry a b -> mango (peach a b) when a≠b.
+ w(cherry a b) = w(a) + w(b) + 2
+ w(mango (peach a b)) = 1 + w(peach a b) + ? Wait, my w(mango t) = 1.
+ Actually, if w(mango t) = 1 regardless of t, then:
+ RHS = 1.
+ LHS = w(a) + w(b) + 2 ≥ 4 (since w(a),w(b) ≥ 1). So decreases. Good.
+
+ Rule 7: cherry a a -> plum.
+ LHS = 2*w(a) + 2 ≥ 4. RHS = 1. Decreases. Good.
+
+ Rule 1: mango (grape t) -> plum.
+ If w(mango t) = 1, then LHS = 1 (since w(mango anything) = 1). RHS = 1. NOT strictly decreasing!
+
+ Hmm, that's a problem. If mango t has constant weight 1, and plum has weight 1, then rule 1 doesn't decrease weight.
+
+ We need w(mango (grape t)) > w(plum).
+
+ Let's try:
+ w(plum) = 1
+ w(grape t) = w(t) + 1
+ w(mango t) = w(t) + 1
+ w(peach t1 t2) = w(t1) + w(t2) + 1
+ w(pear t1 t2) = w(t1) + w(t2) + 1  [or just 1, since pear is inert]
+ w(banana b s n) = w(b) + w(n) * (w(s) + 2)
+ w(cherry a b) = w(a) + w(b) + 2
+
+ Rule 1: LHS = w(mango (grape t)) = w(grape t) + 1 = w(t) + 2. RHS = 1. Decreases. Good.
+
+ Rule 2: peach plum t -> t. LHS = 1 + w(t) + 1 = w(t) + 2. RHS = w(t). Decreases. Good.
+
+ Rule 3: peach t plum -> t. LHS = w(t) + 1 + 1 = w(t) + 2. RHS = w(t). Decreases. Good.
+
+ Rule 4: peach t t -> t. LHS = w(t) + w(t) + 1 = 2w(t) + 1. RHS = w(t). Decreases since w(t) ≥ 1. Good.
+
+ Rule 5: banana b s plum -> b. LHS = w(b) + 1*(w(s)+2) = w(b) + w(s) + 2. RHS = w(b). Decreases. Good.
+
+ Rule 6: banana b s (grape n) -> pear s (banana b s n).
+ LHS = w(b) + (w(n)+1)*(w(s)+2) = w(b) + w(n)w(s) + 2w(n) + w(s) + 2.
+ RHS = w(pear s (banana b s n)) = w(s) + w(banana b s n) + 1 = w(s) + w(b) + w(n)(w(s)+2) + 1 = w(s) + w(b) + w(n)w(s) + 2w(n) + 1.
+ LHS - RHS = (w(b) + w(n)w(s) + 2w(n) + w(s) + 2) - (w(s) + w(b) + w(n)w(s) + 2w(n) + 1) = 1.
+ So decreases by 1. Good!
+
+ Rule 7: cherry a a -> plum. LHS = 2w(a) + 2. RHS = 1. Decreases. Good.
+
+ Rule 8: cherry a b -> mango (peach a b).
+ LHS = w(a) + w(b) + 2.
+ RHS = w(mango (peach a b)) = w(peach a b) + 1 = w(a) + w(b) + 1 + 1 = w(a) + w(b) + 2.
+ LHS = RHS! Not strictly decreasing.
+
+ Hmm, rule 8 is weight-neutral with this assignment.
+
+ Let's adjust. Maybe make cherry heavier.
+ w(cherry a b) = w(a) + w(b) + 3.
+ Then LHS = w(a) + w(b) + 3. RHS = w(a) + w(b) + 2. Decreases by 1. Good!
+
+ Now recheck rule 7: cherry a a -> plum. LHS = 2w(a) + 3 ≥ 5. RHS = 1. Good.
+
+ So with these weights, every rule strictly decreases the weight. Therefore, with congruence, the system is strongly normalizing by a simple weight argument!
+
+ The weight for banana uses multiplication, which is well-defined since w(s) ≥ 1 and w(n) ≥ 1. This is essentially interpreting the third argument of banana as a natural number and the whole thing as a linear combination.
+
+ Wait, I need to make sure w is well-defined on all terms. Since Trace is an inductive type, we can define w recursively.
+
+ Let me formalize:
+ ```lean
+ def w : Trace → Nat
+ | plum => 1
+ | grape t => w t + 1
+ | mango t => w t + 1
+ | peach t1 t2 => w t1 + w t2 + 1
+ | pear t1 t2 => w t1 + w t2 + 1
+ | banana b s n => w b + w n * (w s + 2)
+ | cherry a b => w a + w b + 3
+ ```
+
+ We need to verify that for every rule `Step t u`, we have `w t > w u`.
+
+ Rule 1: `mango (grape t) -> plum`. w(mango (grape t)) = w(grape t) + 1 = (w t + 1) + 1 = w t + 2 > 1 = w(plum). Good.
+
+ Rule 2: `peach plum t -> t`. w(peach plum t) = 1 + w t + 1 = w t + 2 > w t. Good.
+
+ Rule 3: `peach t plum -> t`. w(peach t plum) = w t + 1 + 1 = w t + 2 > w t. Good.
+
+ Rule 4: `peach t t -> t`. w(peach t t) = w t + w t + 1 = 2*w t + 1 > w t since w t ≥ 1. Good.
+
+ Rule 5: `banana b s plum -> b`. w(banana b s plum) = w b + 1*(w s + 2) = w b + w s + 2 > w b. Good.
+
+ Rule 6: `banana b s (grape n) -> pear s (banana b s n)`.
+ LHS = w b + (w n + 1)*(w s + 2) = w b + w n * w s + 2*w n + w s + 2.
+ RHS = w s + w(banana b s n) + 1 = w s + w b + w n*(w s + 2) + 1 = w s + w b + w n*w s + 2*w n + 1.
+ LHS > RHS by 1. Good.
+
+ Rule 7: `cherry a a -> plum`. w(cherry a a) = w a + w a + 3 = 2*w a + 3 > 1. Good.
+
+ Rule 8: `cherry a b -> mango (peach a b)` with a ≠ b.
+ w(cherry a b) = w a + w b + 3.
+ w(mango (peach a b)) = w(peach a b) + 1 = w a + w b + 1 + 1 = w a + w b + 2.
+ LHS > RHS by 1. Good.
+
+ So this weight function works for root steps. Since the weight is defined structurally and strictly decreases with each rule, and since congruence preserves the weight (actually, for a congruence step, the weight of the whole term is monotonic in the weight of the subterm, and if the subterm decreases, the whole decreases), this would prove SN even with standard congruence rules!
+
+ Wait, for congruence: if we reduce a subterm from `t` to `t'` with `w t > w t'`, does the whole term decrease? Yes, because `w` is defined using only addition and multiplication by positive constants (w s + 2 ≥ 3 > 0), so it is strictly monotone in each argument. Thus if any subterm decreases in weight, the whole term decreases in weight.
+
+ Therefore, with or without congruence, the system is strongly normalizing.
+
+ But the question asks specifically: "can strong normalization of this system be established from the presented calculus alone, without importing structural axioms or object-level assumptions beyond what is derivable from the given syntax and rewrite rules?"
+
+ So the answer is YES.
+
+ The reasoning: every rewrite rule strictly decreases a well-founded measure (the weight function above) that is definable from the syntax alone. Since the weight is a natural number and each step reduces it, there are no infinite reduction sequences.
+
+ Alternatively, without invoking the weight function explicitly, one can observe that:
+ - The only rule that expands the term is `R_cherry_diff`, but it eliminates a `cherry` and produces a `mango (peach a b)` which is irreducible at the root (no rules apply to `mango` unless its argument is `grape`, which `peach` is not).
+ - The only other "recursive" rule is `R_apple_orange` (banana with grape), which peels a `grape` off the third argument and wraps the result in `pear`, which is inert.
+ - The remaining rules all return strict subterms.
+ - Since `Trace` is inductively defined and finite, and each step either returns a strict subterm or produces an inert constructor, all reduction sequences terminate.
+
+ Actually, the argument about rule 8 producing an irreducible term is true only without congruence or if `a` and `b` are irreducible. With congruence, `mango (peach a b)` might have reducible subterms, but as we showed with the weight function, the whole term still decreases.
+
+ So my assessment: YES, strong normalization can be established. The system is strongly normalizing. The proof can be done by assigning a natural number weight to each term that strictly decreases with every rewrite step. The weight is defined by interpreting `banana b s n` as `w(b) + w(n)*(w(s)+2)` and `cherry a b` as `w(a)+w(b)+3`, etc., which handles the size-increasing rules by ensuring the elimination of `cherry` or the peeling of `grape` from `banana` dominates any subterm duplication.
+
+ Let me double-check if there's any hidden issue with the Lean definition. The `Step` relation is defined inductively. Strong normalization is the property that there is no infinite chain `t0 -> t1 -> t2 -> ...`. In Lean, we would prove `∀ t, Acc (flip Step) t` or equivalently `∀ t, ¬∃ f, f 0 = t ∧ ∀ i, Step (f i) (f (i+1))`.
+
+ Given the weight function `w` and the proof that `∀ t u, Step t u → w t > w u`, we can conclude SN because `>` on `Nat` is well-founded.
+
+ Even more simply: since `w` maps into `Nat`, and each step decreases `w`, we cannot have infinitely many steps.
+
+ So the answer is definitely yes.
+
+ Let me consider if there is any subtlety with the `a ≠ b` in `R_cherry_diff`. The rule requires a proof of inequality. In Lean, if `a = b`, then `a ≠ b` is false, so the constructor `R_cherry_diff` cannot be applied. This means `cherry` is always reducible: either by `R_cherry_refl` or `R_cherry_diff`. So no stuck `cherry` terms. But for SN, that's fine.
+
+ Is there any issue with decidability of equality? No, because the relation `Step` is defined constructively; we don't need to decide equality to apply the rule, we just need a proof. In an infinite reduction sequence, each step must be justified. Since terms are finite and equality is decidable for this concrete inductive type, there's no issue.
+
+ Final check: could `w` fail to be well-defined? No, it's a straightforward recursive function on the inductive type `Trace`.
+
+ Therefore, the assessment is: **Yes**, strong normalization can be established from the calculus alone.
+
+ Let me write a concise explanation.
+
+ Actually, I realize that the prompt says "Give your raw assessment". I should state clearly: YES, the system is strongly normalizing.
+
+ And explain: because there exists a measure function (weight) into the natural numbers that strictly decreases with every rewrite step. The measure can be defined recursively on traces:
+ - |plum| = 1
+ - |grape t| = |t| + 1
+ - |mango t| = |t| + 1
+ - |peach t₁ t₂| = |t₁| + |t₂| + 1
+ - |pear t₁ t₂| = |t₁| + |t₂| + 1
+ - |banana b s n| = |b| + |n|·(|s|+2)
+ - |cherry a b| = |a| + |b| + 3
+
+ One verifies each rule reduces this weight. Since the ordering on natural numbers is well-founded, no infinite reduction sequences exist. This uses only the presented syntax and rules, with no imported axioms.
+
+ Even without explicit arithmetic, one can note that all rules either return a strict subterm (decreasing structural size) or, in the case of `banana` with `grape`, recurse on a structurally smaller argument while wrapping the result in the inert `pear` constructor, and in the case of `cherry a b` (with a≠b), replace the redex with a `mango`-headed term that is irreducible at the root. Thus every rewrite sequence terminates.
+
+ Wait, the argument about `mango` being irreducible at the root is true for root steps, but if we assume standard congruence, `a` or `b` inside `mango (peach a b)` could still reduce. However, the weight argument handles that. Since the question mentions "first-order rewrite calculus", they might expect the standard congruence closure. So I should mention the weight function explicitly to cover that case.
+
+ But looking at the Lean code, there is NO congruence. So strictly speaking, the system as written is root-only. In that case, the argument is even simpler: every root rewrite either produces a normal form (`plum`, `pear ...`, or `mango (peach ...)`) or returns a strict subterm. Since terms are finite, only finitely many subterm-returning steps can occur in sequence, and once a normal-form producer is reached, rewriting stops. Thus every reduction sequence has length at most the depth of the initial term.
+
+ I'll present both angles: the literal system has no congruence rules, so SN is immediate. But even under the standard interpretation with congruence, SN holds via the weight argument.
+
+ Actually, to be safe and precise: the prompt asks if SN can be established "from the presented calculus alone". The calculus presents only root rules. So the strict answer is: yes, trivially, because each root step either produces a constructor with no rules (`pear`, `plum`, or `mango` with non-`grape`) or yields a strict subterm, and with only root reduction there is no way to reintroduce a redex above. The maximum reduction depth is bounded by the size of the initial term.
+
+ But to be thorough, I should note that if one imputes the standard contextual closure of a rewrite system, SN still holds via a weight function.
+
+ I think the best answer is to say YES, and give the weight argument, since it's robust and doesn't rely on the absence of congruence rules.
+
+ Let me just verify once more that `banana` weight works with nested bananas. Suppose `b` itself is a banana. The weight of `b` is whatever. The rule `banana b s plum -> b` discards `s` and `plum`. Weight decreases because we drop the `+ w(s)+2` term. Good.
+
+ And `banana b s (grape n) -> pear s (banana b s n)`. The multiplication by `w(s)+2` handles the duplication of `s` inside the nested banana. Because `w(s)` appears in the coefficient, duplicating `s` in the output is offset by the decrease from `w(grape n) = w(n)+1` to `w(n)`.
+
+ Everything checks out.
+
+ So my final answer: Yes, the system is strongly normalizing. The proof uses a weight function into natural numbers that strictly decreases with each rewrite step. This requires no external axioms.

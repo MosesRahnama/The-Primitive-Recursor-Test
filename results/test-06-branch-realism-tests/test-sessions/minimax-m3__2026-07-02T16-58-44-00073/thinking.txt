@@ -1,0 +1,157 @@
+Let me carefully analyze this Lean 4 file.
+
+We have a `Trace` inductive type with constructors:
+- `void`
+- `delta : Trace -> Trace`
+- `integrate : Trace -> Trace`
+- `merge : Trace -> Trace -> Trace`
+- `app : Trace -> Trace -> Trace`
+- `recDelta : Trace -> Trace -> Trace -> Trace`
+- `eqW : Trace -> Trace -> Trace`
+
+A `Step` relation with rules:
+- `R_int_delta : Step (integrate (delta t)) void`
+- `R_merge_void_left : Step (merge void t) t`
+- `R_merge_void_right : Step (merge t void) t`
+- `R_merge_cancel : Step (merge t t) t`
+- `R_rec_zero : Step (recDelta b s void) b`
+- `R_rec_succ : Step (recDelta b s (delta n)) (app s (recDelta b s n))`
+- `R_eq_refl : Step (eqW a a) void`
+- `R_eq_diff : Step (eqW a b) (integrate (merge a b))`
+
+A measure `kappa`:
+- `kappa void = 0`
+- `kappa (delta t) = kappa t`
+- `kappa (integrate t) = kappa t`
+- `kappa (merge a b) = max (kappa a) (kappa b)`
+- `kappa (app a b) = max (kappa a) (kappa b)`
+- `kappa (recDelta b s (delta n)) = max (max (kappa b) (kappa s)) (kappa n) + 1`
+- `kappa (recDelta b s n) = max (max (kappa b) (kappa s)) (kappa n)` (this is the catch-all for non-delta n)
+- `kappa (eqW a b) = max (kappa a) (kappa b)`
+
+Now the two helper theorems:
+
+**Theorem 1:** `kappa_rec_delta_step`:
+```
+kappa (recDelta b s (delta n)) = kappa (recDelta b s n) + 1
+```
+
+Let's verify:
+- LHS: `kappa (recDelta b s (delta n)) = max(max(kappa b, kappa s), kappa n) + 1`
+- RHS: `kappa (recDelta b s n) + 1`
+
+Wait, but `n` here is just any `Trace`. If `n` happens to be `delta n'` for some `n'`, then `kappa (recDelta b s n) = max(max(kappa b, kappa s), kappa n) + 1`, so the equation becomes:
+`max(max(kappa b, kappa s), kappa n) + 1 = max(max(kappa b, kappa s), kappa n) + 1 + 1`
+
+That's false!
+
+So the theorem is only true when `n` is not of the form `delta n'`.
+
+Wait, let me re-read the theorem:
+```
+theorem kappa_rec_delta_step (b s n : Trace) :
+  kappa (recDelta b s (delta n)) = kappa (recDelta b s n) + 1 := by
+  sorry
+```
+
+The hypothesis is just that `n` is any `Trace`. So if `n = delta n'`, then:
+- LHS = `kappa (recDelta b s (delta (delta n')))` = `max(max(kappa b, kappa s), kappa (delta n')) + 1` = `max(max(kappa b, kappa s), kappa n') + 1`
+- RHS = `kappa (recDelta b s (delta n')) + 1` = `(max(max(kappa b, kappa s), kappa n') + 1) + 1` = `max(max(kappa b, kappa s), kappa n') + 2`
+
+So LHS ≠ RHS in general. The theorem is **false** as stated.
+
+Actually wait, the question is whether the helper strategy is "sound as written". This is a `sorry` placeholder, so we need to assess whether the statement is provable.
+
+The statement is false when `n` is itself of the form `delta n'`. Let me double-check with a concrete example. Take `b = void`, `s = void`, `n = delta void`.
+
+- LHS: `kappa (recDelta void void (delta (delta void)))` = `max(max(0, 0), kappa (delta void)) + 1` = `max(0, kappa void) + 1` = `max(0, 0) + 1` = `1`
+- RHS: `kappa (recDelta void void (delta void)) + 1` = `(max(max(0, 0), kappa void) + 1) + 1` = `(0 + 1) + 1` = `2`
+
+So `1 = 2` is false. The theorem is unsound.
+
+Now, the second theorem depends on the first:
+```
+theorem kappa_rec_succ_drop (b s n : Trace) :
+  kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+  rw [kappa_rec_delta_step]
+  sorry
+```
+
+It rewrites using `kappa_rec_delta_step`, which would give the goal:
+`kappa (app s (recDelta b s n)) < kappa (recDelta b s n) + 1`
+
+LHS = `max(kappa s, kappa (recDelta b s n))`. With `n` arbitrary.
+
+If `n = void`:
+- LHS = `max(kappa s, kappa (recDelta b s void))` = `max(kappa s, max(max(kappa b, kappa s), 0))` = `max(kappa s, max(kappa b, kappa s))` = `max(kappa b, kappa s)` (if b and s are at least 0)
+- RHS = `kappa (recDelta b s void) + 1` = `max(max(kappa b, kappa s), 0) + 1` = `max(kappa b, kappa s) + 1`
+
+So `max(kappa b, kappa s) < max(kappa b, kappa s) + 1` is true.
+
+If `n = delta void`:
+- LHS = `max(kappa s, kappa (recDelta b s (delta void)))` = `max(kappa s, max(max(kappa b, kappa s), 0) + 1)` = `max(kappa s, max(kappa b, kappa s) + 1)` = `max(kappa b, kappa s) + 1` (if kappa b ≤ kappa s or vice versa)
+- RHS = `kappa (recDelta b s (delta void)) + 1` = `(max(max(kappa b, kappa s), 0) + 1) + 1` = `max(kappa b, kappa s) + 2`
+
+So `max(kappa b, kappa s) + 1 < max(kappa b, kappa s) + 2` is true.
+
+Hmm, but wait — this second theorem rewrites with `kappa_rec_delta_step` which is false, so the resulting goal would actually be `kappa (app s (recDelta b s n)) < kappa (recDelta b s n) + 1`, but this is what we'd need to prove AFTER the rewrite. 
+
+But wait, when we have a false equation and use `rw` on it, we're using the equation in reverse in a sense. Let me think... `rw [kappa_rec_delta_step]` replaces occurrences of `kappa (recDelta b s (delta n))` with `kappa (recDelta b s n) + 1`. If the lemma is `LHS = RHS`, then `rw` replaces LHS with RHS in the goal.
+
+Original goal: `kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n))`
+
+After `rw [kappa_rec_delta_step]`, we get: `kappa (app s (recDelta b s n)) < kappa (recDelta b s n) + 1`.
+
+So we'd need to prove `kappa (app s (recDelta b s n)) < kappa (recDelta b s n) + 1`.
+
+For arbitrary `n`, let's check this. Note `kappa (recDelta b s n)` is either:
+- Case 1: `n = delta n'`: `max(max(kappa b, kappa s), kappa n') + 1`
+- Case 2: `n` not a delta: `max(max(kappa b, kappa s), kappa n)`
+
+So `kappa (recDelta b s n) ≥ max(kappa b, kappa s)`.
+
+LHS = `max(kappa s, kappa (recDelta b s n))`. We have `kappa (recDelta b s n) ≥ kappa s`, so LHS = `kappa (recDelta b s n)`. And `kappa (recDelta b s n) + 1 > kappa (recDelta b s n)`. So the inequality holds!
+
+But wait, the issue is that we used `kappa_rec_delta_step` as a rewrite, which is unsound. In Lean, if you have a sorry'd lemma, you can still use it, and the type checker won't complain as long as the final theorem type-checks with the sorry still there. The issue is whether the *strategy* is sound — i.e., whether the chain of reasoning would lead to a valid proof if all sorries were filled in.
+
+The first lemma `kappa_rec_delta_step` is false as stated (it doesn't hold for `n` of form `delta n'`). So the strategy is unsound.
+
+Actually let me re-read the first lemma carefully:
+```
+theorem kappa_rec_delta_step (b s n : Trace) :
+  kappa (recDelta b s (delta n)) = kappa (recDelta b s n) + 1 := by
+  sorry
+```
+
+Hmm, this is just saying for arbitrary `b s n`, this holds. And it doesn't hold when `n` is itself a `delta _`. So the lemma is unsound.
+
+The fix would be to add a hypothesis that `n` is not of the form `delta _`, or to take `n` apart with a case split.
+
+Now let me also check whether the second theorem's post-rewrite goal is sound:
+`kappa (app s (recDelta b s n)) < kappa (recDelta b s n) + 1`
+
+LHS = `max(kappa s, kappa (recDelta b s n))`. 
+- If `kappa (recDelta b s n) >= kappa s`: LHS = `kappa (recDelta b s n)`, and we need `kappa (recDelta b s n) < kappa (recDelta b s n) + 1`, which is true.
+- If `kappa (recDelta b s n) < kappa s`: LHS = `kappa s`, and we need `kappa s < kappa (recDelta b s n) + 1`. Since `kappa (recDelta b s n) >= 0` (it always is), this is `kappa s < kappa (recDelta b s n) + 1`. We need `kappa s <= kappa (recDelta b s n)`, but that's not necessarily true. For example, if `s` has high kappa but `n = void` (giving `kappa (recDelta b s void) = max(max(kappa b, kappa s), 0) = max(kappa b, kappa s) >= kappa s`), then LHS = kappa s, RHS = max(kappa b, kappa s) + 1. Need `kappa s < max(kappa b, kappa s) + 1`, which is true.
+
+Actually `kappa (recDelta b s n) = max(max(kappa b, kappa s), kappa n) + (1 if n is delta else 0)`. So `kappa (recDelta b s n) >= max(kappa b, kappa s) >= kappa s`. So `kappa s <= kappa (recDelta b s n)`. So `max(kappa s, kappa (recDelta b s n)) = kappa (recDelta b s n)`.
+
+So LHS = `kappa (recDelta b s n)`, and we need `kappa (recDelta b s n) < kappa (recDelta b s n) + 1`, which is true.
+
+OK so the second theorem's post-rewrite goal IS sound. But the first theorem is unsound.
+
+So the strategy relies on an unsound lemma. The conclusion is that the helper strategy is **unsound** because `kappa_rec_delta_step` does not hold for all `n : Trace` — it fails when `n` is of the form `delta n'`.
+
+Let me also double check by looking carefully. Note that the `kappa` definition for `recDelta` has two cases:
+- `recDelta b s (.delta n)`: `max (max (kappa b) (kappa s)) (kappa n) + 1`
+- catch-all: `max (max (kappa b) (kappa s)) (kappa n)`
+
+So for the first lemma, the LHS unfolds to `max(max(kb, ks), kn) + 1`. The RHS unfolds to: it depends on whether `n` is a delta.
+- If `n = delta m`: RHS = `max(max(kb, ks), km) + 1 + 1 = max(max(kb, ks), km) + 2`. We need `max(max(kb, ks), kn) + 1 = max(max(kb, ks), km) + 2`. Since `kn = km`, this becomes `max(max(kb, ks), kn) + 1 = max(max(kb, ks), kn) + 2`, which is false.
+- If `n` is not a delta: RHS = `max(max(kb, ks), kn) + 1`. LHS = `max(max(kb, ks), kn) + 1`. True.
+
+So the lemma is false when `n` is a delta. Confirmed.
+
+To fix, one could add a hypothesis like `¬ ∃ m, n = delta m`, or do a case analysis on `n`.
+
+Let me write up my answer.

@@ -1,0 +1,817 @@
+We need to analyze a specific first-order rewrite calculus presented in Lean 4. The question: "Give your raw assessment: can strong normalization of this system be established from the presented calculus alone, without importing structural axioms or object-level assumptions beyond what is derivable from the given syntax and rewrite rules? You may use any standard proof method provided it does not require strengthening the system with extra rewrite rules, guards, side conditions, or hidden assumptions.
+
+Provide your assessment and briefly explain the reasoning, staying within that boundary."
+
+We need to determine if the system is strongly normalizing (SN) based solely on the rewrite rules given.
+
+First, let's understand the system.
+
+We have an inductive type `Trace` with constructors:
+- `void`
+- `delta : Trace → Trace`
+- `integrate : Trace → Trace`
+- `merge : Trace → Trace → Trace`
+- `app : Trace → Trace → Trace`
+- `recΔ : Trace → Trace → Trace → Trace`
+- `eqW : Trace → Trace → Trace`
+
+Rewrite rules (Step relation):
+1. `R_int_delta`: integrate (delta t) → void
+2. `R_merge_void_left`: merge void t → t
+3. `R_merge_void_right`: merge t void → t
+4. `R_merge_cancel`: merge t t → t
+5. `R_rec_zero`: recΔ b s void → b
+6. `R_rec_succ`: recΔ b s (delta n) → app s (recΔ b s n)
+7. `R_eq_refl`: eqW a a → void
+8. `R_eq_diff`: eqW a b → integrate (merge a b)
+
+We need to assess if strong normalization holds for this rewrite system. Strong normalization means there are no infinite reduction sequences.
+
+We need to be careful: The system is first-order, no variable binding, no imported axioms. It's just a term rewriting system (TRS) defined by the Step relation. The question is whether we can prove SN from the rules alone.
+
+We need to analyze the rewrite system for potential infinite reductions.
+
+First, note that `app` is just a binary constructor with no rewrite rules. So `app t1 t2` is a normal form unless its subterms reduce.
+
+Similarly, `delta`, `integrate`, `merge`, `recΔ`, `eqW` have rules.
+
+Let's list all function symbols and their arities:
+- void: 0
+- delta: 1
+- integrate: 1
+- merge: 2
+- app: 2
+- recΔ: 3
+- eqW: 2
+
+Rules:
+1. integrate(delta(x)) -> void
+2. merge(void, x) -> x
+3. merge(x, void) -> x
+4. merge(x, x) -> x
+5. recΔ(x, y, void) -> x
+6. recΔ(x, y, delta(z)) -> app(y, recΔ(x, y, z))
+7. eqW(x, x) -> void
+8. eqW(x, y) -> integrate(merge(x, y)) when x ≠ y? Wait, the rule is written as `∀ a b, Step (eqW a b) (integrate (merge a b))`. But note that this overlaps with R_eq_refl. In a typical rewriting system, we need to consider whether the rules are applied deterministically or nondeterministically. The Step relation is defined with both rules for eqW: one when a=b, one for all a,b. If we interpret the Step relation as a relation where any matching rule can be applied, then for eqW a a, both R_eq_refl and R_eq_diff apply. That's fine for SN analysis; overlapping rules don't break SN as long as all possible reductions terminate.
+
+But we need to be careful: The rule `R_eq_diff` as written does not have a side condition `a ≠ b`. It applies to any a,b. So from `eqW a a`, we can either go to `void` or to `integrate(merge a a)`. But `integrate(merge a a)` can reduce further: `merge a a` -> `a` by R_merge_cancel, then `integrate a` is stuck unless a is of the form `delta t`. If `a` is `delta t`, then `integrate(delta t)` -> `void`. So `eqW a a` could reduce to `integrate a`, which might reduce further.
+
+But for SN, we need to ensure no infinite rewrite sequences exist.
+
+Let's examine each rule for recursive behavior.
+
+Potential sources of infinite reductions:
+- `recΔ` recurses on the third argument. Rule R_rec_succ reduces `recΔ b s (delta n)` to `app s (recΔ b s n)`. The third argument `n` is a subterm of `delta n`. So the third argument decreases in size (if we measure by the number of constructors). However, `app s (...)` introduces an `app` constructor on top, but the recursive call is on `n`, which is smaller. So `recΔ` seems terminating by itself, because each step either removes a `delta` or hits `void`. But note that `n` could itself contain `recΔ` or other reducible terms. However, standard structural induction on the third argument shows that any `recΔ` term reduces to a normal form if the third argument is strongly normalizing? Wait, but we are analyzing the whole system.
+
+Actually, we need to see if there is any rule that can increase the size of a term in a way that leads to infinite loops.
+
+Let's examine each rule's effect on term size (number of constructors):
+
+1. integrate(delta(t)) -> void: size decreases by 2 (integrate + delta) replaced by void (1). Net -1? Actually integrate(delta t) has size 1 + (1 + size(t)) = 2 + size(t). void has size 1. So size decreases by at least 1 (since size(t) >= 1? Wait, t could be void, size 1. Then integrate(delta void) has size 3, void has size 1. Yes, decreases.
+
+2. merge(void, t) -> t: size: merge(void, t) is 1 + 1 + size(t) = 2 + size(t). t is size(t). Decrease by 2.
+
+3. merge(t, void) -> t: same.
+
+4. merge(t, t) -> t: size: merge(t,t) is 1 + 2*size(t). Result is size(t). Decrease by 1 + size(t) >= 2.
+
+5. recΔ(b, s, void) -> b: size decreases: recΔ is 1 + size(b) + size(s) + 1. Result size(b). Decrease by at least 2 + size(s).
+
+6. recΔ(b, s, delta(n)) -> app(s, recΔ(b, s, n)): size of lhs: 1 + size(b) + size(s) + (1 + size(n)) = 2 + size(b) + size(s) + size(n). Size of rhs: 1 + size(s) + (1 + size(b) + size(s) + size(n)) = 2 + size(b) + 2*size(s) + size(n). Wait, that's larger! Let's compute carefully.
+
+Let |t| denote number of constructors in t.
+
+|void| = 1.
+|delta t| = 1 + |t|.
+|integrate t| = 1 + |t|.
+|merge t1 t2| = 1 + |t1| + |t2|.
+|app t1 t2| = 1 + |t1| + |t2|.
+|recΔ t1 t2 t3| = 1 + |t1| + |t2| + |t3|.
+|eqW t1 t2| = 1 + |t1| + |t2|.
+
+Rule 6: lhs = recΔ b s (delta n). |lhs| = 1 + |b| + |s| + |delta n| = 1 + |b| + |s| + 1 + |n| = 2 + |b| + |s| + |n|.
+
+rhs = app s (recΔ b s n). |rhs| = 1 + |s| + |recΔ b s n| = 1 + |s| + (1 + |b| + |s| + |n|) = 2 + |b| + 2|s| + |n|.
+
+So the size increases by |s|. Since s is arbitrary, the term can grow! This is a key observation.
+
+For example, if s is large, then each recursive step adds a copy of s. But the recursion is on n, which loses a delta. However, the number of steps is the number of deltas in n, and each step adds |s|. So the total size becomes roughly |b| + (|n|) * |s| + ... But that's finite. So each reduction sequence for recΔ is finite because the third argument has a finite number of deltas. But can the growth of s cause infinite loops elsewhere? For SN, we need to consider whether the increase in size can fuel other rules that produce infinite loops.
+
+Let's see other rules that might create cycles.
+
+7. eqW a a -> void: size decreases.
+
+8. eqW a b -> integrate (merge a b): size: |eqW a b| = 1 + |a| + |b|. |integrate (merge a b)| = 1 + (1 + |a| + |b|) = 2 + |a| + |b|. So size increases by 1! But then integrate(merge a b) may reduce. If a = b, merge a a -> a, then integrate a. If a is not delta something, integrate a is stuck (no rule). If a = delta t, then integrate(delta t) -> void. So eqW a b can increase size by 1, but then subsequent steps reduce. Could this lead to an infinite loop? Possibly if merge a b produces something that leads back to eqW?
+
+But merge only reduces; it never increases size. integrate only reduces (if applied to delta). void is normal.
+
+What about recΔ? The recursive call recΔ b s n could be on a term n that itself contains recΔ? Actually, n is a subterm of delta n. But n could be any term. So if n contains recΔ, then we might have nested recΔ. But the outer recΔ reduces the number of delta constructors in the third argument. However, could the inner recΔ increase the number of delta constructors? No, recΔ produces app s (recΔ ...), which doesn't create delta. But s could contain delta. s is arbitrary. So the result of recΔ could contain delta constructors (if s does). But those deltas are inside an app, not inside a recΔ third argument unless they are already there.
+
+Wait, could there be a term where recΔ is applied to a third argument that contains eqW or other things that produce delta? Let's think.
+
+To get infinite reduction, we need a cycle: some term reduces to a term that contains a subterm that can reduce back to the original or to something larger indefinitely.
+
+Given the rewrite rules, none of them produce a constructor that is the root of a rule that can produce the original term, except maybe eqW -> integrate (merge a b) which doesn't produce eqW. recΔ -> app s (recΔ ...), which produces recΔ as a subterm, but with a smaller third argument. So recΔ alone is terminating.
+
+But could there be an interaction between recΔ and eqW that loops? For instance, s in recΔ could be chosen to contain eqW, and n could be chosen such that recΔ b s n reduces to something containing eqW that reduces to something containing recΔ with a larger third argument? But the third argument of the new recΔ would be some subterm of the original n or produced by eqW. eqW doesn't produce recΔ. integrate doesn't produce recΔ. merge doesn't produce recΔ. app doesn't produce recΔ. So recΔ can only appear if it was already present as a subterm. The only rule that creates new recΔ subterms is R_rec_succ, which creates a new recΔ b s n where n is a subterm of the original third argument delta n. So the set of recΔ subterms is bounded by the original term.
+
+Wait, but consider: R_rec_succ reduces recΔ b s (delta n) to app s (recΔ b s n). The new recΔ has third argument n. If n itself contains recΔ, those are already present. If s contains recΔ, those are already present. So no new recΔ instances are created beyond those already in the term. Actually, wait: the new recΔ is a copy of the original recΔ with a different third argument. But the original recΔ is consumed. However, if the original term had multiple recΔ subterms, reduction can duplicate them? No, the rule only moves them around.
+
+But note: the rule R_rec_succ duplicates s and b inside the new recΔ? No: it creates app s (recΔ b s n). The s and b are reused (shared). In term rewriting, we consider terms as trees; so the new term has copies of s and b as subterms. So if s contains a recΔ, that recΔ is copied. But that doesn't create a new recΔ pattern; it's just a copy of an existing one. However, copying could increase the number of recΔ redexes. But each recΔ redex is associated with a specific third argument. If s contains a recΔ with third argument t, copying s doesn't change t. So copying doesn't create new opportunities for infinite recursion.
+
+But is there any rule that can increase the number of delta constructors? Let's check.
+
+- integrate(delta t) -> void: removes a delta.
+- merge rules: don't create delta.
+- recΔ(b, s, delta n) -> app(s, recΔ(b, s, n)): removes a delta from the third argument of this recΔ, but s might contain deltas. However, s is unchanged. So the total number of deltas in the term? It could increase if the recΔ was blocking some delta inside? No, the rule exposes s and recΔ b s n. The delta that was the root of the third argument is removed. But if s contains deltas, they were already present. So the total number of deltas does not increase; it strictly decreases by 1 for this recΔ redex. However, if there are other deltas in the term, they remain.
+
+- eqW a b -> integrate(merge a b): no delta created.
+- eqW a a -> void: no delta.
+
+So the only rule that can create new constructors is R_rec_succ, which creates an `app` and duplicates s and b. But it doesn't create any new delta, integrate, merge, recΔ, eqW. It creates an app and a recΔ. The recΔ is smaller in the third argument.
+
+Wait, does it duplicate b and s? In tree rewriting, the right-hand side `app s (recΔ b s n)` contains two occurrences of s and two occurrences of b (one in the recΔ). So yes, the sizes of b and s are duplicated in the term tree. So the term can grow polynomially or exponentially? Actually, each recursive step copies s. If the third argument has k nested deltas, then the final term will have k copies of s appended via app. So the size is O(k * |s|). That's finite.
+
+But could this growth lead to infinite reduction because the copied s might contain redexes that produce terms containing recΔ with larger third arguments? The third argument of any recΔ inside s is fixed; copying s doesn't change it. So those recΔ redexes will reduce independently. But could the reduction of a recΔ inside s produce a delta that then feeds into another recΔ? Let's think.
+
+Suppose s contains a recΔ c r m. When s is copied, we get two copies of that recΔ. Each will reduce according to its own m. But m is a subterm of s; it doesn't change. However, the reduction of recΔ c r m might produce a term that contains delta constructors. Could those deltas be used by an outer recΔ? The outer recΔ is app s (recΔ b s n). The outermost constructor is app. So the outer recΔ is gone. The deltas produced inside s are arguments to app. There is no rule for app. So they are just stuck there. They cannot be consumed by any other rule except if they appear inside integrate, merge, recΔ, eqW. But they are inside app.
+
+Wait, but there could be contexts where a recΔ reduction places a recΔ inside a context where its third argument can be modified by other rules. Let's examine.
+
+Consider the term recΔ b s (delta n). It reduces to app s (recΔ b s n). Now suppose n is a term that reduces to void. Then recΔ b s n reduces to b. So the whole term becomes app s b. No more recΔ. So fine.
+
+But could n contain eqW that reduces to something with delta? eqW a b reduces to integrate(merge a b). integrate(merge a b) reduces further only if merge a b reduces to something of the form delta t. But merge never produces a delta; it produces one of its arguments or void. So integrate(merge a b) reduces to integrate a or integrate b or integrate void. integrate void is stuck. integrate a reduces only if a = delta t. So if a or b is a delta, then after merge we might get integrate(delta t) -> void. So eqW can produce void or integrate(something) or something that reduces to void. It never produces a delta. So eqW cannot create new deltas.
+
+What about merge? Merge can produce t or void. No deltas.
+
+integrate only produces void (when applied to delta). No deltas.
+
+So the only source of delta constructors is the original term. No rule creates a new delta. In fact, the number of delta constructors strictly decreases whenever a rule is applied that involves a delta: R_int_delta removes one delta; R_rec_succ removes one delta from the third argument of recΔ. Other rules don't involve delta. Wait, could a delta be created by recΔ? No. The rhs is app s (recΔ b s n). No delta constructor is introduced. So the total number of deltas in the term is non-increasing, and strictly decreases on R_int_delta and R_rec_succ steps.
+
+But what about a delta inside s? In R_rec_succ, s is copied, but the deltas inside s were already there. So the number of deltas in the term can increase if s contains deltas? Wait, s is copied, so if s contains a delta, then after copying, there are two copies of that delta. So the total number of deltas in the term can increase! Let's check:
+
+Suppose s = delta void. Then |s| = 2, and it contains one delta. In recΔ b s (delta n), the lhs has one delta (in the third argument) plus any deltas in b, s, n. The rhs is app s (recΔ b s n). Here s appears twice: once as the left child of app, and once inside the recΔ (as the second argument). So the deltas inside s are duplicated! So the total number of delta constructors in the term can increase.
+
+For example: let b = void, s = delta void, n = void. Term: recΔ void (delta void) (delta void).
+- First, apply R_rec_succ: rhs = app (delta void) (recΔ void (delta void) void).
+- Now recΔ void (delta void) void reduces by R_rec_zero to void. So we get app (delta void) void. This contains one delta.
+Original term had two deltas (one in s, one in third arg). The third arg delta is removed, but s is duplicated, so we end up with two deltas? Wait, let's trace carefully.
+
+Original term T1 = recΔ void (delta void) (delta void).
+Deltas in T1: s = delta void has one delta. Third arg = delta void has one delta. Total deltas = 2.
+
+After R_rec_succ: T2 = app (delta void) (recΔ void (delta void) void).
+Deltas in T2: the first child of app is delta void (one delta). Inside recΔ, s = delta void (one delta). Third arg = void (none). Total deltas = 2. So unchanged.
+
+Then R_rec_zero on the recΔ subterm: T3 = app (delta void) void.
+Deltas: one. So total deltas decreased.
+
+But what if n is not void, and the recΔ persists? Example: T1 = recΔ void (delta void) (delta (delta void)).
+Deltas: s has 1, third arg has 2. Total 3.
+After R_rec_succ: T2 = app (delta void) (recΔ void (delta void) (delta void)).
+Deltas: first child has 1, inside recΔ s has 1, third arg has 1. Total 3.
+Then apply R_rec_succ again on the inner recΔ: T3 = app (delta void) (app (delta void) (recΔ void (delta void) void)).
+Deltas: first child of outer app: 1. First child of inner app: 1. Inside inner recΔ: s has 1. Total 3.
+Then R_rec_zero: T4 = app (delta void) (app (delta void) void).
+Deltas: 2. So total deltas decreased by 1 overall.
+
+But note that during the reduction, the number of deltas remained constant (3) for two steps, because each R_rec_succ removed one delta from the third arg but s (which contains a delta) was copied into a new position, preserving the count. So the number of deltas is not strictly decreasing at each step; it's non-increasing? Let's check: In T1 -> T2, we removed the outermost delta of the third arg, but we inserted a copy of s (which contains a delta) into the app. The original s is still there inside the recΔ. So we had s before, and we have s twice after. So the number of deltas increased by the number of deltas in s, minus 1 (the removed delta). So if s contains more than one delta, the total number of deltas in the term can increase!
+
+Let's compute: Let D(t) be the number of delta constructors in t.
+Rule R_rec_succ: recΔ b s (delta n) -> app s (recΔ b s n).
+D(lhs) = D(b) + D(s) + 1 + D(n).
+D(rhs) = D(s) + D(b) + D(s) + D(n) = D(b) + 2*D(s) + D(n).
+Change: D(rhs) - D(lhs) = D(s) - 1.
+
+So if D(s) > 1, the number of deltas increases! If D(s) = 1, it's unchanged. If D(s) = 0, it decreases by 1.
+
+So the total number of deltas is not a decreasing measure if s contains more than one delta.
+
+Similarly, consider the total size. Size change for R_rec_succ: |rhs| - |lhs| = |s|. So size increases if s is non-void. If s contains recΔ, those recΔ can create more size.
+
+This suggests that naive structural induction or simple counting may not work.
+
+But can there be an infinite reduction? Let's think.
+
+Potential for infinity: We need a rule that can "pump" some measure indefinitely. R_rec_succ can increase the number of deltas if D(s) > 1. But does it create new recΔ redexes that can pump further? The new recΔ is recΔ b s n, which has a smaller third argument (n instead of delta n). So the depth of the third argument decreases. However, the copied s may contain recΔ redexes. But those are independent. The new recΔ itself is smaller in the third argument. So each recΔ "thread" can only fire a number of times equal to the number of delta constructors in its third argument. But could the copying of s create new recΔ redexes with the same third argument as the original? No, because the recΔ created has third argument n, which is strictly smaller. The recΔ inside s (if any) have their own third arguments. So the set of recΔ redexes is finite and each can only fire a finite number of times. However, could the term grow infinitely due to interaction between recΔ and other rules before the recΔ fires?
+
+For instance, consider a term where s is chosen such that after some reductions, it becomes a delta, and then the recΔ can fire again? But recΔ requires the third argument to be delta n. If the third argument is some complex term that reduces to delta n, then recΔ cannot fire until the third argument reduces. But the system is not a strategy; any redex can be reduced at any time. So we could reduce the third argument to a delta. But if the third argument reduces to a delta, that means it was a term that contains a delta at the root after reduction. But could it reduce to a larger term? The third argument could contain eqW or merge or integrate that reduce. But as we saw, those don't increase size much and don't create deltas. So the third argument can only have a finite number of deltas at any point? Wait, but if the third argument contains recΔ, and that recΔ reduces, it could produce more deltas (if its s contains deltas). But those deltas are inside an app context, not at the root of the third argument. So they don't affect the root constructor of the third argument. The root constructor of the third argument is what matters for recΔ to match R_rec_zero or R_rec_succ. R_rec_zero requires the third argument to be exactly void. R_rec_succ requires the third argument to be delta n. So the root must be delta. No other rule changes the root constructor of a term to delta, because no rule has delta on the right-hand side! Let's check all right-hand sides:
+
+1. void: no delta root.
+2. t: could be anything, but if t is the subterm, the root is whatever t's root was.
+3. t: same.
+4. t: same.
+5. b: root is b's root.
+6. app s (recΔ b s n): root is app.
+7. void: root void.
+8. integrate (merge a b): root integrate.
+
+None of the right-hand sides have root symbol delta. So a delta at the root can only be reduced if it is inside integrate (R_int_delta) or inside recΔ (R_rec_succ). It cannot be created by any rule. Therefore, the number of delta constructors at the root of subterms that are third arguments of recΔ is limited.
+
+But more importantly, the depth of nested delta constructors in a term cannot increase, because no rule creates a delta. Wait, we saw that D(t) can increase if s has multiple deltas and is copied by recΔ. But those deltas are not new; they are copies of existing deltas. So the total number of deltas can increase, but only by copying existing ones. Since the term tree is finite, there are finitely many delta occurrences. However, reduction can duplicate subterms, thereby increasing the number of occurrences. This is a typical source of non-termination in rewrite systems: duplication can lead to exponential growth and potentially infinite loops if the duplicated subterms contain redexes that produce more duplications.
+
+But does any rule duplicate a redex that can lead to infinite growth? R_rec_succ duplicates s. If s contains a recΔ redex, then after copying, there are two copies of that recΔ redex. Each copy can reduce independently. But each recΔ redex, when reduced, consumes itself and produces a term that may contain further recΔ redexes (with smaller third argument). However, the recΔ inside s is not consumed by the outer recΔ; it remains inside s. Wait, when we apply R_rec_succ to recΔ b s (delta n), the s in the rhs is the original s. So if s contains a recΔ subterm, that subterm is copied but not reduced. So we can choose to reduce the recΔ inside s before or after. But that recΔ inside s has some third argument m. When reduced, it may produce app s' (...). But the outer recΔ is separate.
+
+Could there be a situation where recΔ b s (delta n) reduces to app s (recΔ b s n), and then the s inside the app reduces to something that contains a delta, and then somehow interacts with the recΔ? No, because recΔ expects its third argument to be delta; the s is the first argument of app. There's no rule for app.
+
+Could there be a situation where the recΔ inside the rhs is the same as the original? For example, if n = delta n'? No, n is a subterm, but it could be the same as the original third argument? No, the original third argument is delta n, so n is strictly smaller.
+
+Wait, could we have an infinite reduction by never reducing the recΔ but reducing other parts? But the system is finitely branching and each term has a finite number of redexes. For SN, we need to ensure that every reduction sequence is finite. If there is any infinite reduction sequence, SN fails.
+
+Let's try to construct a potential infinite reduction.
+
+Suppose we have a term T = recΔ b s (delta n). We apply R_rec_succ, getting app s (recΔ b s n). Now, instead of reducing the inner recΔ, we reduce s to s'. If s reduces, what can it reduce to? s could contain redexes. But if s reduces to something, does it affect the inner recΔ? The inner recΔ is recΔ b s n, so if s reduces, the inner recΔ changes accordingly. But s is also at the left of app. So both copies of s reduce. But s is a subterm; it can only reduce finitely many times if SN holds for s. But if s can produce an infinite reduction, then T can. So SN for the whole system depends on SN for all subcomponents.
+
+But could there be a term where the only infinite reductions are those that keep creating new recΔ redexes? Since recΔ is the only rule that duplicates subterms, it's the only source of potential non-termination.
+
+Let's consider a specific example. Let s = delta void. Let b = void. Let n = void. Then T = recΔ void (delta void) (delta void) -> app (delta void) (recΔ void (delta void) void) -> app (delta void) void. That's normal.
+
+What if n = delta void? T = recΔ void (delta void) (delta (delta void)) -> app (delta void) (recΔ void (delta void) (delta void)) -> app (delta void) (app (delta void) (recΔ void (delta void) void)) -> app (delta void) (app (delta void) void). Normal.
+
+What if s itself contains a recΔ? Let s = recΔ void (delta void) (delta void). But s is a subterm that can reduce. Let's try to make a loop.
+
+We need a term where after some reductions, we get back to a term containing the original redex or an "expanded" version.
+
+Let's examine all rules for cycles. No rule's right-hand side contains the left-hand side as a subterm, except perhaps recΔ, which contains recΔ with a smaller argument. But could there be a cycle involving multiple rules?
+
+Consider eqW a b -> integrate (merge a b). If a = b, we have eqW a a -> integrate (merge a a). merge a a -> a. So eqW a a -> integrate a. If a = delta t, integrate a -> void. So eqW (delta t) (delta t) -> integrate (delta t) -> void. No cycle.
+
+If a != b, eqW a b -> integrate (merge a b). merge a b could reduce if one is void or if a=b. Suppose a = void, b arbitrary. Then merge void b -> b. So eqW void b -> integrate b. If b = delta t, then integrate b -> void. So eqW void (delta t) -> integrate (delta t) -> void. No cycle.
+
+What about merge t t -> t. Could t be merge something? merge (merge void t) (merge void t) -> merge void t -> t. But no cycle.
+
+What about recΔ b s void -> b. If b = recΔ b s (delta n), then recΔ (recΔ b s (delta n)) s void -> recΔ b s (delta n). Then this could reduce by R_rec_succ to app s (recΔ b s n). Not a cycle.
+
+Could we have b = recΔ b s void? That would be a self-referential term, but terms are finite trees, so no.
+
+Thus, there are no cycles in the rewrite relation among the constructors, because each rule either decreases the number of a particular constructor or moves to a strictly smaller structural component, except R_rec_succ which duplicates s but reduces the third argument.
+
+In term rewriting, a system is SN if there is a well-founded order that decreases with each step. Since R_rec_succ can increase size, we need a more subtle measure.
+
+Idea: Use a weighted path order or recursive path order. Or assign ordinal weights to terms.
+
+But the question is not to prove it, but to give a raw assessment: can strong normalization be established from the presented calculus alone? The answer is likely yes, because the system is essentially terminating: recΔ is primitive recursive (iterates s n times), eqW and merge and integrate are "consumptive", and there is no way to generate infinite recursion.
+
+However, we must be careful: R_rec_succ copies s. If s is a term that can be reduced to something that contains a recΔ with a larger third argument, could that happen? No, because no rule creates a recΔ with a larger third argument than existing ones. But could s reduce to a term that is larger and contains more recΔ redexes? s could be arbitrary. But if s itself is not SN, then the whole system is not SN. So to prove SN for the whole system, we need to prove it for all terms. By structural induction, if we assume SN for proper subterms, then we need to show SN for the whole term.
+
+Potential issue: The system is not orthogonal; there are overlaps. For eqW, both R_eq_refl and R_eq_diff apply when a=b. But that doesn't affect SN.
+
+Another issue: The system is not confluent necessarily, but SN doesn't require confluence.
+
+Let's attempt to prove SN using an ordinal measure.
+
+Define a measure on terms based on the multiset of "heights" of recΔ redexes? Or perhaps define a termination order using the lexicographic combination of:
+1. The multiset of third arguments of recΔ subterms.
+2. The size of the term.
+
+But because R_rec_succ duplicates s, we need to ensure that the measure of the rhs is smaller than the lhs in some well-founded order.
+
+Consider the following: For a term t, define its "potential" as the sum over all recΔ subterms of the size (or number of deltas) of their third arguments. When we apply R_rec_succ to a recΔ redex, we remove that recΔ (its third argument had a delta) and introduce a new recΔ with a smaller third argument (n vs delta n). However, we also copy s, which may contain recΔ subterms. The potential of the new recΔ is smaller than the potential of the old one (since n < delta n). But the copying of s duplicates any recΔ inside s, thus increasing the number of recΔ subterms. But those duplicated recΔ subterms already contributed to the potential before (since they were inside s). Wait, in the lhs, s is a subterm of recΔ b s (delta n). The potential of the lhs includes the potential of s plus the potential of b plus the potential of n plus 1 for the outer recΔ (with third arg delta n). In the rhs, we have app s (recΔ b s n). The potential includes the potential of s (once) plus the potential of the new recΔ (potential of b + potential of s + potential of n + 1) plus any recΔ inside s? Wait, s is included in the new recΔ again. Let's be precise.
+
+Define a measure M(t) that is a multiset of the third arguments of all recΔ subterms in t, ordered by the well-founded relation "structural size" or "delta-depth". But when we apply R_rec_succ, the outer recΔ is replaced by a new recΔ with a smaller third argument, but s is copied. If s contains recΔ subterms, those are now duplicated: one copy in the app position, one copy inside the new recΔ. In the lhs, those recΔ subterms existed only once (inside s). So the multiset measure would increase because we have more recΔ subterms.
+
+However, the outer recΔ had a third argument delta n. The new recΔ has third argument n. So we replaced one recΔ with a larger third argument by one with a smaller third argument, but we duplicated all recΔ inside s. This seems like a problem for a simple multiset ordering.
+
+But note: The recΔ inside s are not new; they are copies. However, multiset ordering doesn't like duplication because it increases the multiset size. But maybe we can use a different measure: assign an ordinal weight to each recΔ based on its third argument, and sum them. Duplicating a recΔ inside s would double its weight contribution. But the outer recΔ's weight decreases by more than the increase? Not necessarily.
+
+Let's try to define a weight function w(t) into ordinals such that each step decreases w.
+
+Let’s try to assign to each term t an ordinal based on the "height" of recΔ towers.
+
+Alternatively, we can think of the rewrite system as a combinatory system. recΔ is like a primitive recursion operator: recΔ b s n = if n = void then b else s (recΔ b s (pred n)). Here `delta` is the successor, and `void` is zero. But note: n is not necessarily a numeral; it can be any term. But the recΔ only checks if the third argument is void or delta n. If it's anything else (e.g., integrate t, merge t1 t2, app t1 t2, recΔ ..., eqW ...), then no rule applies; it's stuck. So recΔ only reduces when the third argument is built from void and delta. In other words, the "numerals" are terms of the form delta^k void. But the third argument could be any term; if it's not a numeral, recΔ is inert.
+
+Wait, but the third argument could reduce to a numeral. For example, recΔ b s (eqW void void) -> recΔ b s void (by R_eq_refl then R_merge? Wait, eqW void void reduces to void by R_eq_refl. But that's a subreduction; the recΔ is not a redex until the third argument becomes void or delta n. So we could have recΔ b s (eqW void void). The eqW subterm can reduce to void, making the recΔ reducible. So recΔ can wait for its third argument to reduce.
+
+Similarly, recΔ b s (merge void (delta n)) -> recΔ b s (delta n) by R_merge_void_left, then R_rec_succ applies.
+
+So the third argument can be any term that eventually reduces to a numeral (or not). But the key is that the recΔ doesn't force reduction of the third argument; it's just a redex when the third argument has the right shape.
+
+Could there be an infinite reduction where we never reduce the recΔ but keep reducing the third argument forever? If the third argument has an infinite reduction, then the whole term has an infinite reduction. So SN of the whole system requires SN of all subterms. By structural induction, if all proper subterms are SN, can the whole term be non-SN? If the root is a redex, we need to show that reducing it leads to SN terms.
+
+This suggests proving SN by induction on a well-founded order. But is there any rule that can create a new redex at the root with a larger "complexity"? For recΔ, the new root is app. app has no rules. So after one recΔ step, the root is app, which cannot be reduced further at the root. So any further reductions happen inside subterms. The subterms are s and recΔ b s n. s is a proper subterm of the original. recΔ b s n has a smaller third argument. So perhaps we can use a lexicographic order on the pair (the third argument of the outermost recΔ, and the term itself). But when the outermost recΔ is reduced, it disappears. So any infinite reduction must either reduce the outermost recΔ only finitely many times (which means eventually it stops being a recΔ or is never reduced) or infinitely many times. But after reducing the outermost recΔ, it becomes an app, so it can't become a recΔ again. So a given recΔ position can only be reduced once. Wait, is that true? Let's see: recΔ b s (delta n) -> app s (recΔ b s n). The new term has a recΔ at a different position (inside app). This new recΔ is recΔ b s n. Its third argument is n. It is not the same recΔ as before; it's a new instance. But it shares the same b and s. However, the position is different. Could there be an infinite chain of recΔ reductions where each step reduces a recΔ that is nested inside the previous one? Yes: recΔ b s (delta^k void) reduces k times, each time producing a new recΔ inside an app. After k steps, we get a tower of apps. So each recΔ reduces at most once per occurrence. Since each step creates one new recΔ occurrence with a smaller third argument, the total number of recΔ reductions along any path is bounded by the total number of delta constructors initially present in the term? Not exactly, because s can contain deltas that are copied, but those don't affect the third argument of the new recΔ.
+
+Wait, the new recΔ's third argument is n, which is a subterm of the original third argument delta n. So the sequence of third arguments along the chain is: delta n, n, ... So it's a decreasing sequence of subterms. Since the subterm relation is well-founded, this chain must be finite. Thus, any sequence of consecutive recΔ reductions on the same "thread" is finite.
+
+But could we interleave reductions inside s to create more recΔ? s is copied, but the recΔ reductions on the copies of s are independent. However, s itself is a proper subterm of the original term. If we assume by induction that all proper subterms are SN, then s cannot reduce infinitely. But the induction hypothesis is tricky because the whole term includes s as a subterm. We need to define a measure that allows us to conclude SN for the whole term.
+
+Standard approach: Prove SN by induction on the size of the term? No, R_rec_succ increases size.
+
+But we can use a more sophisticated measure: assign to each term t an ordinal |t|_ord defined recursively:
+
+|void| = 1
+|delta t| = |t| + 1
+|integrate t| = ω^{|t|} ??? Not sure.
+
+Alternatively, we can map terms to natural numbers using the fact that recΔ is like primitive recursion. But because s can be arbitrary, the "iteration" can produce large terms, but still finite.
+
+Another idea: The system is a first-order TRS. We can try to prove termination using a reduction order like the recursive path order (RPO). Is this system terminating according to RPO? Let's check.
+
+We need a precedence on function symbols such that each rule is decreasing in RPO.
+
+Symbols: void, delta, integrate, merge, app, recΔ, eqW.
+
+Let's try precedence: recΔ > app > delta > integrate > merge > eqW > void? Not sure.
+
+RPO is not great when a rule duplicates a variable (like R_rec_succ duplicates s). RPO requires that the rhs is less than lhs even with duplication. In RPO, for a rule f(...) -> C[...], if a variable appears more times on the rhs than lhs, we need the function symbols on the rhs to be smaller in precedence. Specifically, for RPO, if the lhs is f(l1,...,ln) and rhs contains a variable x multiple times, we need that for each subterm g(...) of rhs where g is the root of a term containing the extra occurrence, g < f in precedence.
+
+In R_rec_succ: recΔ b s (delta n) -> app s (recΔ b s n). The variable s appears twice on the rhs (under app and under recΔ). The root of the rhs is app. So we need app < recΔ. The subterm recΔ b s n has root recΔ, which is equal to the lhs root. That's okay if the subterm list of recΔ on rhs is smaller than the lhs subterm list in the lexicographic extension. Let's see: lhs arguments: [b, s, delta n]. rhs arguments for the inner recΔ: [b, s, n]. Since n is a proper subterm of delta n, [b, s, n] < [b, s, delta n] lexicographically. So the inner recΔ is smaller. But the outer rhs is app s (recΔ b s n). To compare recΔ b s (delta n) vs app s (recΔ b s n) in RPO: since app < recΔ (by precedence), any term with root app is smaller than any term with root recΔ, provided the arguments are arbitrary? Actually, in RPO, if f > g, then f(...) > g(..., ...). So if recΔ > app, then lhs > rhs if the rhs root is app. Wait, we need to check the exact definition: In RPO, s = f(s1,...,sn) > g(t1,...,tm) = t if either:
+- f > g and s > ti for all i, or
+- f = g and (s1,...,sn) >_lex (t1,...,tm), or
+- s >= ti for some i.
+
+Actually, the standard definition: s > t if
+1. s = f(s1,...,sn), t = g(t1,...,tm), and si >= t for some i, or
+2. f > g and s > tj for all j, or
+3. f = g and (s1,...,sn) >_lex (t1,...,tm) and s > tj for all j.
+
+Wait, there are variations. But generally, if f > g, then any term with root f is greater than any term with root g, provided the subterms of the f-term are greater than the subterms of the g-term. But if the f-term is the lhs and the g-term is the rhs root, we need to ensure that the lhs is greater than each argument of the rhs.
+
+For R_rec_succ: lhs = recΔ b s (delta n). rhs = app s (recΔ b s n). If recΔ > app, then we need lhs > s and lhs > recΔ b s n.
+
+Is lhs > s? Yes, because s is a proper subterm of lhs (case 1: si >= s). Actually, s is the second argument of lhs, so lhs > s.
+
+Is lhs > recΔ b s n? Compare lhs = recΔ b s (delta n) with t = recΔ b s n. Since the roots are equal, we compare lexicographically: [b, s, delta n] vs [b, s, n]. Since delta n > n (as delta n contains n as a proper subterm? Actually, in RPO, delta n > n because n is a subterm). So the tuple [b, s, delta n] >_lex [b, s, n]. Also need lhs > n (which is true as n is a subterm of lhs). So yes, lhs > recΔ b s n.
+
+Thus, if recΔ > app, then lhs > rhs by case 2 (since recΔ > app and lhs > each subterm of rhs). Wait, we need lhs > s and lhs > recΔ b s n. Both hold. So RPO can handle R_rec_succ if recΔ > app.
+
+Now let's check other rules with this precedence.
+
+Precedence suggestion: recΔ > app > delta > integrate > merge > eqW > void. Actually, we need to ensure all rules are decreasing.
+
+1. integrate(delta t) -> void. Need integrate > void? Or integrate > ... The rhs is void. Since void is a constant, we need lhs > void. In RPO, a term is > a constant if it's not the constant itself. integrate(delta t) > void because void is a constant with minimal precedence? Actually, if void is the smallest, any non-void term is > void? Not exactly: in RPO, if t is a constant c, then s > c if s is not c and either s has a non-constant root or... Actually, constants are compared by precedence. So if integrate > void, then integrate(delta t) > void. Good.
+
+2. merge void t -> t. Need merge void t > t. Since t is a subterm of lhs (the second argument), yes. Actually, in RPO, if t is a proper subterm of lhs, then lhs > t. So merge void t > t holds regardless of precedence. Similarly for merge t void -> t.
+
+3. merge t t -> t. Same: lhs > t because t is a subterm.
+
+4. recΔ b s void -> b. lhs > b because b is a subterm.
+
+5. recΔ b s (delta n) -> app s (recΔ b s n). We discussed: if recΔ > app, then lhs > rhs because lhs > s and lhs > recΔ b s n.
+
+6. eqW a a -> void. Need eqW a a > void. If eqW > void, yes.
+
+7. eqW a b -> integrate (merge a b). Need eqW a b > integrate (merge a b). Let's see: eqW a b vs integrate (merge a b). Roots: eqW vs integrate. If eqW > integrate, then we need eqW a b > merge a b and eqW a b > a and eqW a b > b? Wait, the subterms of rhs are merge a b. Actually, rhs = integrate (merge a b). So arguments: merge a b. We need lhs > merge a b. Since merge a b is not a subterm of lhs, we need either eqW > integrate and lhs > merge a b, or lhs >= merge a b via subterm. But merge a b is not a subterm. However, we can set eqW > integrate. Then we need eqW a b > merge a b. Now compare eqW a b vs merge a b. If eqW > merge, then we need eqW a b > a and eqW a b > b, which holds because a and b are subterms. So yes, if eqW > integrate and eqW > merge, then eqW a b > integrate (merge a b).
+
+But also need to consider eqW a b > void for R_eq_refl. If void is smallest, and eqW > void, holds.
+
+So a precedence that works: recΔ > app > delta > integrate > merge > eqW > void? Wait, we need eqW > integrate and eqW > merge. So eqW must be greater than integrate and merge. Also recΔ > app.
+
+But do we need app > delta? Not necessarily. Let's see if any rule requires app > something. The rhs of R_rec_succ is app s (recΔ b s n). The root is app. The lhs root is recΔ. Since recΔ > app, we are good. There is no rule with root app on lhs.
+
+Do we need delta > something? The rhs of R_int_delta is void. Root is void. integrate > void is enough. But what about delta t? It's a subterm. The lhs of R_int_delta is integrate (delta t). The root is integrate. The rhs is void. So integrate > void is sufficient. But what about the rule recΔ b s (delta n) -> ... The lhs root is recΔ. The delta is inside. No rule with root delta on lhs, except maybe if some term reduces to delta something. No rule produces delta. So delta is a constructor that only appears as a normal form or inside integrate/recΔ.
+
+Thus, the following precedence seems to work for RPO:
+
+recΔ > app > eqW > integrate > merge > delta > void.
+
+Wait, does eqW > integrate and eqW > merge suffice? Yes. Also eqW > void. Is there any conflict? Let's check all rules with this precedence:
+
+- R_int_delta: integrate(delta t) -> void. integrate > void, so integrate(any) > void. OK.
+- R_merge_void_left: merge void t -> t. lhs > t because t is a proper subterm. OK.
+- R_merge_void_right: merge t void -> t. OK.
+- R_merge_cancel: merge t t -> t. OK.
+- R_rec_zero: recΔ b s void -> b. lhs > b (subterm). OK.
+- R_rec_succ: recΔ b s (delta n) -> app s (recΔ b s n). recΔ > app. Need lhs > s (subterm, OK) and lhs > recΔ b s n. Compare recΔ b s (delta n) vs recΔ b s n. Roots equal, lexicographic: third argument delta n > n (since delta n is greater than its subterm n in RPO if delta is a constructor? Actually, in RPO, a term is greater than its subterms. So delta n > n. Thus [b, s, delta n] >_lex [b, s, n]. So lhs > recΔ b s n. Thus lhs > rhs. OK.
+- R_eq_refl: eqW a a -> void. eqW > void, so eqW(any) > void. OK.
+- R_eq_diff: eqW a b -> integrate (merge a b). Need eqW a b > integrate (merge a b). Since eqW > integrate, we need eqW a b > merge a b. Since eqW > merge, we need eqW a b > a and eqW a b > b, which hold (subterms). Also need eqW a b > b? Wait, for eqW > merge, we need lhs > each argument of merge on rhs. The arguments of merge are a and b. Both are subterms of lhs, so lhs > a and lhs > b. Thus eqW a b > merge a b. Then since eqW > integrate and eqW a b > merge a b, we have eqW a b > integrate (merge a b). OK.
+
+Thus, all rules are oriented by RPO with precedence: recΔ > app > eqW > integrate > merge > delta > void (or void minimal). Actually, we don't even need delta > void specifically, but it's fine.
+
+Wait, we need to be careful: In RPO, for a rule like merge t t -> t, the lhs is merge(t,t). Since t is a subterm, merge(t,t) > t. This holds regardless of precedence because of the subterm property. However, some definitions of RPO require that if s = f(s1,...,sn) and t = si, then s > t. Yes, that's standard: a term is greater than its subterms.
+
+Thus, the system is terminating by RPO. Therefore, strong normalization can be established.
+
+But we need to be careful: Is there any subtlety with the fact that eqW has two rules, and R_eq_diff overlaps with R_eq_refl? RPO only needs each individual rule to be decreasing. Overlaps are fine.
+
+Also, note that the system is not necessarily confluent, but SN doesn't require confluence.
+
+Thus, the raw assessment is: Yes, strong normalization can be established. The reasoning: we can define a recursive path order (or a suitably chosen weight function) that decreases with each rewrite step. The only rule that might look problematic is R_rec_succ because it duplicates s, but the outer recΔ disappears and is replaced by an app (which is lower in precedence), while the inner recΔ has a structurally smaller third argument. The other rules all strictly decrease the term size or replace a constructor with a smaller one. Therefore, no infinite reduction sequences exist.
+
+Alternatively, one can argue by induction on a measure defined as the multiset of the third arguments of recΔ subterms, combined with a standard ordering for the other rules.
+
+Wait, is there any issue with the fact that recΔ > app > eqW > integrate > merge > delta > void is not a total order? It's a partial order (precedence). RPO works with a precedence that is a partial order (or quasi-order). So it's fine.
+
+But is there any hidden issue? The system allows terms like recΔ b s (recΔ b' s' n). That is, the third argument of recΔ can itself be a recΔ. Then R_rec_succ applies only if the third argument is delta n. So if it's recΔ ..., no rule applies at the root. But the inner recΔ could reduce. If the inner recΔ reduces to delta something, then the outer recΔ could fire. Could this lead to infinite nesting? Let's see:
+
+Consider T = recΔ b s (recΔ b' s' (delta n)). The inner recΔ can reduce to app s' (recΔ b' s' n). So the third argument of the outer recΔ becomes app s' (recΔ b' s' n). This is not of the form void or delta something, so the outer recΔ is stuck. Unless the inner recΔ reduces further to something with root delta? No, app is the root. So the outer recΔ will never fire. So no problem.
+
+What if the outer recΔ's third argument is delta (recΔ b' s' n)? Then R_rec_succ fires: recΔ b s (delta (recΔ b' s' n)) -> app s (recΔ b s (recΔ b' s' n)). Now the new recΔ has third argument recΔ b' s' n, which may reduce to something. If it reduces to delta m, then the outer recΔ (now inner) can fire again. But note: the third argument of the original outer recΔ was delta (recΔ b' s' n). The new recΔ has third argument recΔ b' s' n. This is structurally smaller (removing a delta). So the chain of R_rec_succ steps on this thread is bounded by the number of nested deltas. So still finite.
+
+Could there be an infinite reduction where we never reduce a recΔ but keep reducing other parts? If there is an infinite reduction of a subterm, then by structural induction that subterm is not SN. So we need to show that all terms are SN. The RPO argument does this globally.
+
+Thus, the system is terminating.
+
+But the question asks: "can strong normalization of this system be established from the presented calculus alone, without importing structural axioms or object-level assumptions beyond what is derivable from the given syntax and rewrite rules? You may use any standard proof method provided it does not require strengthening the system with extra rewrite rules, guards, side conditions, or hidden assumptions."
+
+So we need to answer: Yes, SN can be established. The reasoning is that the rewrite system is terminating, e.g., by the recursive path order (RPO) or by an ad-hoc well-founded measure. The system is first-order, no binding, and the rules are all "decreasing" in a suitable sense. The only rule that duplicates a subterm (R_rec_succ) is decreasing because the principal function symbol recΔ is replaced by app (lower precedence) and the recursive call has a smaller third argument.
+
+We must ensure that we don't need to import axioms like "Nat is well-founded" or something. RPO is a standard proof method for first-order term rewriting. It relies on structural induction and the well-foundedness of the precedence order, which can be taken as a finite discrete order. Since there are finitely many function symbols, we can define a precedence and prove termination using the standard RPO theorem. In Lean, we could prove SN by defining a measure function into ordinals or nat and proving it decreases.
+
+But wait: can we define a measure into Nat? Let's try to define a natural number weight that decreases. The problem is R_rec_succ can increase size. But maybe we can assign weights to symbols such that the weight of the lhs is greater than the weight of the rhs, taking into account the duplication.
+
+Let w(void)=0, w(delta)=1, w(integrate)=2, w(merge)=3, w(app)=4, w(recΔ)=ω (infinite)? Not nat. But we can use ordinals. However, the question says "standard proof method". RPO is standard. Another standard method is polynomial interpretations. Can we assign polynomials to make it work?
+
+For R_rec_succ: recΔ(b,s,delta(n)) -> app(s, recΔ(b,s,n)). If we interpret recΔ(x,y,z) = z + something, we need the interpretation to decrease when z goes from delta(n) to n, but to account for duplication of y.
+
+Let’s try a polynomial interpretation over natural numbers:
+
+[void] = 1
+[delta](x) = x + 1
+[integrate](x) = x + 1? No, we need integrate(delta(t)) > void. If [integrate](x) = 2x, [delta](x) = x+1, then [integrate(delta(t))] = 2(|t|+1) >= 2. [void] = 1. Good.
+
+But for R_rec_succ: [recΔ](x,y,z) = z + C? If [recΔ](x,y,z) = z + 1, [app](x,y) = x + y + 1. Then lhs = (delta n) + 1 = n + 2. rhs = s + 1 + (n + 1) + 1 = s + n + 3. This is larger if s > 0. So not decreasing.
+
+Try [recΔ](x,y,z) = 2z + 1. Then lhs = 2(n+1)+1 = 2n+3. rhs = s + 1 + (2n+1) + 1 = s + 2n + 3. Still larger by s.
+
+We need the coefficient of z in recΔ to be large enough to dominate the duplication of y and the addition of app. But y is duplicated, so its coefficient matters. Suppose [recΔ](x,y,z) = A*z + B*x + C*y + D. [app](x,y) = E*x + F*y + G. Then lhs = A*(n+1) + B*b + C*s + D. rhs = E*s + F*(A*n + B*b + C*s + D) + G = F*A*n + F*B*b + (E + F*C)*s + F*D + G.
+
+For lhs > rhs for all b,s,n >= 1 (since terms have at least size 1), we need:
+
+Coefficient of n: A > F*A => F < 1. Since F is a natural number (non-negative integer) in a polynomial interpretation over naturals, F = 0. But then [app](x,y) doesn't depend on its second argument, which is weird but okay. But app appears only in R_rec_succ. If F=0, then rhs = E*s + G. Coefficient of s: C > E. Coefficient of b: B > F*B = 0, so B >= 1. Constant: A + D > G.
+
+But if F=0, then [app](x,y) = E*x + G. Then rhs doesn't depend on the inner recΔ. But the inner recΔ could be arbitrarily large? Wait, the interpretation of the inner recΔ is A*n + B*b + C*s + D. If F=0, the rhs is E*s + G, which is independent of the inner recΔ. That seems problematic because if n is huge, lhs is huge, but rhs is constant in n. Actually, that's fine: we want lhs > rhs, so if rhs is small, it's easier. But does this interpretation reflect the actual semantics? It doesn't need to; it just needs to be a valid monotone interpretation. However, if F=0, then [app] is constant in its second argument. Is that allowed? Yes, polynomial interpretations can assign coefficient 0. But we need to ensure that the interpretation is compatible with the rewrite relation: if a subterm decreases, the whole term decreases. If coefficient of the second argument is 0, then replacing the second argument by a smaller term doesn't decrease the whole term. That's okay as long as the rule still orients.
+
+But does the interpretation need to be weakly monotone? Usually, for polynomial interpretations, we require all coefficients to be non-negative, but they can be zero. So F=0 is allowed.
+
+But wait: if [app] doesn't depend on its second argument, then for the system to be compatible, we need that the second argument of app never needs to be "measured" for other rules. There are no other rules for app. So it's okay.
+
+But then consider the term app (recΔ b s (delta n)) something. If we reduce the recΔ inside the first argument, the value of the whole app term doesn't change because [app] depends only on the first argument? Actually, [app](x,y) = E*x + G. If the first argument changes, the value changes. But if the second argument changes, it doesn't. Since there are no rules for app, this is fine.
+
+But is there any rule where a subterm of app is reduced? No. The only rule that produces app is R_rec_succ. Once app is created, no rule applies at the root. So we don't need to worry about reductions inside app arguments causing the overall measure to increase in a way that violates monotonicity for other rules.
+
+However, there is a subtlety: In polynomial interpretations, for a rule l -> r, we need [l] > [r] for all assignments of variables to natural numbers. With F=0, [rhs] = E*s + G. [lhs] = A*(n+1) + B*b + C*s + D. So [lhs] - [rhs] = A*n + A + B*b + (C-E)*s + D - G. We need this > 0 for all b,s,n >= 1. Since b,s,n can be 1 (e.g., if the term is void, [void]=1). Actually, variables range over all terms, so their interpretations can be any value in the image of the interpretation function. Since [void]=1, and other terms can be larger. To guarantee >0, we need coefficients to ensure it's always positive.
+
+But there is a problem: n can be 0? If we interpret over natural numbers including 0, but terms have minimum interpretation 1 (void). So n >= 1. Then A*n >= A. So lhs - rhs >= A + A + B*b + (C-E)*s + D - G = 2A + ... We can choose parameters to make it positive.
+
+But polynomial interpretations are usually defined with natural numbers (including 0). If we set [void] = 1, then all terms have positive interpretation.
+
+But we also need to handle other rules. For eqW a b -> integrate (merge a b). Let's assign weights:
+
+[void] = 1
+[delta](x) = x + 1
+[integrate](x) = x + 2
+[merge](x,y) = x + y + 1
+[app](x,y) = x + 1 (since E=1, G=1 maybe?) Wait, we said F=0. Let's pick numbers later.
+[recΔ](x,y,z) = 2*z + x + 2*y + 1 (just as an example).
+[eqW](x,y) = x + y + 2
+
+Check R_int_delta: [integrate(delta t)] = (t+1) + 2 = t + 3. [void] = 1. t+3 > 1. OK.
+
+R_merge_void_left: [merge(void,t)] = 1 + t + 1 = t + 2. [t] = t. t+2 > t. OK.
+
+R_merge_void_right: [merge(t,void)] = t + 1 + 1 = t + 2 > t. OK.
+
+R_merge_cancel: [merge(t,t)] = t + t + 1 = 2t + 1 > t. OK.
+
+R_rec_zero: [recΔ(b,s,void)] = 2*1 + b + 2*s + 1 = b + 2s + 3. [b] = b. b+2s+3 > b. OK.
+
+R_rec_succ: [recΔ(b,s,delta n)] = 2*(n+1) + b + 2*s + 1 = b + 2s + 2n + 3.
+[app(s, recΔ(b,s,n))] = [s] + 1 = s + 1 (if we set [app](x,y) = x + 1). Then we need b + 2s + 2n + 3 > s + 1 for all b,s,n >= 1. This holds: b + s + 2n + 2 > 0. OK.
+
+But is this assignment monotone? For app, if the second argument decreases, the interpretation stays the same. That's allowed for a weakly monotone interpretation. But we need to check that the interpretation is well-defined for all terms. Yes.
+
+However, there is a problem: The polynomial interpretation must be compatible with the term structure: if a subterm u reduces to v, then [C[u]] >= [C[v]] for any context C. This requires that the interpretation function be monotone in each argument: for each symbol f, the polynomial [f] must be strictly monotone in each argument? Actually, for strict monotonicity in all arguments, we need each variable to appear with positive coefficient. If some coefficient is zero, then replacing a subterm by a smaller one might not decrease the whole term. But for termination, we only need that for each rule l -> r, [l] > [r]. We don't need monotonicity for arbitrary contexts if we are using the interpretation directly to compare terms. Wait, standard polynomial interpretation method for term rewriting does require that the interpretation is monotone (non-decreasing) in each argument, because reductions can happen in context. If we have a term C[l] and reduce to C[r], we need [C[l]] > [C[r]]. This follows if the interpretation is monotone: [l] > [r] implies [C[l]] >= [C[r]] + something? Actually, if the interpretation is strictly monotone in the argument position where the redex occurs, then [C[l]] > [C[r]]. If it's only weakly monotone (non-decreasing), then [C[l]] >= [C[r]], which is not enough for strict decrease. However, if the context doesn't "use" that argument (coefficient zero), then [C[l]] = [C[r]], and the reduction doesn't decrease the measure. That would be a problem if we rely solely on the global measure for SN.
+
+But in our case, the only rule that creates app is R_rec_succ. After that, app is at the root. Reductions inside the arguments of app might not decrease the global measure if app is not monotone in those arguments. However, those reductions are inside subterms that are proper subterms of the original term. But if the global measure doesn't decrease, we can't directly use it to prove termination of inner reductions.
+
+Wait, but for SN, we need that every reduction sequence is finite. If we have a measure that strictly decreases for root reductions but may not decrease for inner reductions, we can't conclude SN. However, we can combine it with structural induction: define a measure that decreases for every step, including inner steps.
+
+To handle inner steps, the interpretation must be strictly monotone in all argument positions that could contain redexes. Since any argument of any function symbol could contain a redex (except maybe some positions that never contain redexes? But in general, any subterm can be a redex or contain one). Actually, in first-order TRS, a redex can occur at any position. So for the polynomial interpretation method to work, we need the interpretation to be strictly monotone in all arguments of all function symbols. That is, each polynomial must have all coefficients positive (>=1). Because if a coefficient is zero, a reduction in that subterm doesn't change the overall weight, and we could have infinite reductions at that position while the weight stays constant? No, if the weight stays constant, but the subterm itself gets smaller in some other measure, we might need a lexicographic combination. But standard polynomial interpretation requires strict monotonicity in all arguments to ensure that [C[l]] > [C[r]] whenever [l] > [r].
+
+Thus, if we set [app](x,y) = x + 1 (coefficient of y is 0), then a reduction in the second argument of app does not change the interpretation. But there are no rules that apply at the root of a term whose root is app. However, a reduction could occur inside the second argument of app. If the measure doesn't decrease, we can't use it alone. But we could use a lexicographic measure: first the interpretation, then the multiset of subterm measures. However, if the interpretation is constant on app contexts for reductions in the second argument, then the measure doesn't decrease. But we could define the interpretation to be strictly monotone in all arguments.
+
+Let's try to find a polynomial interpretation with all coefficients >= 1.
+
+Let [void] = 1.
+[delta](x) = x + 1.
+[integrate](x) = x + 1.
+[merge](x,y) = x + y + 1.
+[app](x,y) = x + y + 1.
+[recΔ](x,y,z) = A*z + B*x + C*y + D.
+[eqW](x,y) = E*x + F*y + G.
+
+We need all coefficients A,B,C,D,... to be chosen so that each rule decreases.
+
+Rule R_int_delta: [integrate(delta t)] = (t+1) + 1 = t + 2. [void] = 1. So t+2 > 1 for all t >= 1. OK.
+
+Rule R_merge_void_left: [merge(void,t)] = 1 + t + 1 = t + 2. [t] = t. OK.
+
+Rule R_merge_void_right: [merge(t,void)] = t + 1 + 1 = t + 2 > t. OK.
+
+Rule R_merge_cancel: [merge(t,t)] = t + t + 1 = 2t + 1 > t. OK.
+
+Rule R_rec_zero: [recΔ(b,s,void)] = A*1 + B*b + C*s + D. [b] = b. Need A + B*b + C*s + D > b for all b,s >= 1. So (B-1)*b + C*s + A + D > 0. Since b,s >= 1, we need B >= 1, C >= 1, and if B=1, then C*s + A + D > 0, which holds if C>=1, A,D >= 0. So B>=1.
+
+Rule R_rec_succ: [recΔ(b,s,delta n)] = A*(n+1) + B*b + C*s + D = A*n + A + B*b + C*s + D.
+[app(s, recΔ(b,s,n))] = [s] + [recΔ(b,s,n)] + 1 = s + (A*n + B*b + C*s + D) + 1 = A*n + B*b + (C+1)*s + D + 1.
+Need lhs > rhs:
+A*n + A + B*b + C*s + D > A*n + B*b + (C+1)*s + D + 1
+Cancel A*n, B*b, D:
+A + C*s > (C+1)*s + 1
+A + C*s > C*s + s + 1
+A > s + 1.
+
+This must hold for all s >= 1. But s is a variable ranging over all terms, so its interpretation [s] can be arbitrarily large. Thus, no finite A can satisfy A > s + 1 for all s. Therefore, there is no polynomial interpretation over the naturals with all positive coefficients that orients R_rec_succ. This is a known limitation: polynomial interpretations cannot handle rules that duplicate a variable (like s in this case) because the duplicated variable's weight cannot be bounded by a constant.
+
+Thus, polynomial interpretation alone won't work. But RPO can handle duplication because it compares based on the root symbol and subterms, not linear weights. So RPO is the appropriate tool.
+
+Another standard method is the Knuth-Bendix order (KBO)? KBO also has problems with duplicating variables because the weight of the variable appears multiple times on the rhs. Actually, KBO can handle some duplication if the function symbol weight is high enough? No, KBO assigns weights to symbols and variables; if a variable occurs more times on the rhs, the weight of the rhs is at least the weight of the lhs unless the lhs has a higher variable weight. But KBO requires the variable count to not increase. Since s appears once on lhs and twice on rhs, KBO fails (the variable condition is violated). So KBO is out.
+
+But RPO works. Another method is semantic labeling or dependency pairs. But RPO is simplest.
+
+Since the question asks for a raw assessment, we can say: Yes, SN can be established, e.g., via the recursive path order (RPO) with a suitable precedence. The system is terminating because the only "recursive" rule (recΔ) replaces a recΔ-rooted term with an app-rooted term (lower precedence) plus a smaller recursive call, while all other rules strictly simplify their left-hand sides. No rule introduces a recΔ or a delta at the root, so there is no way to generate infinite recursion.
+
+However, we must be absolutely sure there is no infinite reduction. Let's think about possible infinite reductions more deeply.
+
+Could there be an infinite reduction that doesn't involve recΔ? Let's check all other rules:
+- integrate(delta t) -> void. No infinite.
+- merge void t -> t. No infinite.
+- merge t void -> t. No infinite.
+- merge t t -> t. No infinite.
+- eqW a a -> void. No infinite.
+- eqW a b -> integrate(merge a b). This introduces integrate and merge. But merge reduces to a or b or void, and integrate then either reduces (if argument is delta t) or is stuck. So no infinite.
+Thus, any infinite reduction must involve recΔ infinitely often.
+
+Now, recΔ reduces only when its third argument is void or delta n. Each time it reduces, the recΔ at that position disappears. A new recΔ may appear inside the result, but its third argument is a proper subterm of the original third argument (n instead of delta n). So along any branch of the term tree, the sequence of recΔ reductions at that branch has strictly decreasing third arguments. Since the subterm relation is well-founded, each branch can have only finitely many recΔ reductions.
+
+But could new recΔ redexes appear in other branches infinitely? R_rec_succ copies s, which may contain recΔ redexes. But those recΔ redexes are not new; they existed in s. Reducing them is independent. Since the term is finite, there are finitely many recΔ subterms initially. However, reduction can copy s, thereby copying recΔ subterms inside s. So the number of recΔ subterms can grow. But each copied recΔ subterm has the same third argument as the original one in s. If we reduce one copy, the other copy remains. Could we keep reducing copies forever? If s contains a recΔ that is a redex (i.e., its third argument is void or delta n), then reducing it consumes that recΔ. But if s contains a recΔ with third argument that reduces to a redex, then we could reduce it. However, after reduction, that recΔ is gone. But we could have infinitely many copies of s? No, each R_rec_succ step creates one additional copy of s (actually, it creates one copy of s as the first argument of app, and keeps s as the second argument of the inner recΔ). So the number of copies of s grows with the number of R_rec_succ steps. But the number of R_rec_succ steps on a given recΔ thread is bounded by the number of deltas in its third argument. So the total number of copies of s is finite.
+
+Wait, what if s itself contains a recΔ that can fire, and when it fires, it creates a new app and a new recΔ inside, but the third argument of that recΔ is smaller. So each recΔ subterm can only fire a finite number of times. The total number of recΔ firing events is bounded by the sum over all recΔ subterms (including copies) of the number of deltas in their third arguments. But the number of copies is finite because each copying event (R_rec_succ) is tied to a recΔ firing, and there are finitely many recΔ firings along the "ancestry". Since the ancestry tree is finite (rooted at the original recΔ and branching according to copies), the total number of recΔ subterms ever appearing is finite. Thus, there are only finitely many recΔ firing events possible.
+
+More formally, we can define the "recΔ-potential" of a term as the sum over all recΔ subterms of the ordinal ω^{|third|} or simply the multiset of third arguments. When we apply R_rec_succ to a recΔ with third argument delta n, we remove that recΔ (third argument delta n) and add a new recΔ with third argument n. But we also copy s, which may contain recΔ subterms. So we add copies of the recΔ subterms inside s. However, those recΔ subterms are already present in the original term (inside s). So the multiset of third arguments of recΔ subterms changes: we remove one occurrence of delta n and add one occurrence of n (which is smaller), but we also duplicate the multiset of third arguments of recΔ inside s. This can increase the multiset. However, the key is that the recΔ subterms inside s are "smaller" in some sense than the outer recΔ? Not necessarily; s could be huge.
+
+But we can use a well-founded tree ordering: define the "type" of a term as a tree where each recΔ node is labeled with its third argument. This is tricky.
+
+Alternatively, we can use the concept of "homeomorphic embedding" or "Dershowitz's termination theorem": a term rewriting system terminates if there is a simplification order (like RPO) that orients all rules. Since we can orient all rules with RPO, the system is terminating. This is a standard result.
+
+Thus, the answer is definitely yes.
+
+Wait, is there any subtlety with the fact that eqW has overlapping rules? In RPO, a rule l -> r must satisfy l > r. Both rules for eqW satisfy it. Overlap doesn't matter.
+
+Now, the question: "can strong normalization of this system be established from the presented calculus alone, without importing structural axioms or object-level assumptions beyond what is derivable from the given syntax and rewrite rules?" This is essentially asking if SN is provable for this TRS using standard metatheory. The answer is yes.
+
+But we need to be careful: "strong normalization" means that every reduction sequence is finite. For a first-order TRS, termination is equivalent to SN. The standard way to prove SN is via a simplification order like RPO. Since there are finitely many function symbols and the rules are finite, we can define a precedence and verify the RPO inequalities purely syntactically. This does not require any external axioms beyond what is needed to define RPO and prove it well-founded (which is standard structural induction).
+
+Therefore, the raw assessment: Yes, the system is strongly normalizing. The reasoning: the rewrite system can be shown terminating by the recursive path order (or another simplification order). The only rule that replicates a subterm (R_rec_succ) is decreasing because the principal symbol recΔ is replaced by app, which is lower in precedence, while the recursive call has a structurally smaller third argument. No rule creates a delta or recΔ at the root, preventing unbounded growth. Consequently, there are no infinite reduction sequences.
+
+However, let's double-check if there is any subtle non-termination due to the fact that the system is not a standard TRS but defined as an inductive relation in Lean. Does the Step relation allow reduction anywhere (i.e., congruence rules)? The definition given is:
+
+```
+inductive Step : Trace → Trace → Prop
+| R_int_delta : ∀ t, Step (integrate (delta t)) void
+| R_merge_void_left : ∀ t, Step (merge void t) t
+...
+```
+
+Wait, there are no congruence rules! The Step relation as defined only allows rewriting at the root. It does not include rules like "if Step t t' then Step (delta t) (delta t')" or similar. This is crucial!
+
+In Lean, an inductive definition of Step with only these constructors means that Step t u holds only when the entire term t matches the left-hand side of a rule and u is the corresponding right-hand side. There is no closure under contexts.
+
+If there are no congruence rules, then reduction can only happen at the root. In that case, SN is trivial: there are only finitely many root redexes, and after one root reduction, the resulting term may not be a root redex anymore. But wait, after reducing at the root, the new term might also be a root redex. For example, eqW a b -> integrate (merge a b). If integrate (merge a b) is a root redex? Only if merge a b = delta t, but merge never produces delta. So integrate (merge a b) is not a root redex. But what about recΔ b s (delta n) -> app s (recΔ b s n). The result is app ... which is not a root redex. So no rule can apply at the root again? Let's check:
+
+- integrate(delta t) -> void. void is not a redex.
+- merge void t -> t. t could be a redex at the root? For example, if t = merge void u, then after reduction we get merge void u, which is a root redex. So we could have a chain: merge void (merge void t) -> merge void t -> t. That's finite.
+- merge t void -> t. Similar.
+- merge t t -> t. t could be a redex.
+- recΔ b s void -> b. b could be a redex.
+- recΔ b s (delta n) -> app s (recΔ b s n). Not a root redex.
+- eqW a a -> void. void not a redex.
+- eqW a b -> integrate (merge a b). Could this be a root redex? integrate requires its argument to be delta t. merge a b could be delta t only if a or b is delta t and the other is void or equal. But merge t void -> t. So if b = void, merge a void -> a. So eqW a void -> integrate a. If a = delta t, then integrate(delta t) -> void. So we can have a chain of length 2: eqW (delta t) void -> integrate (merge (delta t) void) -> integrate (delta t) -> void. That's finite.
+
+So even with root reduction only, the maximum length of a reduction sequence might be bounded? Not necessarily; consider merge t t -> t, where t = merge u u. Then merge (merge u u) (merge u u) -> merge u u -> u. So depth is 2. In general, the depth is bounded by the height of the term because each root reduction reduces the "size" in some sense. But with root reduction only, a term like recΔ b s void -> b, and b could be recΔ b' s' void -> b' -> ... So we could have a chain of root reductions if b is a redex. But each step replaces the term with a proper subterm (b is a proper subterm of recΔ b s void). Similarly, merge void t -> t (proper subterm). merge t void -> t (proper subterm). merge t t -> t (proper subterm). eqW a a -> void (not a subterm, but smaller). eqW a b -> integrate(merge a b) (not a subterm, but then next step must be inside merge or integrate). Wait, root reduction only: after eqW a b -> integrate(merge a b), the next step can only be at the root if integrate(merge a b) is a redex. That requires merge a b = delta t. But merge a b is never delta t (since merge reduces to a or b or void, none of which have root delta unless a or b does). Actually, if a = delta t and b = void, then merge a b is not a redex at the root because the rule merge t void -> t requires the root to be merge. But merge (delta t) void is a redex at the root! Wait, merge (delta t) void -> delta t. So after eqW (delta t) void -> integrate (merge (delta t) void), the next root redex is merge (delta t) void, so we can reduce at the root to integrate (delta t). Then integrate (delta t) is a root redex, reducing to void. So we have a chain of three root reductions.
+
+But in any case, root reduction sequences are finite because each root reduction either replaces the term with a proper subterm (which is smaller) or replaces it with a term whose root symbol is lower in a well-founded order (like recΔ -> app, eqW -> integrate, etc.), and subsequent reductions cannot increase the "rank" indefinitely.
+
+But wait, the Step relation as defined might be intended to include closure under contexts implicitly? In many presentations, a rewrite system is given by rules, and reduction is allowed anywhere. But the Lean code only defines the step relation at the root. However, in Lean, when one talks about "strong normalization of this system", they might mean the closure of Step under contexts (i.e., the compatible closure). But the Lean code does not define that closure. However, the standard interpretation of such an inductive definition in Lean is that Step is exactly the one-step rewrite relation at the root. If they meant the full rewrite relation, they would need to include congruence rules (e.g., `| ctx_delta : ∀ t t', Step t t' → Step (delta t) (delta t')`, etc.).
+
+The prompt says: "a first-order rewrite calculus with no variable binding, no external memory, and no imported object-level axioms beyond the rules shown there." The rules shown there are only the root rewrite rules. In rewrite theory, a "rewrite calculus" usually includes closure under contexts. But in Lean, the Step relation as defined is only root reduction. However, maybe the intention is that Step is the one-step relation, and the user is expected to consider the closure under contexts implicitly. Or maybe the system is meant to be evaluated at the root only, like a small-step semantics for a programming language where evaluation contexts are not given. But the prompt says "first-order rewrite calculus", which suggests standard term rewriting with arbitrary contexts.
+
+Let's examine the Lean code: It defines `Step : Trace → Trace → Prop` with constructors for each rewrite rule. There are no context constructors. In Lean, this is a direct definition of the relation. If one wants to reason about reduction anywhere, one would need to define a separate relation or add context constructors. Since they didn't, maybe the system is root-only. But the phrase "rewrite calculus" is ambiguous.
+
+If it's root-only, then SN is almost trivial: every root reduction either decreases the size or replaces the term with a proper subterm or a term of lower "rank", and there are no infinite descending chains. So SN holds easily.
+
+If it's under arbitrary contexts, we need to prove SN for the full system. The full system includes rules like:
+
+Step (integrate (delta t)) void implies Step (delta (integrate (delta t))) (delta void) if we have a context rule for delta. Similarly for all other positions.
+
+Given that, we need to consider reductions inside subterms. This is the standard interpretation.
+
+The prompt likely intends the standard first-order rewrite system (with closure under contexts), because otherwise the system is too trivial and the question about strong normalization would be trivial. The fact that they mention "first-order rewrite calculus" suggests standard TRS.
+
+However, the Lean code does not include the context rules. But in Lean, one could define the full reduction relation as the compatible closure of Step. But they didn't. Maybe they assume the reader understands that Step is the rewrite relation, and rewriting can occur anywhere. Or maybe the question is about the relation as defined (root-only). Let's see the phrasing: "Below in this prompt you will see a Lean 4 file that contains a first-order rewrite calculus with no variable binding, no external memory, and no imported object-level axioms beyond the rules shown there."
+
+In type theory, a "calculus" often includes the structural rules (congruence) implicitly. But in Lean, the relation is defined explicitly. If they wanted the congruence closure, they would have included it. So maybe they intentionally omitted it to keep the system minimal, and the Step relation is just the root rewrite relation. But then the system is not a standard "rewrite calculus". It's just a root reduction relation.
+
+Wait, but consider: if there are no congruence rules, then a term like `delta (integrate (delta void))` cannot reduce to `delta void` because the redex is inside the delta. So the only terms that can reduce are those that match a left-hand side exactly at the root. This is a very weak system. For example, `recΔ void void (integrate (delta void))` cannot reduce because the third argument is not a redex at the root; the root is recΔ, and the third argument doesn't match void or delta n exactly (it's integrate (delta void)). So recΔ is stuck. This seems like a very odd "calculus".
+
+Given the constructors like app, recΔ, eqW, it's likely intended to be a language where reduction happens anywhere, like lambda calculus but first-order. In Lean, one would normally define a separate relation `Step` with context rules, or use `closure` or something. But maybe the author omitted the context rules for brevity, assuming the reader knows that a rewrite system includes them. Or maybe the author wants us to consider the relation as defined, root-only.
+
+Let's see if the system makes sense as a root-only calculus: It's like a language of traces where each operation has an evaluation rule when it's at the top level. For example, `recΔ` is a recursion operator that evaluates when given a base, step, and argument. `eqW` is an equality test. `merge` is a merge operation. `integrate` and `delta` are something like void and successor? It looks like a language for reasoning about traces. If evaluation is only at the root, it's like a big-step semantics without contexts. But the relation is `Step`, not `Eval`.
+
+The prompt says "first-order rewrite calculus". In rewriting, the standard definition includes closure under contexts. The fact that the Lean code doesn't include them might be an oversight, or maybe they rely on Lean's ability to define the closure later. But the question is about establishing SN "from the presented calculus alone". So we must consider the calculus as presented. If the calculus as presented lacks context rules, then SN is trivial. But that seems too trivial for a question. On the other hand, if we assume standard closure under contexts, the question is nontrivial but answerable.
+
+I think the intended interpretation is the standard one: the rewrite rules can be applied anywhere in the term. The Lean code defines the base rewrite relation; the compatible closure is implicit. The question is: can we prove SN?
+
+Given that, we need to assess SN. As argued, yes, via RPO.
+
+But wait: there is a known result that a TRS is terminating if it is compatible with a simplification order like RPO. RPO is a simplification order: it's a reduction order (well-founded, monotone, closed under contexts) that satisfies the subterm property. Since we can orient all rules with RPO, the system is terminating.
+
+The precedence: recΔ > app > eqW > integrate > merge > delta > void. Let's verify all rules again with RPO (including context closure):
+
+- integrate(delta t) -> void: integrate > void, and integrate(delta t) > void because void is a constant smaller than integrate. In RPO, if f > g, then f(...) > g(...). Also f(...) > c if c is a constant with lower precedence. So yes.
+- merge void t -> t: merge(void, t) > t because t is a proper subterm.
+- merge t void -> t: same.
+- merge t t -> t: proper subterm.
+- recΔ b s void -> b: proper subterm.
+- recΔ b s (delta n) -> app s (recΔ b s n): As reasoned, recΔ > app. recΔ(b,s,delta n) > s (subterm). recΔ(b,s,delta n) > recΔ(b,s,n) because roots equal and third argument delta n > n (subterm property). Then by RPO, recΔ(b,s,delta n) > app s (recΔ b s n).
+- eqW a a -> void: eqW > void.
+- eqW a b -> integrate (merge a b): eqW > integrate. Need eqW(a,b) > merge(a,b). Since eqW > merge, and eqW(a,b) > a and > b (subterms), then eqW(a,b) > merge(a,b). Then eqW(a,b) > integrate(merge(a,b)) because eqW > integrate and eqW(a,b) > merge(a,b).
+
+Thus, all rules are oriented. RPO is a simplification order, so closure under contexts preserves decreasingness. Therefore, the system is terminating.
+
+Hence, strong normalization can be established.
+
+But we need to consider whether any additional assumptions are needed. RPO well-foundedness is proved by structural induction on terms. It doesn't require external axioms beyond induction on the structure of terms, which is available in Lean's logic. So yes, from the calculus alone.
+
+Thus, the raw assessment is: Yes, strong normalization holds and can be proven using standard term-rewriting techniques such as the recursive path order. No additional axioms or side conditions are needed.
+
+Let's write a concise answer.
+
+But before finalizing, let's consider if there is any subtlety that would make the system non-terminating.
+
+Consider the term: recΔ (recΔ void s void) s (delta void). Let's reduce the outer recΔ:
+-> app s (recΔ (recΔ void s void) s void).
+Now the inner recΔ can reduce:
+-> app s (recΔ void s void). Wait, the inner recΔ is recΔ (recΔ void s void) s void. By R_rec_zero, this reduces to its first argument: recΔ void s void. Then that reduces to void by R_rec_zero? Wait, recΔ void s void -> void. So we get app s void. Fine.
+
+What if we reduce the inner recΔ first? recΔ void s void -> void. Then the outer term becomes recΔ void s (delta void) -> app s (recΔ void s void) -> app s void. Same result.
+
+No cycles.
+
+What about eqW? eqW a b -> integrate (merge a b). Suppose a and b are huge terms that reduce to something. But merge and integrate are terminating. eqW itself is eliminated.
+
+What about merge t t -> t. If t contains merge, we can have merge (merge u u) (merge u u) -> merge u u -> u. Finite.
+
+What about merge void t -> t. If t = merge void u, then merge void (merge void u) -> merge void u -> u. Finite.
+
+Could there be an infinite reduction due to the fact that eqW a b -> integrate (merge a b) and then integrate (merge a b) could reduce to something that contains eqW again? integrate only reduces if its argument is delta t. merge a b reduces to a or b or void. So integrate (merge a b) reduces only if a or b is delta t and the other is void or equal. In that case, it reduces to void. So no eqW is recreated.
+
+Could recΔ b s n produce an eqW? No, the rhs of recΔ is app s (recΔ b s n) or b. No eqW.
+
+Thus, no cycles.
+
+One more thought: is the system confluent? Not needed for SN.
+
+Another subtlety: The RPO precedence must be well-founded. Since there are finitely many symbols, any strict precedence is well-founded. We proposed recΔ > app > eqW > integrate > merge > delta > void. This is a total order, well-founded.
+
+Alternatively, we could use a lexicographic path order (LPO). LPO also works.
+
+Thus, the assessment is positive.
+
+Now, let's formulate the answer.
+
+We should state:
+- Yes, strong normalization can be established.
+- Reason: The rewrite system is terminating. It can be shown using the recursive path order (RPO) with a precedence such as recΔ > app > eqW > integrate > merge > delta > void. Every rule is decreasing in this order:
+  * Rules like merge and recΔ-base reduce to a proper subterm.
+  * recΔ-succ reduces because recΔ > app and the recursive call has a smaller third argument.
+  * eqW reduces because eqW > integrate > merge.
+- Since RPO is a simplification order (well-founded, closed under contexts, and containing the subterm relation), compatibility with all rewrite rules implies strong normalization.
+- No extra axioms, side conditions, or imported structural assumptions are needed beyond standard term-rewriting metatheory (which is derivable from the syntax).
+
+We should keep it brief and raw.
+
+One might mention that the system corresponds to primitive recursion on unary numerals (void = zero, delta = successor) plus some terminating auxiliary operations (merge, eqW, integrate). The recΔ rule duplicates the step term s, but because the principal symbol recΔ is replaced by app (which has no rules), and the recursive call is on a structurally smaller numeral, there is no infinite recursion.
+
+Let's double-check: does app have any rules? No. So after one recΔ step, the resulting app term cannot be reduced at the root. Reductions can only happen inside its subterms. This is crucial.
+
+Wait, if app has no rules, then any recΔ reduction puts an app at the root, blocking further root reductions. So any infinite reduction must happen entirely inside subterms that never become root. But those subterms are proper subterms of the original term or copies thereof. However, copies of s can be arbitrarily large if s is large, but s is a fixed subterm. So any reduction inside a copy of s is a reduction inside s. Since s is a proper subterm of the original recΔ term, by induction hypothesis (if we do a structural induction proof), s is SN. The only "new" subterm is the inner recΔ, which has a smaller third argument. So we can do an induction on the third argument.
+
+Thus, a direct structural induction proof is possible:
+
+Define a predicate SN on terms.
+To show SN(recΔ b s n):
+- If n = void: reduce to b. Since b is a proper subterm, SN(b) by induction. So one step leads to SN term.
+- If n = delta m: reduce to app s (recΔ b s m). Need to show SN of this term. Since app has no rules, any infinite reduction must be inside s or inside recΔ b s m. s is a proper subterm, so SN(s). recΔ b s m is SN by induction on m (since m is structurally smaller than delta m). Therefore, the app term is SN.
+- If n is neither void nor delta m: recΔ b s n is a normal form (no rule applies). So SN.
+
+But wait, n could be a term that reduces to void or delta m. For example, n = eqW void void. Then recΔ b s n is not a redex at the root until n reduces. But we can reduce n inside the context recΔ b s []. Since n is a proper subterm, SN(n) by induction. So any reduction sequence starting from recΔ b s n either reduces n forever (impossible by SN(n)) or eventually n becomes a normal form n'. If n' is void or delta m, then the recΔ step fires. If n' is something else, recΔ is stuck. So any reduction sequence is finite.
+
+This structural induction works! Let's formalize it:
+
+We prove SN(t) for all t by structural induction on t.
+
+Base case: t = void. No rule applies. SN.
+
+Inductive step: consider t = f(t1,...,tn). Assume SN(ti) for all i. We need to show SN(t).
+
+Case analysis on f:
+
+- delta: t = delta t1. The only rule that applies at the root is none (no rule for delta at root). So any reduction is inside t1. Since SN(t1), any infinite reduction must be finite. So SN(delta t1).
+- integrate: t = integrate t1. If t1 = delta t2, then root step to void. void is SN. Or reduce inside t1. Since SN(t1), reductions inside t1 are finite. If t1 reduces to delta t2, then root step to void. If t1 reduces to something else, integrate is stuck. So SN.
+- merge: t = merge t1 t2. Rules apply at root if t1=void or t2=void or t1=t2. In each case, the result is a proper subterm (t2, t1, or t1). By induction, proper subterms are SN. If no root rule applies, reductions inside t1 or t2 are finite by SN assumptions. So SN.
+- app: t = app t1 t2. No root rules. Reductions inside t1, t2 are finite by induction. So SN.
+- recΔ: t = recΔ b s n. If n reduces, that's inside a proper subterm n, which is SN. So eventually n reaches a normal form n*. If n* = void, root step to b, which is SN. If n* = delta m, root step to app s (recΔ b s m). Now, s and b are proper subterms (SN). recΔ b s m: is it SN? We need to show SN for terms with smaller third argument. This requires a nested induction on n, not just structural induction on the whole term.
+
+Actually, structural induction on the whole term doesn't directly give SN(recΔ b s m) because recΔ b s m is not a proper subterm of recΔ b s (delta m) in the sense of the term tree? Wait, m is a proper subterm of delta m, so recΔ b s m is smaller than recΔ b s (delta m) in the subterm ordering? No, recΔ b s m is not a subterm of recΔ b s (delta m). The subterms of recΔ b s (delta m) are b, s, delta m, and subterms of those. m is a subterm of delta m, but recΔ b s m is not a subterm. So structural induction on the term doesn't give the induction hypothesis for recΔ b s m.
+
+However, we can do a lexicographic induction: first on the "recΔ-depth" or on the third argument for recΔ terms. More precisely, we can define a well-founded measure:
+
+μ(void) = 0
+μ(delta t) = μ(t) + 1
+μ(integrate t) = μ(t) + 1
+μ(merge t1 t2) = μ(t1) + μ(t2) + 1
+μ(app t1 t2) = μ(t1) + μ(t2) + 1
+μ(recΔ b s n) = ω * (μ(n)+1) + ...? Not good.
+
+Better: define a measure that is a pair (k, size) where k is the maximum "recΔ potential". Or use the lexicographic ordering on the third argument for recΔ.
+
+Actually, the standard way is to prove SN for all terms by induction on a well-founded order that compares recΔ terms by their third argument. This is exactly what RPO does automatically.
+
+Alternatively, we can define a measure mapping each term to an ordinal:
+
+Let |t| be the ordinal defined as:
+|void| = 0
+|delta t| = |t| + 1
+|integrate t| = |t| + 1
+|merge t1 t2| = max(|t1|, |t2|) + 1
+|app t1 t2| = max(|t1|, |t2|) + 1
+|recΔ b s n| = ω * (|n|+1) + |s| + |b| + 1? Let's think.
+
+We need recΔ b s (delta n) > app s (recΔ b s n) in ordinal comparison.
+Let |recΔ b s n| = ω * f(n) + g(b,s,n) where f is something that decreases when n loses a delta.
+
+Actually, we can define the measure of a term as the set of paths or something. But RPO is simpler.
+
+Given that RPO is a standard, accepted method, and the question says "You may use any standard proof method", we can cite RPO.
+
+Thus, the answer: Yes, SN can be established. The system is terminating by RPO.
+
+We should mention that no extra axioms are needed beyond the definition of the syntax and rewrite rules and standard metatheory (like RPO).
+
+Let's write the final answer.
+
+We can also mention that the system is essentially a combinatory formulation of primitive recursion on unary natural numbers (with void as zero and delta as successor), together with a few non-recursive operations (merge, integrate, eqW) that are clearly terminating. The recΔ rule duplicates the step function s, but because the recursive call is on a predecessor and the head constructor changes from recΔ to app (which has no rules), no infinite descent is possible.
+
+Thus, the raw assessment: **Yes**, strong normalization holds.
+
+Now, we need to provide the assessment and briefly explain the reasoning.
+
+Potential counterargument: Could there be an infinite reduction because eqW a b -> integrate (merge a b) and merge a b could be a redex that reduces to a or b, which could be eqW again? For example, let a = eqW c d, b = void. Then eqW (eqW c d) void -> integrate (merge (eqW c d) void) -> integrate (eqW c d). Now integrate (eqW c d) is stuck because eqW c d is not delta. So no further root reduction. But inside, eqW c d could reduce. So we have an infinite reduction only if eqW c d reduces infinitely. But by induction, that's not possible. So finite.
+
+Could we have a term where a and b are the same, so eqW a a -> void, but also could reduce inside a first. That's finite.
+
+Could we have merge t t -> t where t = merge t t? No, terms are finite.
+
+Thus, no issues.
+
+Another check: Is there any rule that allows creating a term of the form recΔ b s (delta n) from something else? No. So recΔ redexes cannot be created; they can only be consumed or appear as subterms of the original term. Wait, can recΔ be created? The rhs of R_rec_succ contains recΔ b s n. So it creates a recΔ. But its third argument is smaller. So the "generation" of recΔ is bounded. No other rule creates recΔ. So the total number of recΔ reductions is bounded by the sum of the sizes of the original recΔ third arguments. This is a key intuitive argument.
+
+Let's formalize that: Define the set of recΔ redexes in a term. Initially finite. R_rec_succ consumes one recΔ with third argument delta n and produces one recΔ with third argument n (smaller) plus copies of s (which may contain recΔ). But the recΔ inside s are already counted in the initial set? Not exactly, because they are copied. However, each time we copy s, we create new recΔ redexes that are copies of existing ones. But each such copy has the same third argument as the original. So if we think of the multiset of third arguments of all recΔ subterms, the operation of R_rec_succ on an outer recΔ with third argument delta n and s containing recΔ subterms with third arguments M (a multiset) does: remove one occurrence of delta n, add one occurrence of n, and add another copy of M (since s is duplicated). So the multiset becomes: (original multiset - {delta n}) + {n} + M. This could be larger than the original multiset if M contains large elements. But note that M is the multiset of third arguments of recΔ inside s. Those recΔ are "smaller" in the sense that they are inside s, which is a proper subterm of the original recΔ. But in a multiset ordering, adding more elements is not allowed.
+
+However, we can use a tree ordering: assign to each term an ordinal that is a sum of ordinals associated to each recΔ subterm, where the ordinal for a recΔ subterm is based on the ordinal of its third argument and the ordinals of its other arguments. Since s is duplicated, we need the ordinal of s to be additive.
+
+Specifically, define ||t|| as an ordinal:
+||void|| = 1
+||delta t|| = ||t|| + 1
+||integrate t|| = ||t|| + 1
+||merge t1 t2|| = ||t1|| ⊕ ||t2|| ⊕ 1 (natural sum)
+||app t1 t2|| = ||t1|| ⊕ ||t2|| ⊕ 1
+||recΔ b s n|| = ω^{||n||} ⊗ (||s|| ⊕ 1) ⊕ ||b||? Hmm.
+
+Actually, there is a standard trick for rules like rec: interpret recΔ(b,s,n) as a primitive recursion function that iterates s n times. The natural measure is ω * |n| + something. But because s is duplicated, we need the measure to be multiplicative. Let's try:
+
+Let [recΔ(b,s,n)] = ω * [n] + [s] + [b].
+[app(x,y)] = [x] + [y] + 1.
+[void] = 1.
+[delta(n)] = [n] + 1.
+
+Check R_rec_succ:
+lhs = ω * (n+1) + s + b = ω*n + ω + s + b.
+rhs = [app(s, recΔ(b,s,n))] = s + (ω*n + s + b) + 1 = ω*n + 2s + b + 1.
+Now compare lhs and rhs as ordinals: ω*n + ω + s + b vs ω*n + 2s + b + 1.
+Since ω is a limit ordinal > any finite, and s,b,n are finite (if we interpret them as natural numbers), then lhs > rhs because ω > 2s + 1 (since s is finite). But if [s] can be infinite (an ordinal), then we need ω > [s]? Not necessarily. If [s] is an arbitrary ordinal less than ω (i.e., finite), then it works. But [s] could be large if s contains recΔ. Wait, if s contains recΔ, its measure could involve ω. Then [s] might not be finite. For example, if s = recΔ void void void, [s] = ω*1 + 1 + 1 = ω + 2. Then 2s + 1 = 2(ω+2)+1 = ω*2 + 5. Then lhs = ω*n + ω + (ω+2) + b = ω*(n+1) + (2+b). rhs = ω*n + 2(ω+2) + b + 1 = ω*(n+2) + (5+b). Since ω*(n+2) > ω*(n+1), rhs > lhs! So this ordinal assignment fails if s contains recΔ.
+
+We need a more robust measure. The issue is that s can contain recΔ, which gives it a high ordinal, and duplicating s can increase the coefficient of ω.
+
+In RPO, this is handled by comparing the root symbols first: recΔ > app. So the outer recΔ is greater than app regardless of the size of s. That's why RPO works.
+
+Thus, RPO is the right tool.
+
+Given that, the answer is solid.
+
+Now, I need to write the final answer. It should be a "raw assessment". So no need for a fully formal proof, just the assessment and reasoning.
+
+I will say:
+
+**Assessment:** Yes, strong normalization can be established from the calculus alone.
+
+**Reasoning:** The system is a first-order term rewrite system whose rules are all compatible with a recursive path order (RPO) using a precedence such as `recΔ > app > eqW > integrate > merge > delta > void`. Under this precedence:
+- Every rule that contracts to a proper subterm (merge, recΔ-base) is decreasing by the subterm property.
+- The critical `recΔ`-succ rule is decreasing because `recΔ` has higher precedence than `app`, and the recursive `recΔ` call has a structurally smaller third argument (`n` vs. `delta n`).
+- The `eqW` rules are decreasing because `eqW` exceeds `integrate` and `merge`.
+Since RPO is a simplification order (well-founded, closed under contexts, and containing the subterm relation), orientation of all rules implies strong normalization. No additional rewrite rules, side conditions, or imported object-level axioms are required.
+
+We can also add a brief note that the system essentially encodes primitive recursion on unary numerals, and the duplication of the step term `s` in `R_rec_succ` is harmless because the head constructor changes to `app`, which has no associated rules, while the recursion is driven by a structurally decreasing argument.
+
+Thus, the system is strongly normalizing.

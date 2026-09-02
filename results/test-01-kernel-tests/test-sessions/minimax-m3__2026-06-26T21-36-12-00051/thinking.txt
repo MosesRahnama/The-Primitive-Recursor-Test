@@ -1,0 +1,885 @@
+The user is asking about strong normalization (SN) of a first-order rewrite calculus defined in Lean 4. Let me analyze the system carefully.
+
+The system has:
+- Terms: Trace with constructors void, delta, integrate, merge, app, recΔ, eqW
+- Rewrite rules (Step):
+  1. R_int_delta: integrate (delta t) → void
+  2. R_merge_void_left: merge void t → t
+  3. R_merge_void_right: merge t void → t
+  4. R_merge_cancel: merge t t → t
+  5. R_rec_zero: recΔ b s void → b
+  6. R_rec_succ: recΔ b s (delta n) → app s (recΔ b s n)
+  7. R_eq_refl: eqW a a → void
+  8. R_eq_diff: eqW a b → integrate (merge a b)  (when a ≠ b? — but the rule is stated without guard)
+
+Wait, the rule R_eq_refl and R_eq_diff are both unconditional. So we have:
+- eqW a a → void
+- eqW a b → integrate (merge a b)  (for ALL a, b, including a = b)
+
+This is a critical ambiguity! Both rules apply when a = a. But since Step is a relation (Prop), having two possible reducts for the same term doesn't break strong normalization by itself — but it can break confluence/confluence is not the question.
+
+For strong normalization, we need: every reduction sequence is finite, i.e., there is no infinite reduction sequence.
+
+The question is whether we can prove SN from these rules alone.
+
+Let me think about whether there can be non-terminating reductions.
+
+Rule R_eq_diff: eqW a b → integrate (merge a b)
+- This introduces integrate and merge.
+- integrate (merge a b) can reduce if merge a b reduces, but merge doesn't have a "delta" rule — it only reduces on void or duplicates.
+- integrate only reduces when applied to delta t.
+- So integrate (merge a b) — is merge a b reducible to delta something? Only if a = b (via cancel) or one is void.
+
+Let's see: integrate (merge t t) = integrate t (after R_merge_cancel). And integrate doesn't reduce unless it's integrate (delta _). So integrate t where t is not delta _ is stuck.
+
+Actually wait — integrate (merge void t) → integrate t (via R_merge_void_left). Still stuck unless t = delta _.
+
+integrate (merge t void) similarly.
+
+So eqW a b (when a ≠ b) → integrate (merge a b), and this is stuck unless a or b is void (then reduces to integrate of the other, still stuck unless delta).
+
+If a = b, we can use R_eq_refl to get void, or R_eq_diff to get integrate (merge a a) → integrate a. Then we need integrate a → void, which requires a = delta t. Hmm.
+
+Let's check: eqW a a. We can choose R_eq_refl → void (terminates). Or we can choose R_eq_diff → integrate (merge a a) → integrate a.
+
+If a = void: integrate void — no rule applies. STUCK.
+If a = delta n: integrate (delta n) → void. Terminates.
+If a = integrate t: integrate (integrate t) — no rule. Stuck.
+If a = merge t1 t2: integrate (merge t1 t2) — stuck unless t1, t2 are void or equal.
+If a = app t1 t2: integrate (app t1 t2) — no rule. Stuck.
+If a = recΔ b s n: integrate (recΔ b s n) — no rule. Stuck.
+If a = eqW a1 a2: integrate (eqW a1 a2) — no rule. Stuck.
+
+So one can get stuck terms, but can we have infinite reduction?
+
+Let me think about whether there's a non-terminating rewrite sequence.
+
+Consider recΔ b s (delta (delta (... delta void...))). Each step with R_rec_succ decreases the "delta-depth" of the argument. After all deltas are consumed, we hit R_rec_zero. So recursion terminates.
+
+But what if recΔ b s n is applied to a term that grows during reduction? The argument n is structurally a Trace but we need a measure. R_rec_succ takes recΔ b s (delta n) → app s (recΔ b s n). The argument shrinks by stripping a delta. So the size of the recursive argument strictly decreases. This terminates.
+
+The eqW rules — eqW a a → void terminates. eqW a b → integrate (merge a b) — does this terminate? integrate (merge a b) — merge reduces only if one arg is void or both equal. If they reduce, we get integrate of something smaller. Otherwise stuck. So this terminates.
+
+But wait — the issue is the non-determinism with eqW. Consider eqW a a. We can go to void, terminating. But can we go to integrate (merge a a) → integrate a. Is there a case where this loops? integrate a is stuck unless a = delta t. So a = delta t: integrate (delta t) → void. Terminates.
+
+What about eqW (delta t) (delta t)? Can use R_eq_refl → void. Or R_eq_diff → integrate (merge (delta t) (delta t)) → integrate (delta t) → void. Terminates either way.
+
+What if we have a term like eqW (eqW a a) (eqW a a)? R_eq_refl → void. Or R_eq_diff → integrate (merge (eqW a a) (eqW a a)) → integrate (eqW a a) → ??? Stuck. But not an infinite reduction.
+
+So far I see no infinite reductions. Let me think more carefully.
+
+Hmm, is there any way to get a non-terminating reduction?
+
+The rules are:
+1. integrate (delta t) → void — terminates
+2. merge void t → t — terminates
+3. merge t void → t — terminates
+4. merge t t → t — terminates
+5. recΔ b s void → b — terminates
+6. recΔ b s (delta n) → app s (recΔ b s n) — terminates (rec arg shrinks)
+7. eqW a a → void — terminates
+8. eqW a b → integrate (merge a b) — terminates (size decreases in some measure?)
+
+Let me define a measure. The key issue is: does R_eq_diff make terms larger or smaller?
+
+eqW a b → integrate (merge a b). The right side has the constructors eqW replaced by integrate, merge. So eqW is "destroyed" by this rule — it never appears in the reduct. Similarly, integrate is destroyed by R_int_delta (only appears as integrate (delta _)), and after the rule, neither integrate nor delta appear in the reduct (well, the inner t is preserved but the integrate/delta wrapper is gone).
+
+Actually, integrate might reappear if we do something that creates integrate. Let me see — R_eq_diff creates integrate. So after R_eq_diff, we have integrate (merge a b). To reduce, we need to reduce merge a b first, but merge only reduces structurally (void or equal). After merge reduction, we have integrate c for some c, which only reduces if c = delta d.
+
+Hmm, can integrate (delta _) come from somewhere other than R_eq_diff? No, only R_eq_diff creates integrate (without delta). R_int_delta consumes integrate.
+
+But we could have: some term M →* N where N = eqW a b. Then R_eq_diff → integrate (merge a b). If a = b = delta t, we can reduce integrate (delta t) → void.
+
+Can we have a term that keeps generating eqW? No constructor produces eqW except... no, eqW is only at the top. Wait, R_eq_refl: eqW a a → void doesn't create eqW. R_eq_diff: eqW a b → integrate (merge a b) doesn't create eqW. So eqW is always at the top of a reduction (you reduce from the top). Actually no — reductions are at any subterm? Wait, the Step relation as defined... let me re-read.
+
+inductive Step : Trace → Trace → Prop with each constructor defining a top-level rewrite. There's no "context" rule! So Step is just the one-step rewrite at the root. This means Step t u means t rewrites to u in one step at the root.
+
+If so, this is a single-step relation only. Then "reductions" in this system are just sequences of root reductions.
+
+Hmm, this is a peculiar system. Let me reconsider. If there's no contextual closure, then we can only reduce the top of a term. So:
+
+- integrate (delta t) at top reduces to void at top. No further reductions from void.
+- merge void t → t. Then we can reduce t if it matches a rule. Or merge t void → t, similar.
+- merge t t → t. Then reduce t.
+- recΔ b s void → b. Reduce b.
+- recΔ b s (delta n) → app s (recΔ b s n). Reduce app or recΔ.
+- eqW a a → void.
+- eqW a b → integrate (merge a b).
+
+Wait, but this is just a string rewriting system (SRS) on the term algebra. For an SRS, termination can be checked.
+
+Let me think about whether this terminates as an SRS.
+
+The rules:
+- integrate(delta(x)) → void
+- merge(void, x) → x
+- merge(x, void) → x
+- merge(x, x) → x
+- recΔ(b, s, void) → b
+- recΔ(b, s, delta(n)) → app(s, recΔ(b, s, n))
+- eqW(x, x) → void
+- eqW(x, y) → integrate(merge(x, y))
+
+For the last rule, x and y are distinct variables. This is a rule eqW(x, y) → integrate(merge(x, y)) where x, y are different.
+
+Let me try to construct an infinite derivation.
+
+The eqW rules are the only "productive" ones that create new structure. But eqW x y (x≠y) → integrate(merge(x,y)). The RHS has integrate and merge but no eqW. So eqW is consumed.
+
+After integrate(merge(x,y)), we can apply merge rules if applicable, then maybe integrate(delta(...)) if x or y is delta of something. Eventually this terminates.
+
+I think this system is strongly normalizing. The question is whether we can prove it using only what's given.
+
+To prove SN, we need a well-founded order or a measure.
+
+One approach: define a measure on terms. For each constructor, give a "weight" or rank, and show that each rule decreases the measure.
+
+Alternatively, use a lexicographic path order (LPO), or computability, etc.
+
+But the question is whether strong normalization can be established "from the presented calculus alone, without importing structural axioms or object-level assumptions beyond what is derivable from the given syntax and rewrite rules."
+
+This is interesting. In Lean 4, by default, classical logic is not available (it's constructively based), but we can still prove properties. To prove strong normalization, we'd need to:
+1. Define a well-founded order.
+2. Show each rewrite rule decreases in this order.
+3. Conclude SN.
+
+Well-foundedness requires some foundation. In Lean 4, `WellFoundedTermination` requires showing some relation is well-founded. We can show, e.g., termination of `Nat` is well-founded.
+
+But the question allows "any standard proof method provided it does not require strengthening the system with extra rewrite rules, guards, side conditions, or hidden assumptions."
+
+So we can use a termination measure, well-founded orders, etc. We just need to be able to construct it from the given syntax.
+
+For this specific system, I believe strong normalization holds, and a standard proof using a polynomial interpretation or a recursive path order would work. Let me sketch a measure.
+
+Define a function f : Trace → Nat such that f(t) > f(u) whenever Step t u.
+
+Let's try:
+- f(void) = 0
+- f(delta t) = f(t) + 1
+- f(integrate t) = f(t) + 1
+- f(merge t1 t2) = f(t1) + f(t2) + 1
+- f(app t1 t2) = f(t1) + f(t2) + 1
+- f(recΔ b s n) = f(b) + f(s) + f(n) + 1, but with extra weight for rec to make rec_succ terminate
+- f(eqW a b) = f(a) + f(b) + 1
+
+Let me check each rule:
+1. integrate(delta t) → void: f(integrate(delta t)) = f(delta t) + 1 = f(t) + 1 + 1 = f(t) + 2. f(void) = 0. We need f(t) + 2 > 0, which is true if f(t) ≥ 0. ✓
+2. merge(void, t) → t: f = f(void) + f(t) + 1 = f(t) + 1. RHS = f(t). We need f(t) + 1 > f(t). ✓
+3. merge(t, void) → t: same.
+4. merge(t, t) → t: f = 2f(t) + 1. RHS = f(t). Need 2f(t) + 1 > f(t), i.e., f(t) ≥ 0. ✓
+5. recΔ(b, s, void) → b: f = f(b) + f(s) + f(void) + 1 = f(b) + f(s) + 1 + 1 = f(b) + f(s) + 2. RHS = f(b). Need f(s) + 2 > 0. ✓
+6. recΔ(b, s, delta(n)) → app(s, recΔ(b, s, n)): 
+   LHS = f(b) + f(s) + f(delta n) + 1 = f(b) + f(s) + f(n) + 1 + 1 = f(b) + f(s) + f(n) + 2.
+   RHS = f(s) + f(recΔ(b, s, n)) + 1 = f(s) + (f(b) + f(s) + f(n) + 1) + 1 = f(b) + 2f(s) + f(n) + 2.
+   Hmm, LHS = f(b) + f(s) + f(n) + 2, RHS = f(b) + 2f(s) + f(n) + 2.
+   So LHS - RHS = f(s) - 2f(s) = -f(s) ≤ 0. Not decreasing.
+
+This naive measure doesn't work for rule 6. We need a different approach.
+
+Try: f(app t1 t2) = (some large weight), or f(recΔ b s n) has a more complex definition.
+
+Let me try giving integrate, delta, app, eqW higher weight relative to recΔ.
+
+Or use a more sophisticated measure: assign each constructor a weight in some monoid.
+
+Alternative: use an interpretation. Let's assign each constructor a polynomial in variables and try to find a decreasing interpretation.
+
+f(void) = 1
+f(delta t) = 2 * f(t)  (so f(delta t) ≥ 2)
+f(integrate t) = 2 * f(t) + 1
+f(merge t1 t2) = f(t1) + f(t2) + 1
+f(app t1 t2) = 2 * (f(t1) + f(t2)) + 1
+f(recΔ b s n) = f(b) + f(s) * f(n) + 1
+f(eqW a b) = f(a) + f(b) + 1
+
+Check rule 6: recΔ(b, s, delta(n)) → app(s, recΔ(b, s, n))
+LHS = f(b) + f(s) * f(delta n) + 1 = f(b) + f(s) * 2 * f(n) + 1 = f(b) + 2 f(s) f(n) + 1
+RHS = 2 * (f(s) + f(recΔ(b, s, n))) + 1 = 2 * (f(s) + f(b) + f(s) f(n) + 1) + 1 = 2 f(s) + 2 f(b) + 2 f(s) f(n) + 2 + 1 = 2 f(b) + 2 f(s) + 2 f(s) f(n) + 3
+
+LHS = f(b) + 2 f(s) f(n) + 1
+RHS = 2 f(b) + 2 f(s) + 2 f(s) f(n) + 3
+
+LHS - RHS = -f(b) - 2f(s) - 2. Negative. Not decreasing.
+
+Hmm. The issue is that recΔ(b, s, n) appears on the right. We need the LHS to be larger than RHS.
+
+Let me try: f(recΔ b s n) = f(b) + f(s) * (f(n) + 1) + 1. 
+
+Rule 6: LHS = f(b) + f(s) * (f(delta n) + 1) + 1 = f(b) + f(s) * (2 f(n) + 1) + 1 = f(b) + 2 f(s) f(n) + f(s) + 1
+RHS = 2(f(s) + f(recΔ b s n)) + 1 = 2 f(s) + 2 f(b) + 2 f(s) (f(n) + 1) + 2 + 1
+Wait let me redo. f(recΔ b s n) = f(b) + f(s) * (f(n) + 1) + 1
+f(app s (recΔ b s n)) = 2(f(s) + f(recΔ b s n)) + 1
+                    = 2 f(s) + 2 f(b) + 2 f(s)(f(n) + 1) + 2 + 1
+                    = 2 f(s) + 2 f(b) + 2 f(s) f(n) + 2 f(s) + 3
+                    = 4 f(s) + 2 f(b) + 2 f(s) f(n) + 3
+                    
+LHS = f(b) + 2 f(s) f(n) + f(s) + 1
+
+Still LHS < RHS for large f(b).
+
+The problem: app needs to dominate recΔ in some way. Let's think differently.
+
+Approach: f(app t1 t2) = f(t1) + f(t2). Then f is a "sum" measure but app doesn't strictly increase.
+
+Actually we want f(app t1 t2) > f(t1) + f(t2) since app is a constructor and we want strict decrease. Wait, but for rule 6, LHS recΔ(b, s, delta(n)) → RHS app(s, recΔ(b, s, n)). The LHS has only one "application of rec", RHS has one app plus recΔ. We want the size of recΔ to be measured such that recΔ(b, s, delta(n)) > app(s, recΔ(b, s, n)).
+
+Let's think of recΔ as having its own "recursion depth" measure. Define:
+- g(t) = 1 for any base
+- weight_w(t) = number of delta occurrences in t (some measure)
+
+Actually, let's just count constructor occurrences, but give weight to recΔ depending on the structure of n.
+
+Alternative: prove SN using a different technique, like the size of the term with respect to a well-founded order.
+
+Hmm, let's think of it as a term rewriting system and use the recursive path order or polynomial order.
+
+Actually, for the specific rule recΔ(b, s, delta(n)) → app(s, recΔ(b, s, n)), the term recΔ on the left has the third argument of the form delta(n), and on the right we have recΔ(b, s, n) — the delta is stripped. So we have a strictly smaller third argument in recΔ on the right. This is like a recursive measure.
+
+In fact, if we use a lexicographic-like order on (recΔ count, structural size), or a measure like the "delta-count" of the third argument...
+
+Let me try: define μ(t) = total number of constructors in t.
+- μ(integrate(delta t)) = μ(t) + 2. μ(void) = 1. Decreases. ✓
+- μ(merge void t) = μ(t) + 2. μ(t) decreases. ✓
+- μ(merge t t) = 2μ(t) + 1. μ(t) decreases. ✓
+- μ(recΔ b s void) = μ(b) + μ(s) + 2. μ(b) < this. ✓
+- μ(recΔ b s (delta n)) = μ(b) + μ(s) + μ(n) + 2. μ(app s (recΔ b s n)) = μ(s) + μ(b) + μ(s) + μ(n) + 2. So LHS < RHS. ✗
+
+The total size doesn't work for rule 6 because the right side has an extra app with the same s inside.
+
+We need: f(recΔ b s delta(n)) > f(app s (recΔ b s n)).
+
+Let me make app "cheap" and recΔ "expensive":
+- f(void) = 1
+- f(delta t) = f(t) + 1
+- f(integrate t) = 2 f(t) + 1
+- f(merge t1 t2) = f(t1) + f(t2) + 1
+- f(app t1 t2) = f(t1) + f(t2)
+- f(recΔ b s n) = f(b) + f(s) + 2 f(n) + 1  — we want recursion to decrease as we strip delta
+- f(eqW a b) = f(a) + f(b) + 1
+
+But f(app) ≤ f(t1) + f(t2) means f doesn't strictly increase for app, so app is "free" — bad for the integrate rule perhaps. Let me check integrate rule: integrate(delta t) → void. f(integrate(delta t)) = 2(f(t) + 1) + 1 = 2f(t) + 3. f(void) = 1. Decreases. ✓
+
+Rule 6: f(recΔ b s delta(n)) = f(b) + f(s) + 2 f(delta n) + 1 = f(b) + f(s) + 2 f(n) + 2 + 1 = f(b) + f(s) + 2 f(n) + 3
+RHS f(app s (recΔ b s n)) = f(s) + f(recΔ b s n) = f(s) + f(b) + f(s) + 2 f(n) + 1 = f(b) + 2 f(s) + 2 f(n) + 1
+
+LHS - RHS = (f(b) + f(s) + 2f(n) + 3) - (f(b) + 2f(s) + 2f(n) + 1) = -f(s) + 2.
+
+So LHS > RHS iff f(s) < 2, i.e., f(s) = 1. But f(s) could be anything.
+
+This isn't working. Let me try a different weighting.
+
+What if recΔ has weight depending on delta-count of n?
+
+f(void) = 1
+f(delta t) = ω + f(t) (where ω is a large ordinal/number, but we use Nats so this doesn't work cleanly)
+
+Hmm, with Nats, we can't really have ω. But we can use larger coefficients.
+
+f(void) = 1
+f(delta t) = 2 f(t) + 1
+f(integrate t) = 2 f(t) + 1
+f(merge t1 t2) = 2 max(f(t1), f(t2)) + 1 — or sum
+f(app t1 t2) = f(t1) + f(t2) + 1
+f(recΔ b s n) = f(b) + f(s) + 2 f(n) + 1
+f(eqW a b) = f(a) + f(b) + 1
+
+Rule 6: LHS = f(b) + f(s) + 2 f(delta n) + 1 = f(b) + f(s) + 2(2 f(n) + 1) + 1 = f(b) + f(s) + 4 f(n) + 4
+RHS = f(s) + f(recΔ b s n) + 1 = f(s) + f(b) + f(s) + 2 f(n) + 1 + 1 = f(b) + 2 f(s) + 2 f(n) + 2
+
+LHS - RHS = f(b) + f(s) + 4f(n) + 4 - f(b) - 2f(s) - 2f(n) - 2 = -f(s) + 2 f(n) + 2.
+
+So LHS > RHS iff 2 f(n) + 2 > f(s), i.e., f(s) < 2 f(n) + 2. Not always true.
+
+Hmm. The problem is that recΔ(b, s, n) appears on the right, and s is doubled in some sense (once in app, once in rec).
+
+What if we make recΔ not include f(s) directly?
+
+Try: f(recΔ b s n) = f(b) + 2 f(n) + 1.
+
+Rule 6: LHS = f(b) + 2 f(delta n) + 1 = f(b) + 2(2f(n) + 1) + 1 = f(b) + 4 f(n) + 3
+RHS = f(s) + f(b) + 2 f(n) + 1 + 1 = f(b) + f(s) + 2 f(n) + 2
+LHS - RHS = -f(s) + 2 f(n) + 1. Still not guaranteed.
+
+What if f(app t1 t2) = f(t1) + 1, ignoring t2's weight, or f(app t1 t2) = max(f(t1), f(t2)) + 1? Let's try.
+
+f(app t1 t2) = max(f(t1), f(t2)) + 1. This is unusual but might work for our rule.
+
+Rule 6: RHS = max(f(s), f(recΔ b s n)) + 1.
+f(recΔ b s n) = ? Try f(recΔ b s n) = f(b) + 2 f(n) + 1.
+LHS = f(b) + 4 f(n) + 3.
+RHS = max(f(s), f(b) + 2 f(n) + 1) + 1.
+
+We need f(b) + 4f(n) + 3 > max(f(s), f(b) + 2 f(n) + 1) + 1.
+i.e., f(b) + 4f(n) + 2 > max(f(s), f(b) + 2f(n) + 1).
+i.e., f(b) + 4f(n) + 2 > f(s) AND f(b) + 4f(n) + 2 > f(b) + 2f(n) + 1.
+Second: 2f(n) + 1 > 0, true.
+First: f(s) < f(b) + 4f(n) + 2. Not always true.
+
+Hmm, this still has the issue that s can be arbitrary.
+
+I think the key insight is that we need to track "recursiveness" or "potential for recursion."
+
+Actually wait, in this system, since Step is just top-level rewriting (no context), the reduction is even simpler. Let me re-examine.
+
+If Step is just root-step rewriting, then we can ask: is every reduction sequence finite?
+
+The reduction sequence from any term t is determined by which rule applies at the root of t. If no rule applies, the sequence terminates (length 1). If a rule applies, we get a unique or non-unique next term.
+
+For R_eq_refl and R_eq_diff both applying to eqW a a — these are both unconditional in the inductive definition. So from eqW a a, we have two possible next terms: void or integrate(merge a a) = integrate a (after R_merge_cancel which is another step).
+
+Actually wait, in this SRS, eqW a a → integrate(merge a a) requires another step to apply R_merge_cancel. So:
+- eqW a a --[R_eq_refl]--> void
+- eqW a a --[R_eq_diff]--> integrate(merge a a) --[R_merge_cancel]--> integrate a
+
+For Step to be a single relation, we'd have eqW a a Step integrate(merge a a) directly (one step). Then integrate(merge a a) Step integrate a (another step via R_merge_cancel).
+
+OK so each step is a single rule application at the root.
+
+Anyway, for termination, let me think again.
+
+The system has a few "non-size-decreasing" rules:
+- recΔ b s (delta n) → app s (recΔ b s n): right side has a copy of recΔ with smaller third argument.
+- eqW a b → integrate(merge a b): right side has new constructors but smaller in some sense.
+
+For rule 6, the argument to recΔ on the left is delta(n), and on the right is n. So the "delta-depth" of the third argument strictly decreases. This is a well-founded decrease.
+
+In Lean, we can formalize this using a measure on the third argument of recΔ, like the "strip-delta" function. But the third argument can be any term, not necessarily a chain of deltas around void.
+
+Let me think. R_rec_succ applies when the third argument is delta(n) for any n. After the step, the new third argument is n, which is one constructor smaller (delta is stripped). So the size of the third argument decreases by 1 in the constructor-count sense.
+
+For R_rec_zero, the third argument is void. This case terminates immediately.
+
+So if we measure terms by their "constructor count", recΔ b s (delta n) has third arg of size μ(n) + 1, and after the step, the recΔ has third arg of size μ(n), so the third arg's size decreased.
+
+But the issue is that the new term has an extra app(s, ...). So the total size may not decrease.
+
+However, the recursion argument's size decreases. If we use a measure like "the size of the recursion argument", we get:
+- LHS: third arg is delta(n), size = μ(n) + 1.
+- RHS: the "deepest" recΔ has third arg of size μ(n).
+
+But the new recΔ is inside an app, so we need to handle that.
+
+A well-founded relation: define a measure that prioritizes the recursion argument. Like, use a lexicographic combination: (delta-count of deepest recΔ argument, total size). Or use a "weight" that depends on the structure.
+
+Actually, since we have only top-level reductions (Step is just root rewriting, not contextual), the reduction is simpler. Let me re-examine.
+
+If Step is not extended to subterms, then a term like app (recΔ b s (delta n)) c only reduces via R_rec_succ applied to recΔ b s (delta n), giving app (app s (recΔ b s n)) c. There's no way to reduce the inner recΔ without first reducing the app. But we can't reduce app — there's no rule for app! 
+
+Wait, R_rec_succ: recΔ b s (delta n) → app s (recΔ b s n). This rule is on recΔ directly. If recΔ is inside an app, we can't apply the rule unless Step is contextual.
+
+Looking at the definition:
+inductive Step : Trace → Trace → Prop
+| R_int_delta : ∀ t, Step (integrate (delta t)) void
+| ...
+
+These rules apply only at the root. There's no rule like R_app or R_app_left that allows reduction inside an app. So Step is purely root rewriting.
+
+Hmm, this is a very restricted system. Let me re-examine the consequences.
+
+If Step is just root rewriting, then:
+- integrate(delta t) reduces only to void (which has no rule).
+- merge void t, merge t void, merge t t all reduce to t, and then we can reduce t.
+- recΔ b s void reduces to b.
+- recΔ b s (delta n) reduces to app s (recΔ b s n). Then app has no rule, so we're stuck UNLESS we consider the "next step" is the whole term. But app s (recΔ b s n) is now the term, and no rule applies to app.
+
+Wait, but that's a stuck term. So if we have recΔ b s (delta n) and apply R_rec_succ, we get app s (recΔ b s n), which is stuck. So we can only make one step!
+
+That means: for any term where the outermost constructor has a rule, applying the rule may lead to a stuck or terminating term. There's no "going inside" the term.
+
+Let me reconsider. If the system is purely root rewriting with no contextual closure, then we have a finite state machine essentially. Each term reduces in at most one step (from a non-base case to something else, which may or may not reduce further). Strong normalization is trivially true if there's no infinite chain.
+
+Actually, each term either:
+- Is a base case (no rule applies) — stuck, no further reductions.
+- Has a unique or multiple next terms.
+
+But in any case, the depth of reduction is bounded by the depth of the term... well, let me think. Consider:
+- void: no rule. Stuck.
+- delta t: no rule at root. Stuck. (We can't reduce inside t.)
+- integrate t: only rule is R_int_delta which requires t = delta u. If t = delta u, reduces to void.
+- merge t1 t2: rules apply based on t1, t2 structure.
+- app t1 t2: no rule. Stuck.
+- recΔ b s n: rules apply based on n's structure.
+- eqW a b: rules apply.
+
+So if we treat this as a non-contextual root rewriting system, then a reduction sequence is just: apply a rule at the root, get a new term, apply a rule at the root, etc. The maximum length of such a sequence is bounded by some function of the original term's "depth" or "size."
+
+Actually, let me think. From any term, we can apply at most a few root rewrites before getting stuck. The structure doesn't allow for an unbounded chain.
+
+But wait — is it possible to have a longer chain? Consider eqW a a:
+- Apply R_eq_refl → void. Done.
+- Apply R_eq_diff → integrate(merge a a). Then R_merge_cancel applies to give integrate a. Then if a = delta u, R_int_delta → void.
+
+So eqW a a can reduce in 3 steps (choosing R_eq_diff then R_merge_cancel then R_int_delta if a = delta u).
+
+What about: eqW (eqW a a) (eqW a a)?
+- R_eq_refl → void. (1 step)
+- R_eq_diff → integrate(merge (eqW a a) (eqW a a)) → integrate(eqW a a) (after cancel) → stuck. (2 steps)
+  - But wait, can we further reduce eqW a a inside integrate(eqW a a)? Only if Step is contextual. As defined, Step is just root. integrate(eqW a a) has root integrate, and R_int_delta requires integrate(delta _), which doesn't match. So integrate(eqW a a) is stuck.
+
+Hmm OK. So the maximum length of a reduction from any term is bounded by some constant times the "depth" of the term, since we can only reduce at the root.
+
+Wait actually, I realize I might be over-thinking this. Let me re-read the prompt.
+
+The prompt asks: "can strong normalization of this system be established from the presented calculus alone, without importing structural axioms or object-level assumptions beyond what is derivable from the given syntax and rewrite rules?"
+
+So the question is whether we can prove SN of the relation Step (or its reflexive-transitive closure, or the compatible closure if Step is just root rewriting).
+
+In Lean 4, the term rewriting is typically done with a compatible closure (i.e., reducing subterms). But here, Step is defined only as root rewriting. This is unusual.
+
+If we interpret Step literally as given (root rewriting only), then SN is straightforward because:
+- Each rewrite produces a term of strictly smaller constructor count (in many cases) or the same.
+- Wait, is that true?
+
+Let me check. R_int_delta: integrate(delta t) → void. LHS has 2 constructors, RHS has 1. Decreases. ✓
+R_merge_void_left: merge(void, t) → t. LHS has 1 + μ(t) + 1 = μ(t) + 2 (counting constructors: merge, void, plus t's). RHS has μ(t). Decreases. ✓
+R_merge_void_right: similar.
+R_merge_cancel: merge(t, t) → t. LHS has 2μ(t) + 1. RHS has μ(t). Decreases. ✓
+R_rec_zero: recΔ(b, s, void) → b. LHS has μ(b) + μ(s) + 1 + 1 = μ(b) + μ(s) + 2. RHS has μ(b). Decreases. ✓
+R_rec_succ: recΔ(b, s, delta(n)) → app(s, recΔ(b, s, n)). LHS = μ(b) + μ(s) + μ(n) + 3. RHS = μ(s) + μ(b) + μ(s) + μ(n) + 2 = μ(b) + 2μ(s) + μ(n) + 2. So LHS - RHS = -μ(s) + 1. Not always positive.
+
+R_eq_refl: eqW(a, a) → void. LHS = 2μ(a) + 1. RHS = 1. Decreases if μ(a) ≥ 0. ✓
+R_eq_diff: eqW(a, b) → integrate(merge(a, b)). LHS = μ(a) + μ(b) + 1. RHS = μ(a) + μ(b) + 1 + 1 = μ(a) + μ(b) + 2. INCREASES! 
+
+So R_eq_diff increases the constructor count. This means the simple size measure doesn't work.
+
+But! After R_eq_diff, the new term is integrate(merge(a, b)). For further reduction, we'd need to apply a rule to the root, which is integrate. R_int_delta requires integrate(delta _), so we'd need merge(a, b) = delta c, which only happens if a = delta c and b = void, or similar.
+
+If neither a nor b is void or delta, then integrate(merge(a, b)) is stuck. So the reduction terminates.
+
+If a = void, b = anything: integrate(merge(void, b)) → integrate(b) (via R_merge_void_left applied at... wait, R_merge_void_left says merge(void, t) → t, but here we have integrate(merge(void, b)), and the root is integrate, not merge. So as root rewriting, we can't apply R_merge_void_left. We're stuck at integrate(merge(void, b)).
+
+Hmm, so in this strictly root-rewriting interpretation, integrate(merge(void, b)) is stuck. The chain terminates.
+
+So even though R_eq_diff increases the size, the resulting term might be stuck. So the chain length is still bounded.
+
+OK so the answer depends on the interpretation. If Step is strictly root rewriting, then SN is "easy" because chains are short.
+
+If Step is meant to be the compatible closure (reducing at any subterm), then we have a standard TRS and need a more sophisticated argument.
+
+I think the user is asking about the standard TRS interpretation, where reductions can happen at any subterm. The fact that there are only root rewrite rules in the inductive definition is a presentation choice; in practice, we extend to subterms.
+
+Actually, looking at the rules again — they are rewrite rules. In a TRS, you can rewrite at any subterm (or with explicit congruence rules). The Step relation here is one-step rewriting, but typically we'd interpret this as one-step at any position.
+
+Let me re-read the prompt: "without strengthening the system with extra rewrite rules, guards, side conditions, or hidden assumptions."
+
+So we can't add rules. But we can use the standard machinery of TRS (compatible closure, etc.) without adding rules.
+
+If we interpret Step as the one-step rewriting (i.e., as the single rule application without extending to subterms), then it's an Srs-like system, but typically for termination proofs of TRS, we consider all positions.
+
+Actually, I think the user is treating this as a TRS and asking if SN can be proved. In a TRS, the rewrite relation is the compatible closure of the one-step rules. The user is asking if we can prove SN.
+
+So given the rules as a TRS, can we prove SN?
+
+Let me check if this is even a terminating TRS. I want to check if there's an infinite rewrite sequence.
+
+R_eq_diff: eqW(a, b) → integrate(merge(a, b))
+- After this, we have integrate(merge(a, b)). To reduce, we apply a rule at the root (integrate) or at the subterm merge(a, b). 
+- At the root: R_int_delta requires integrate(delta _), so merge(a, b) must be delta _. If a = delta c, b = void, or a = void, b = delta c, then we can apply. Otherwise stuck.
+- At subterm merge(a, b): apply R_merge_void_left if a = void, etc.
+
+Let me try to construct a problematic term.
+
+Consider eqW(a, a) using R_eq_diff: → integrate(merge(a, a)) → integrate(a) (after R_merge_cancel at subterm).
+
+Now what? If a is a term we keep rewriting... but the eqW is gone, so no more eqW rules can apply. The integrate is gone, so no more integrate rules. The merge is gone, so no more merge rules. The only rule that can apply is if a contains a redex.
+
+So the question becomes: can a itself be non-terminating?
+
+a's structure: it's a Trace. The constructors that can have rules applied (after stripping eqW, integrate, merge) are: delta, void, app, recΔ.
+
+- delta: no rule.
+- void: no rule.
+- app: no rule.
+- recΔ b s n: can apply R_rec_zero if n = void, R_rec_succ if n = delta m.
+
+So a can "iterate" through recΔ. Let's see if recΔ is non-terminating.
+
+R_rec_succ: recΔ(b, s, delta(n)) → app(s, recΔ(b, s, n))
+
+The result is app(s, recΔ(b, s, n)). The recΔ has third argument n, which is "smaller" (delta stripped). But the result also has app wrapping. We can reduce further inside the recΔ term.
+
+If n = delta(m), we can apply R_rec_succ again: recΔ(b, s, delta(m)) → app(s, recΔ(b, s, m)). 
+
+So from recΔ(b, s, delta^n(void)), we can iterate n times to get app(s, app(s, ..., app(s, recΔ(b, s, void))...)). Then recΔ(b, s, void) → b. So after n+1 steps, we get app(s, app(s, ..., app(s, b)...)) which is in normal form (no rule on app).
+
+So the recursion terminates. The "delta-depth" of n decreases each time.
+
+Now, the question is whether the size or some measure decreases. Let me try to define a well-founded measure.
+
+Define g : Trace → Nat (or some well-ordered type) such that Step t u implies g(t) > g(u).
+
+The "delta-count" approach: count the number of delta occurrences in t, weighted by some structure.
+
+Let me try: g(t) = the number of "potential recursions" in t, defined recursively.
+
+Actually, the simplest is to use the multiset of recΔ terms' delta-depths.
+
+Define d : Trace → Nat as the maximum delta-depth of any recΔ's third argument.
+
+d(void) = 0
+d(delta t) = d(t) + 1
+d(integrate t) = d(t)
+d(merge t1 t2) = max(d(t1), d(t2))
+d(app t1 t2) = max(d(t1), d(t2))
+d(recΔ b s n) = d(n) + 1
+d(eqW a b) = max(d(a), d(b))
+
+Hmm, but this doesn't capture that the recursion produces app(s, ...). Let me think.
+
+Actually, for SN of just recΔ rules, the delta-depth of the third argument strictly decreases. After R_rec_succ, the new recΔ has third argument n, which has delta-depth one less than delta(n). So d decreases by 1 for that recΔ.
+
+But the new term has an app wrapping. The app's contribution to d is the max of its arguments, which includes recΔ(b, s, n) with smaller d, and s (unchanged). So d(app(s, recΔ(b, s, n))) = max(d(s), d(n) + 1) ≤ max(d(s), d(delta(n)) + 0) = max(d(s), d(delta(n))). And d(recΔ(b, s, delta(n))) = d(delta(n)) + 1.
+
+Wait, let's recompute. d(recΔ b s delta(n)) = d(delta n) + 1 = d(n) + 1 + 1 = d(n) + 2.
+d(app s (recΔ b s n)) = max(d(s), d(recΔ b s n)) = max(d(s), d(n) + 1).
+
+We need d(n) + 2 > max(d(s), d(n) + 1) = max(d(s), d(n) + 1).
+- If d(s) ≤ d(n) + 1: d(n) + 2 > d(n) + 1. ✓
+- If d(s) > d(n) + 1: d(n) + 2 > d(s)? Not always.
+
+Hmm.
+
+Let me think of a different measure. Use a "size" with recΔ weighted heavily.
+
+Actually, the system is simple enough. Let me just argue intuitively:
+
+For each rewrite rule, the term's structure is reduced in some sense:
+- integrate, merge, eqW, recΔ are "consumed" in various ways.
+- The only rule that "creates" structure is R_rec_succ, which wraps in app but reduces the recΔ's third argument.
+
+The system is essentially a guarded recursive definition that always terminates.
+
+For a formal proof in Lean 4, we could:
+1. Define a measure like the "size" of the term, with appropriate weights.
+2. Show each rule decreases the measure.
+3. Conclude well-foundedness of Step (and its transitive closure).
+
+But the actual implementation would be tricky. The user is asking whether it's possible, not asking me to do it.
+
+Given the rules:
+- The system is essentially a small TRS.
+- It doesn't have any obviously non-terminating patterns (no rule that creates more of the same).
+- The R_rec_succ rule does have a recΔ on the right, but the third argument is "smaller" (delta stripped).
+- The R_eq_diff rule introduces new constructors but destroys eqW.
+
+I believe strong normalization holds for this system. It can be established using a polynomial interpretation or a well-founded order (like a recursive path order with appropriate precedence).
+
+For a concrete measure, let's try:
+- Let s(t) = "size" of t = total constructor count.
+- The "size" might not decrease, but a more sophisticated measure does.
+
+Consider the "depth" of recΔ, or the "weight" defined as:
+
+Let's try a measure using the "Okada's" or "Dershowitz" interpretation.
+
+Actually, let me try a specific polynomial interpretation. Assign to each constructor a polynomial, and show each rule's LHS - RHS > 0 (or ≥ 1).
+
+Let me use:
+- I(void) = 0
+- I(delta x) = x + 1
+- I(integrate x) = 2x + 1
+- I(merge x y) = x + y + 1
+- I(app x y) = x + y + 1
+- I(recΔ b s n) = b + s + 2n + 1
+- I(eqW a b) = a + b + 1
+
+Check rules:
+1. I(integrate(delta t)) = 2(t + 1) + 1 = 2t + 3. I(void) = 0. 2t + 3 > 0. ✓
+2. I(merge void t) = 0 + t + 1 = t + 1. I(t) = I(t). t + 1 > I(t)? Only if I(t) = t, but I(t) might not equal t. Hmm.
+
+Wait, we're treating I as a function of variables. For a "term" t built from variables, I(t) is a polynomial in those variables. We need I(LHS) > I(RHS) when we substitute.
+
+For rule 2, LHS = merge(void, t), I(LHS) = 0 + I(t) + 1 = I(t) + 1. RHS = t, I(RHS) = I(t). I(t) + 1 > I(t). ✓
+3. Similar. ✓
+4. I(merge(t, t)) = I(t) + I(t) + 1 = 2I(t) + 1. I(t) = I(t). 2I(t) + 1 > I(t). ✓
+5. I(recΔ(b, s, void)) = I(b) + I(s) + 0 + 1 = I(b) + I(s) + 1. I(b) = I(b). I(b) + I(s) + 1 > I(b). ✓
+6. I(recΔ(b, s, delta(n))) = I(b) + I(s) + 2(n+1) + 1 = I(b) + I(s) + 2n + 3. I(app(s, recΔ(b, s, n))) = I(s) + I(b) + I(s) + 2n + 1 + 1 = I(b) + 2I(s) + 2n + 2. Difference: I(b) + I(s) + 2n + 3 - I(b) - 2I(s) - 2n - 2 = -I(s) + 1. Not always positive. ✗
+
+Hmm. Let me adjust: I(app x y) = x + y (no +1). Then:
+6. I(app(s, recΔ(b, s, n))) = I(s) + I(b) + I(s) + 2n + 1 = I(b) + 2I(s) + 2n + 1. Difference = -I(s) + 2. Still not guaranteed.
+
+The issue: when we replace delta(n) with n in recΔ, we save only I(delta) - I(n) = (n+1) - n = 1. But the RHS has an extra app(s, ...), so we lose I(s) somewhere.
+
+We need I(delta(n)) - I(n) to be larger than I(s). So if I(delta x) is much larger than I(x), we can compensate.
+
+Let I(delta x) = Kx + 1 for large K.
+- I(void) = 0
+- I(delta x) = Kx + 1
+- I(integrate x) = 2x + 1
+- I(merge x y) = x + y + 1
+- I(app x y) = x + y + 1
+- I(recΔ b s n) = b + s + 2n + 1
+- I(eqW a b) = a + b + 1
+
+Rule 6: LHS = b + s + 2(Kn + 1) + 1 = b + s + 2Kn + 3. RHS = (s + 1) + (b + s + 2n + 1) = b + 2s + 2n + 2. Difference = 2Kn - 2n - s + 1 = 2n(K-1) - s + 1.
+
+For this to be positive, we need 2n(K-1) ≥ s, i.e., K ≥ s/(2n) + 1. Since s and n are variables (positive), this isn't guaranteed for fixed K.
+
+Hmm, polynomial interpretations don't directly handle this because recΔ(b, s, delta(n)) → app(s, recΔ(b, s, n)) has the variable s on both sides, and the third argument on the left is "delta-strictly-larger" than the right, but the saved amount depends on n, not just structural decrease.
+
+Actually wait, in polynomial interpretation, the values are numbers. The saved amount is I(delta(n)) - I(n) = Kn + 1 - n = (K-1)n + 1. This depends on n, so we need (K-1)n + 1 ≥ I(s). This isn't guaranteed for fixed K.
+
+So a simple polynomial interpretation with one base term variable doesn't work. We need either:
+1. A more sophisticated measure (like a polynomial in multiple variables, or a non-polynomial one).
+2. A different proof technique.
+
+Actually, polynomial interpretation works for systems where the decrease is uniform. Here, the decrease in rule 6 depends on n, which is a subterm. We need a more clever interpretation.
+
+Let me try a matrix interpretation or a different order.
+
+Alternative: use the size of terms with a weighting that prioritizes recΔ.
+
+Let's define a measure where recΔ has weight proportional to the "size" of its third argument. So:
+- f(void) = 1
+- f(delta t) = 1
+- f(integrate t) = 1
+- f(merge t1 t2) = 1
+- f(app t1 t2) = 1
+- f(recΔ b s n) = 1 + f(n)  — emphasizes the size of n
+- f(eqW a b) = 1
+
+But then merge(t,t) = 1 reduces to t which could be larger. So this doesn't give a measure.
+
+I think the issue is that polynomial interpretations struggle with R_rec_succ. Let me think of another approach.
+
+Approach: define a measure that gives recΔ extra weight for its recursive argument. Use a lexicographic combination.
+
+For example, define a tuple measure (A, B) where A is the structural size and B is the maximum "delta-depth" of recΔ's argument.
+
+But we saw that A doesn't always decrease.
+
+Alternative: use a "depth of recΔ" measure. For each term, define:
+- "rec-depth" of a term = max over all recΔ(b, s, n) in t of (delta-count in n) + 1.
+
+Then R_rec_succ reduces this depth by 1 (for the rewritten recΔ), and no other rule increases the rec-depth of any recΔ (since R_eq_diff destroys eqW without creating recΔ, integrate rules don't touch recΔ, etc.).
+
+Wait, but R_eq_diff might create integrate, merge, but not recΔ. So the rec-depth doesn't increase. R_rec_succ decreases the rec-depth by 1.
+
+But the issue is that R_rec_succ has the form recΔ(b, s, delta(n)) → app(s, recΔ(b, s, n)). The new recΔ(b, s, n) has rec-depth = (delta-count in n) + 1 = (delta-count in delta(n)) = (delta-count in n) + 1. The old rec-depth was (delta-count in delta(n)) + 1 = (delta-count in n) + 2. So the new is 1 less. ✓
+
+But the result is wrapped in app(s, ...). The rec-depth of app(s, X) is the rec-depth of X (since app is just a constructor). So the rec-depth of the new term is the rec-depth of recΔ(b, s, n) = (delta-count in n) + 1, which is 1 less than the old rec-depth of recΔ(b, s, delta(n)) = (delta-count in n) + 2.
+
+So R_rec_succ decreases the rec-depth by 1.
+
+What about R_rec_zero? recΔ(b, s, void) → b. The rec-depth of LHS is (delta-count in void) + 1 = 0 + 1 = 1. The rec-depth of RHS is rec-depth of b. We need 1 > rec-depth(b), but rec-depth(b) could be 0 or more. If b has rec-depth 0, then 1 > 0, good. If b has rec-depth > 1, then LHS < RHS in rec-depth.
+
+Hmm. So R_rec_zero might increase rec-depth.
+
+For example, if b = recΔ(b', s', n'), then LHS = recΔ(b, s, void) has rec-depth = 1. RHS = b = recΔ(b', s', n') has rec-depth = 1 + (delta-count in n') = at least 1. So rec-depth of RHS ≥ 1 = rec-depth of LHS. Could be equal or larger.
+
+So the rec-depth measure doesn't always decrease. Specifically, R_rec_zero might not decrease it (it could stay the same).
+
+Hmm. But after R_rec_zero, we no longer have the outer recΔ. So even if rec-depth stays the same, the term is "smaller" in some sense.
+
+I think the right approach is to combine multiple measures. Use a lexicographic combination where the "outermost recΔ depth" decreases.
+
+Actually, you know what, let me think about whether the system is actually SN without going too deep.
+
+The system has 8 rules. The "destructive" rules (R_int_delta, R_merge_*, R_rec_zero, R_eq_refl) all strictly decrease the structural size.
+
+The "productive" rules (R_rec_succ, R_eq_diff) increase structural size but in a controlled way:
+- R_rec_succ: recΔ's third argument's delta-depth decreases by 1.
+- R_eq_diff: eqW is destroyed and replaced with integrate(merge(a, b)). No new eqW or recΔ is created.
+
+Hmm, but R_eq_diff doesn't create anything that can loop. integrate(merge(a, b)) — to further reduce, we apply integrate rules (only if a or b is delta of void) or merge rules (only if a or b is void or a = b).
+
+So R_eq_diff leads to a bounded number of further reductions (depending on a, b's structure).
+
+I think this system is SN. Let me sketch a proof.
+
+Claim: Define a measure μ : Trace → Nat × Nat as a lexicographic pair, where the first component is some structural measure and the second is the "rec-depth" or "potential recursions" left.
+
+Actually, here's an idea. Let's use the multiset of "potential rec-arg-delta-depths" as one measure, and the structural size as another.
+
+Or more simply: since the system is finite, we can enumerate reduction sequences and show each is finite. But that's not a proof.
+
+Let me try one more polynomial interpretation. What if we use a different "recΔ" weight that depends on n differently?
+
+Let f(recΔ b s n) = f(b) + (f(s) + 1) * f(n) * 2. So recΔ's weight is exponential in n.
+
+f(void) = 1
+f(delta t) = f(t) + 1
+f(integrate t) = f(t) + 1
+f(merge t1 t2) = f(t1) + f(t2) + 1
+f(app t1 t2) = f(t1) + f(t2) + 1
+f(recΔ b s n) = f(b) + 2 (f(s) + 1) (f(n) + 1)
+f(eqW a b) = f(a) + f(b) + 1
+
+Check rule 6: LHS = f(b) + 2 (f(s) + 1) (f(delta n) + 1) = f(b) + 2 (f(s) + 1) (f(n) + 2)
+RHS = f(s) + f(recΔ b s n) + 1 = f(s) + f(b) + 2(f(s) + 1)(f(n) + 1) + 1
+     = f(b) + 2(f(s) + 1)(f(n) + 1) + f(s) + 1
+
+LHS - RHS = 2(f(s) + 1)(f(n) + 2) - 2(f(s) + 1)(f(n) + 1) - f(s) - 1
+          = 2(f(s) + 1) [(f(n) + 2) - (f(n) + 1)] - f(s) - 1
+          = 2(f(s) + 1) - f(s) - 1
+          = 2 f(s) + 2 - f(s) - 1
+          = f(s) + 1
+
+So LHS - RHS = f(s) + 1 > 0. ✓ Great!
+
+Now let me check the other rules.
+
+Rule 1: LHS = f(integrate(delta t)) = f(delta t) + 1 = f(t) + 1 + 1 = f(t) + 2. RHS = f(void) = 1. LHS - RHS = f(t) + 1 > 0. ✓
+
+Rule 2: LHS = f(merge void t) = f(void) + f(t) + 1 = 1 + f(t) + 1 = f(t) + 2. RHS = f(t). LHS - RHS = 2. ✓
+
+Rule 3: similar. ✓
+
+Rule 4: LHS = f(merge t t) = 2 f(t) + 1. RHS = f(t). LHS - RHS = f(t) + 1 > 0. ✓
+
+Rule 5: LHS = f(recΔ b s void) = f(b) + 2(f(s) + 1)(f(void) + 1) = f(b) + 2(f(s) + 1)(2) = f(b) + 4(f(s) + 1) = f(b) + 4 f(s) + 4. RHS = f(b). LHS - RHS = 4 f(s) + 4 > 0. ✓
+
+Rule 6: ✓ (shown above)
+
+Rule 7: LHS = f(eqW a a) = 2 f(a) + 1. RHS = f(void) = 1. LHS - RHS = 2 f(a) > 0. ✓
+
+Rule 8: LHS = f(eqW a b) = f(a) + f(b) + 1. RHS = f(integrate(merge a b)) = f(merge a b) + 1 = f(a) + f(b) + 1 + 1 = f(a) + f(b) + 2. 
+
+Wait! LHS - RHS = (f(a) + f(b) + 1) - (f(a) + f(b) + 2) = -1 < 0. ✗
+
+So rule 8 (R_eq_diff) makes the term LARGER, not smaller. The polynomial interpretation doesn't work for this rule.
+
+Hmm. Let me adjust.
+
+f(integrate t) should have a smaller coefficient. Let's try f(integrate t) = f(t) (no +1).
+
+f(void) = 1
+f(delta t) = f(t) + 1
+f(integrate t) = f(t)  -- changed
+f(merge t1 t2) = f(t1) + f(t2) + 1
+f(app t1 t2) = f(t1) + f(t2) + 1
+f(recΔ b s n) = f(b) + 2 (f(s) + 1) (f(n) + 1)
+f(eqW a b) = f(a) + f(b) + 1
+
+Rule 1: LHS = f(integrate(delta t)) = f(delta t) = f(t) + 1. RHS = f(void) = 1. LHS - RHS = f(t) > 0. ✓ (assuming f(t) ≥ 1, which is true since f(void) = 1 and we have positive coefficients)
+
+Rule 2: same as before. ✓
+Rule 3: same. ✓
+Rule 4: same. ✓
+Rule 5: same. ✓
+Rule 6: 
+LHS = f(recΔ b s delta(n)) = f(b) + 2(f(s)+1)(f(delta n) + 1) = f(b) + 2(f(s)+1)(f(n) + 2)
+RHS = f(app s (recΔ b s n)) = f(s) + f(recΔ b s n) + 1 = f(s) + f(b) + 2(f(s)+1)(f(n) + 1) + 1
+LHS - RHS = 2(f(s)+1)(f(n)+2) - 2(f(s)+1)(f(n)+1) - f(s) - 1 = 2(f(s)+1) - f(s) - 1 = f(s) + 1 > 0. ✓
+
+Rule 7: LHS = 2f(a) + 1. RHS = 1. ✓
+Rule 8: LHS = f(a) + f(b) + 1. RHS = f(integrate(merge a b)) = f(merge a b) = f(a) + f(b) + 1. LHS - RHS = 0. ✗ (need strict decrease)
+
+The issue: R_eq_diff LHS = eqW(a, b) has weight f(a) + f(b) + 1. RHS = integrate(merge(a, b)) has weight f(merge(a, b)) = f(a) + f(b) + 1. They're equal.
+
+To make RHS smaller, we need to reduce the weight of integrate(merge(...)) or increase the weight of eqW.
+
+Let f(eqW a b) = f(a) + f(b) + 2 (add 1).
+
+Rule 7: LHS = 2f(a) + 2. RHS = 1. LHS - RHS = 2f(a) + 1 > 0. ✓
+Rule 8: LHS = f(a) + f(b) + 2. RHS = f(a) + f(b) + 1. LHS - RHS = 1 > 0. ✓
+
+But we also need to check that this doesn't break other rules. f(eqW a b) only appears in rules 7 and 8. ✓
+
+So the polynomial interpretation is:
+- f(void) = 1
+- f(delta t) = f(t) + 1
+- f(integrate t) = f(t)
+- f(merge t1 t2) = f(t1) + f(t2) + 1
+- f(app t1 t2) = f(t1) + f(t2) + 1
+- f(recΔ b s n) = f(b) + 2 (f(s) + 1) (f(n) + 1)
+- f(eqW a b) = f(a) + f(b) + 2
+
+Wait, but for f(integrate t) = f(t), we need f(t) ≥ 1 for all t, which is true since f(void) = 1 and all constructors have positive or non-negative coefficients.
+
+Actually wait, f(integrate t) = f(t). So f(integrate t) = f(t). And f(t) ≥ 1 for all t (since base case f(void) = 1 and all constructors add non-negative terms). So this is fine.
+
+Let me double-check rule 1: LHS = f(integrate(delta t)) = f(delta t) = f(t) + 1. RHS = f(void) = 1. LHS - RHS = f(t) ≥ 1. ✓
+
+And the base case: f(void) = 1. f(delta t) = f(t) + 1 ≥ 2. f(integrate t) = f(t) ≥ 1. f(merge t1 t2) = f(t1) + f(t2) + 1 ≥ 3. f(app t1 t2) = f(t1) + f(t2) + 1 ≥ 3. f(recΔ b s n) = f(b) + 2(f(s) + 1)(f(n) + 1) ≥ 1 + 2(2)(2) = 9 (using f(s) ≥ 1, f(n) ≥ 1, so 2(f(s)+1)(f(n)+1) ≥ 2(2)(2) = 8). f(eqW a b) = f(a) + f(b) + 2 ≥ 4.
+
+So f is well-defined and ≥ 1 everywhere.
+
+Now, this is a polynomial interpretation that shows Step t u implies f(t) > f(u). This proves strong normalization (assuming Step is the one-step rewriting relation, and we consider its compatible closure for full TRS, or just the root rewriting if Step is just root).
+
+Wait, this f is a function of the term structure, and we've shown f(LHS) > f(RHS) for each rule. So each rule application at any position decreases f. Thus the rewriting relation (compatible closure of Step) is well-founded, i.e., strongly normalizing.
+
+So yes, SN can be established from the calculus alone, using a polynomial interpretation.
+
+OK so my answer is: Yes, strong normalization can be established using a polynomial interpretation. The interpretation:
+
+f(void) = 1
+f(delta t) = f(t) + 1
+f(integrate t) = f(t)
+f(merge t1 t2) = f(t1) + f(t2) + 1
+f(app t1 t2) = f(t1) + f(t2) + 1
+f(recΔ b s n) = f(b) + 2 (f(s) + 1) (f(n) + 1)
+f(eqW a b) = f(a) + f(b) + 2
+
+gives f(t) > f(u) whenever Step t u (at any position), and f maps to positive integers, so by well-foundedness of the natural order, the rewriting relation is strongly normalizing.
+
+Hmm wait, I should double check. The polynomial interpretation in TRS uses polynomials over the natural numbers. The interpretation function I : Σ → ℕ[vars] maps each function symbol of arity n to a polynomial in n variables. Then I is "monotone" and "compatible" with substitution.
+
+For our function symbols:
+- void: arity 0, I(void) = 1.
+- delta: arity 1, I(delta, x) = x + 1.
+- integrate: arity 1, I(integrate, x) = x.
+- merge: arity 2, I(merge, x, y) = x + y + 1.
+- app: arity 2, I(app, x, y) = x + y + 1.
+- recΔ: arity 3, I(recΔ, b, s, n) = b + 2(s + 1)(n + 1).
+- eqW: arity 2, I(eqW, a, b) = a + b + 2.
+
+For the rules to be "decreasing" (i.e., I(LHS) > I(RHS) under any substitution), we need:
+
+1. I(integrate(delta t)) = I(delta, t) + 0... wait, I(integrate, x) = x, so I(integrate(delta t)) = I(delta, t) = t + 1. I(void) = 1. So I(LHS) = t + 1, I(RHS) = 1. I(LHS) - I(RHS) = t ≥ 1. ✓
+
+2. I(merge(void, t)) = I(void) + I(t) + 1 = 1 + t + 1 = t + 2. I(t) = t. I(LHS) - I(RHS) = 2. ✓
+
+3. Similar. ✓
+
+4. I(merge(t, t)) = t + t + 1 = 2t + 1. I(t) = t. I(LHS) - I(RHS) = t + 1 ≥ 2. ✓
+
+5. I(recΔ(b, s, void)) = b + 2(s + 1)(void + 1) = b + 2(s+1)(2) = b + 4s + 4. I(b) = b. I(LHS) - I(RHS) = 4s + 4 ≥ 8. ✓
+
+6. I(recΔ(b, s, delta(n))) = b + 2(s + 1)(I(delta, n) + 1) = b + 2(s+1)(n + 1 + 1) = b + 2(s+1)(n+2).
+   I(app(s, recΔ(b, s, n))) = I(s) + I(recΔ(b, s, n)) + 1 = s + (b + 2(s+1)(n+1)) + 1 = s + b + 2(s+1)(n+1) + 1.
+   I(LHS) - I(RHS) = b + 2(s+1)(n+2) - s - b - 2(s+1)(n+1) - 1 = 2(s+1) - s - 1 = 2s + 2 - s - 1 = s + 1. ≥ 2. ✓
+
+7. I(eqW(a, a)) = a + a + 2 = 2a + 2. I(void) = 1. I(LHS) - I(RHS) = 2a + 1 ≥ 3. ✓
+
+8. I(eqW(a, b)) = a + b + 2. I(integrate(merge(a, b))) = I(merge(a, b)) = a + b + 1. I(LHS) - I(RHS) = 1. ✓
+
+All rules decrease the polynomial interpretation. The interpretation is over positive integers (since the base value is 1 and all coefficients are positive), so it's well-defined.
+
+Thus, by the standard theory of polynomial interpretations (or more simply, by induction on the polynomial interpretation's value), the rewrite relation is strongly normalizing.
+
+So my answer is: Yes, SN can be established using a polynomial interpretation over ℕ.
+
+Wait, I should double-check rule 6 more carefully.
+
+I(recΔ(b, s, delta(n))):
+- I(delta, n) = n + 1.
+- I(recΔ, b, s, I(delta, n)) = b + 2(s + 1)(I(delta, n) + 1) = b + 2(s+1)(n + 1 + 1) = b + 2(s+1)(n+2).
+
+I(app(s, recΔ(b, s, n))):
+- I(s) = s.
+- I(recΔ(b, s, n)) = b + 2(s+1)(n+1).
+- I(app, s, I(recΔ(b, s, n))) = I(s) + I(recΔ(b, s, n)) + 1 = s + b + 2(s+1)(n+1) + 1.
+
+Difference: I(LHS) - I(RHS) = [b + 2(s+1)(n+2)] - [s + b + 2(s+1)(n+1) + 1]
+= 2(s+1)(n+2) - s - 2(s+1)(n+1) - 1
+= 2(s+1)[(n+2) - (n+1)] - s - 1
+= 2(s+1) - s - 1
+= 2s + 2 - s - 1
+= s + 1.
+
+Since s ≥ 1 (as f(s) ≥ 1 for all s), this is ≥ 2 > 0. ✓
+
+Great, so the polynomial interpretation works.
+
+Wait, I should also consider whether "polynomial interpretation" works for non-contextual Step vs contextual closure. The polynomial interpretation works for the compatible closure of the rewrite rules, which is the standard TRS interpretation. If the user intends Step to be just root rewriting (not contextual), then SN is even easier.
+
+OK so my final answer: Yes, strong normalization can be established using a polynomial interpretation over ℕ. Here's the interpretation, etc.
+
+Actually wait, I want to reconsider the question. "can strong normalization of this system be established from the presented calculus alone, without importing structural axioms or object-level assumptions beyond what is derivable from the given syntax and rewrite rules?"
+
+The polynomial interpretation is a standard proof technique. It doesn't require adding new rules or axioms. It uses the natural numbers (which are well-founded in Lean 4) and the structure of the terms.
+
+So yes, SN can be established.
+
+Let me write up the response.
