@@ -1,0 +1,428 @@
+The user wants a proof skeleton for the remaining 5 `sorry` cases in a Lean 4 file.
+The file proves that a first-order rewrite system is strongly normalizing by showing that every step strictly decreases a lexicographic measure `(kappa, mu)`.
+The measure is defined as:
+`kappa`: recursion depth. Adds +1 only when `recDelta`'s third argument is `delta`-wrapped. Delta is transparent.
+`mu`: weighted structural size. Delta is transparent.
+
+The remaining cases are:
+1. `R_int_delta t`: `integrate (delta t) --> void`
+2. `R_rec_zero b s`: `recDelta b s void --> b`
+3. `R_rec_succ b s n`: `recDelta b s (delta n) --> app s (recDelta b s n)`
+4. `R_eq_refl a`: `eqW a a --> void`
+5. `R_eq_diff a b`: `eqW a b --> integrate (merge a b)`
+
+Let's analyze each case and determine whether `kappa` drops strictly, or `kappa` ties and `mu` drops strictly.
+
+Case 1: `R_int_delta t`
+LHS: `integrate (delta t)`
+RHS: `void`
+`kappa (integrate (delta t)) = kappa (delta t) = kappa t`
+`kappa void = 0`
+Wait, does `kappa t` always drop to 0? Not necessarily. If `kappa t > 0`, then `kappa` drops. If `kappa t = 0`, `kappa` ties.
+Let's check `mu`:
+`mu (integrate (delta t)) = 1 + mu (delta t) = 1 + mu t`
+`mu void = 0`
+So `mu` always drops strictly, because `1 + mu t > 0`.
+Does `kappa` tie or drop?
+If `kappa t = 0`, `kappa` ties, `mu` drops.
+If `kappa t > 0`, `kappa` drops.
+Actually, wait. Is there a simpler way?
+`kappa void = 0 <= kappa (integrate (delta t))`.
+If `kappa` drops, we use `drop_left`. If it ties, we use `drop_right`.
+We can just use `cases` or `omega` or `Nat.lt_or_eq_of_le`.
+Wait, in Lean, `kappa void = 0`. `kappa (integrate (delta t)) = kappa t`.
+Since `0 <= kappa t`, we have `kappa void <= kappa (integrate (delta t))`.
+If `kappa void < kappa (integrate (delta t))`, `drop_left`.
+If `kappa void = kappa (integrate (delta t))`, `drop_right`.
+Let's write a skeleton that uses `by_cases h : kappa void < kappa (integrate (delta t))` or simply `omega` / `linarith` if we can automate it, but the prompt asks for a "proof skeleton".
+Actually, I can just write:
+```lean
+| _, _, Step.R_int_delta t => by
+    have hmu : mu void < mu (integrate (delta t)) := by simp [mu]; omega
+    by_cases hk : kappa void < kappa (integrate (delta t))
+    · exact drop_left hk
+    · have hk_eq : kappa void = kappa (integrate (delta t)) := by omega
+      exact drop_right hmu hk_eq
+```
+Wait, the prompt says "Provide a proof skeleton for completing the remaining cases."
+Let's look at the proved cases:
+```lean
+| _, _, Step.R_merge_void_left t => by
+    have hmu : mu t < mu (merge void t) := by simp [mu]
+    have hk  : kappa t = kappa (merge void t) := by simp [kappa]
+    exact drop_right hmu hk
+```
+For `R_int_delta t`:
+```lean
+| _, _, Step.R_int_delta t => by
+    have hmu : mu void < mu (integrate (delta t)) := by simp [mu]; omega
+    -- kappa might drop or tie depending on t
+    by_cases h : kappa void < kappa (integrate (delta t))
+    · exact drop_left h
+    · exact drop_right hmu (by omega)
+```
+
+Case 2: `R_rec_zero b s`
+LHS: `recDelta b s void`
+RHS: `b`
+`kappa (recDelta b s void) = max (max (kappa b) (kappa s)) (kappa void) = max (kappa b) (kappa s)`
+`kappa b <= max (kappa b) (kappa s)`
+So `kappa` might drop or tie.
+`mu (recDelta b s void) = 3 + mu b + mu s + mu void = 3 + mu b + mu s`
+`mu b < 3 + mu b + mu s` is always true since `mu s >= 0`.
+So `mu` always drops strictly.
+```lean
+| _, _, Step.R_rec_zero b s => by
+    have hmu : mu b < mu (recDelta b s void) := by simp [mu]; omega
+    by_cases h : kappa b < kappa (recDelta b s void)
+    · exact drop_left h
+    · exact drop_right hmu (by omega)
+```
+
+Case 3: `R_rec_succ b s n`
+LHS: `recDelta b s (delta n)`
+RHS: `app s (recDelta b s n)`
+`kappa LHS = max (max (kappa b) (kappa s)) (kappa n) + 1`
+`kappa RHS = max (kappa s) (kappa (recDelta b s n)) = max (kappa s) (max (max (kappa b) (kappa s)) (kappa n))`
+Wait! `kappa RHS = max (kappa b) (kappa s) (kappa n)`.
+But `kappa LHS = max (kappa b) (kappa s) (kappa n) + 1`.
+So `kappa RHS < kappa LHS` strictly!
+Let's verify:
+`kappa (recDelta b s (delta n)) = max (max (kappa b) (kappa s)) (kappa n) + 1`
+`kappa (app s (recDelta b s n)) = max (kappa s) (kappa (recDelta b s n))`
+`kappa (recDelta b s n) = max (max (kappa b) (kappa s)) (kappa n)` (since `n` is not `delta`-wrapped, or wait, if `n` is `delta`-wrapped, the definition says:
+`| .recDelta b s (.delta n) => ... + 1`
+`| .recDelta b s n => ...`
+Wait, does `n` match `.delta n`? In Lean, `n` is just a variable, so `recDelta b s n` uses the second equation, unless `n` is syntactically `delta n'`. But here `n` is a variable, so it uses the second equation.
+Thus `kappa (recDelta b s n) = max (max (kappa b) (kappa s)) (kappa n)`.
+Then `kappa RHS = max (kappa s) (max (max (kappa b) (kappa s)) (kappa n)) = max (kappa b) (kappa s) (kappa n)`.
+And `kappa LHS = max (kappa b) (kappa s) (kappa n) + 1`.
+So `kappa` drops strictly! We don't even need to look at `mu`.
+```lean
+| _, _, Step.R_rec_succ b s n => by
+    have hk : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+      simp [kappa]
+      -- omega or linarith might be needed, or just `omega`
+      omega
+    exact drop_left hk
+```
+Wait, let's write out the `simp` and `omega`.
+```lean
+| _, _, Step.R_rec_succ b s n => by
+    have hk : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+      simp [kappa, Nat.max_assoc, Nat.max_comm, Nat.max_left_comm]
+      omega
+    exact drop_left hk
+```
+
+Case 4: `R_eq_refl a`
+LHS: `eqW a a`
+RHS: `void`
+`kappa LHS = max (kappa a) (kappa a) = kappa a`
+`kappa RHS = 0`
+`kappa` might drop or tie.
+`mu LHS = 4 + mu a + mu a = 4 + 2 * mu a`
+`mu RHS = 0`
+`mu` always drops strictly.
+```lean
+| _, _, Step.R_eq_refl a => by
+    have hmu : mu void < mu (eqW a a) := by simp [mu]; omega
+    by_cases h : kappa void < kappa (eqW a a)
+    · exact drop_left h
+    · exact drop_right hmu (by omega)
+```
+
+Case 5: `R_eq_diff a b`
+LHS: `eqW a b`
+RHS: `integrate (merge a b)`
+`kappa LHS = max (kappa a) (kappa b)`
+`kappa RHS = kappa (integrate (merge a b)) = kappa (merge a b) = max (kappa a) (kappa b)`
+So `kappa` ties exactly!
+`mu LHS = 4 + mu a + mu b`
+`mu RHS = 1 + mu (merge a b) = 1 + 2 + mu a + mu b = 3 + mu a + mu b`
+So `mu` drops strictly! (4 > 3).
+```lean
+| _, _, Step.R_eq_diff a b => by
+    have hmu : mu (integrate (merge a b)) < mu (eqW a b) := by simp [mu]; omega
+    have hk  : kappa (integrate (merge a b)) = kappa (eqW a b) := by simp [kappa]
+    exact drop_right hmu hk
+```
+
+Let's double check Case 3 (`R_rec_succ`).
+`kappa (app s (recDelta b s n))`
+`= max (kappa s) (kappa (recDelta b s n))`
+`= max (kappa s) (max (max (kappa b) (kappa s)) (kappa n))`
+`= max (kappa b) (kappa s) (kappa n)`
+`kappa (recDelta b s (delta n))`
+`= max (max (kappa b) (kappa s)) (kappa n) + 1`
+`= max (kappa b) (kappa s) (kappa n) + 1`
+So `kappa RHS < kappa LHS` is indeed true.
+To prove it in Lean:
+```lean
+    have hk : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+      simp only [kappa_app, kappa_rec_delta, kappa_recDelta] -- wait, kappa_recDelta is not a simp lemma, it's just the definition.
+```
+Actually, the simp lemmas provided are:
+```lean
+@[simp] lemma kappa_void : kappa void = 0 := rfl
+@[simp] lemma kappa_delta (t) : kappa (delta t) = kappa t := rfl
+@[simp] lemma kappa_integrate (t) : kappa (integrate t) = kappa t := rfl
+@[simp] lemma kappa_merge (a b) : kappa (merge a b) = Nat.max (kappa a) (kappa b) := rfl
+@[simp] lemma kappa_app (a b) : kappa (app a b) = Nat.max (kappa a) (kappa b) := rfl
+@[simp] lemma kappa_eqW (a b) : kappa (eqW a b) = Nat.max (kappa a) (kappa b) := rfl
+@[simp] lemma kappa_rec_delta (b s n) :
+  kappa (recDelta b s (delta n)) =
+    Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1 := rfl
+```
+Wait, there is no `kappa_rec` for the non-delta case!
+But `kappa` is defined by pattern matching. If we just `unfold kappa`, or `simp [kappa]`, it will reduce.
+Actually, `simp [kappa]` will unfold `kappa` and use the simp lemmas.
+```lean
+| _, _, Step.R_rec_succ b s n => by
+    have hk : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+      simp [kappa, Nat.max_assoc, Nat.max_comm, Nat.max_left_comm]
+      omega
+    exact drop_left hk
+```
+Is `Nat.max_assoc` etc. available in Mathlib? Yes, `Nat.max_assoc` is in `Init` or `Mathlib`. Actually, `omega` can solve `max` goals if we just `simp [kappa]` and then `omega`? `omega` doesn't natively understand `max` unless it's linear. But `max a b <= c <-> a <= c /\ b <= c`.
+Wait, we can just use `apply Nat.lt_add_of_pos_right` or something, or just `omega` after `cases` or `split`.
+Alternatively, since it's a proof skeleton, we can just write:
+```lean
+| _, _, Step.R_rec_succ b s n => by
+    have hk : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+      simp [kappa]
+      -- The goal is now max (kappa s) (max (max (kappa b) (kappa s)) (kappa n)) < max (max (kappa b) (kappa s)) (kappa n) + 1
+      -- which is trivially true since max (kappa s) X <= X.
+      apply Nat.lt_succ_of_le
+      apply Nat.max_le
+      · apply Nat.le_max_right -- or le_max_left depending on order
+      · apply Nat.le_refl
+    exact drop_left hk
+```
+Wait, `max (kappa s) (max (max (kappa b) (kappa s)) (kappa n))`
+Let `X = max (max (kappa b) (kappa s)) (kappa n)`.
+We want to show `max (kappa s) X <= X`.
+This is true because `kappa s <= max (kappa b) (kappa s) <= X`.
+So:
+```lean
+      apply Nat.max_le
+      · apply Nat.le_trans (b := max (kappa b) (kappa s))
+        · exact Nat.le_max_right _ _
+        · exact Nat.le_max_left _ _
+      · exact Nat.le_refl _
+```
+This is a perfect skeleton! It shows exactly how to complete it without relying on `omega`'s potentially fragile `max` support.
+
+Let's review the skeletons for the 5 cases.
+
+Case 1: `R_int_delta t`
+```lean
+| _, _, Step.R_int_delta t => by
+    have hmu : mu void < mu (integrate (delta t)) := by simp [mu]; omega
+    by_cases hk : kappa void < kappa (integrate (delta t))
+    · exact drop_left hk
+    · have hk_eq : kappa void = kappa (integrate (delta t)) := by omega
+      exact drop_right hmu hk_eq
+```
+
+Case 2: `R_rec_zero b s`
+```lean
+| _, _, Step.R_rec_zero b s => by
+    have hmu : mu b < mu (recDelta b s void) := by simp [mu]; omega
+    by_cases hk : kappa b < kappa (recDelta b s void)
+    · exact drop_left hk
+    · have hk_eq : kappa b = kappa (recDelta b s void) := by omega
+      exact drop_right hmu hk_eq
+```
+
+Case 3: `R_rec_succ b s n`
+```lean
+| _, _, Step.R_rec_succ b s n => by
+    have hk : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+      simp [kappa]
+      apply Nat.lt_succ_of_le
+      apply Nat.max_le
+      · apply Nat.le_trans (b := Nat.max (kappa b) (kappa s))
+        · exact Nat.le_max_right _ _
+        · exact Nat.le_max_left _ _
+      · exact Nat.le_refl _
+    exact drop_left hk
+```
+
+Case 4: `R_eq_refl a`
+```lean
+| _, _, Step.R_eq_refl a => by
+    have hmu : mu void < mu (eqW a a) := by simp [mu]; omega
+    by_cases hk : kappa void < kappa (eqW a a)
+    · exact drop_left hk
+    · have hk_eq : kappa void = kappa (eqW a a) := by omega
+      exact drop_right hmu hk_eq
+```
+
+Case 5: `R_eq_diff a b`
+```lean
+| _, _, Step.R_eq_diff a b => by
+    have hmu : mu (integrate (merge a b)) < mu (eqW a b) := by simp [mu]; omega
+    have hk  : kappa (integrate (merge a b)) = kappa (eqW a b) := by simp [kappa]
+    exact drop_right hmu hk
+```
+
+Let's do a sanity check on `mu` for `R_eq_refl a`.
+`mu (eqW a a) = 4 + mu a + mu a`.
+`mu void = 0`.
+`0 < 4 + 2 * mu a` is true since `mu a >= 0`. `omega` handles this easily.
+
+Sanity check on `mu` for `R_rec_zero b s`.
+`mu (recDelta b s void) = 3 + mu b + mu s + 0`.
+`mu b < 3 + mu b + mu s` is true since `mu s >= 0`. `omega` handles this.
+
+Sanity check on `mu` for `R_int_delta t`.
+`mu (integrate (delta t)) = 1 + mu (delta t) = 1 + mu t`.
+`mu void = 0`.
+`0 < 1 + mu t` is true. `omega` handles this.
+
+Sanity check on `mu` for `R_eq_diff a b`.
+`mu (eqW a b) = 4 + mu a + mu b`.
+`mu (integrate (merge a b)) = 1 + mu (merge a b) = 1 + 2 + mu a + mu b = 3 + mu a + mu b`.
+`3 + mu a + mu b < 4 + mu a + mu b` is true. `omega` handles this.
+
+Is there any issue with `by_cases hk : kappa void < kappa (integrate (delta t))`?
+In Lean 4, `by_cases h : p` works perfectly.
+Alternatively, one could use `Nat.lt_or_eq_of_le` since `kappa void = 0 <= kappa ...`.
+```lean
+    have h_le : kappa void <= kappa (integrate (delta t)) := by simp [kappa]
+    cases Nat.lt_or_eq_of_le h_le with
+    | inl hk => exact drop_left hk
+    | inr hk => exact drop_right hmu hk
+```
+This avoids `omega` for the equality case and is very robust. Let's use `lt_or_eq_of_le` or just `by_cases`. `by_cases` is simpler and standard.
+Actually, `Nat.lt_or_eq_of_le` is slightly more direct because we know `0 <= x`.
+```lean
+| _, _, Step.R_int_delta t => by
+    have hmu : mu void < mu (integrate (delta t)) := by simp [mu]; omega
+    have h_le : kappa void <= kappa (integrate (delta t)) := by simp [kappa]
+    cases Nat.lt_or_eq_of_le h_le with
+    | inl hk => exact drop_left hk
+    | inr hk => exact drop_right hmu hk
+```
+This is very clean. Let's use this pattern for the cases where `kappa` might drop or tie.
+
+For `R_rec_zero b s`:
+```lean
+| _, _, Step.R_rec_zero b s => by
+    have hmu : mu b < mu (recDelta b s void) := by simp [mu]; omega
+    have h_le : kappa b <= kappa (recDelta b s void) := by
+      simp [kappa]
+      apply Nat.le_max_left
+    cases Nat.lt_or_eq_of_le h_le with
+    | inl hk => exact drop_left hk
+    | inr hk => exact drop_right hmu hk
+```
+
+For `R_eq_refl a`:
+```lean
+| _, _, Step.R_eq_refl a => by
+    have hmu : mu void < mu (eqW a a) := by simp [mu]; omega
+    have h_le : kappa void <= kappa (eqW a a) := by simp [kappa]
+    cases Nat.lt_or_eq_of_le h_le with
+    | inl hk => exact drop_left hk
+    | inr hk => exact drop_right hmu hk
+```
+
+This looks extremely solid and idiomatic Lean 4.
+
+Let's review the required output format.
+"Provide a proof skeleton for completing the remaining cases. Do not modify the file or run the compiler. Do not read any other files in the workspace or search the web."
+
+I will provide the exact Lean 4 code for the remaining 5 cases, replacing the `sorry`s with the proof skeletons.
+
+```lean
+-- integrate (delta t) --> void
+| _, _, Step.R_int_delta t => by
+    have hmu : mu void < mu (integrate (delta t)) := by simp [mu]; omega
+    have h_le : kappa void <= kappa (integrate (delta t)) := by simp [kappa]
+    cases Nat.lt_or_eq_of_le h_le with
+    | inl hk => exact drop_left hk
+    | inr hk => exact drop_right hmu hk
+
+-- recDelta b s void --> b
+| _, _, Step.R_rec_zero b s => by
+    have hmu : mu b < mu (recDelta b s void) := by simp [mu]; omega
+    have h_le : kappa b <= kappa (recDelta b s void) := by
+      simp [kappa]
+      exact Nat.le_max_left _ _
+    cases Nat.lt_or_eq_of_le h_le with
+    | inl hk => exact drop_left hk
+    | inr hk => exact drop_right hmu hk
+
+-- recDelta b s (delta n) --> app s (recDelta b s n)
+| _, _, Step.R_rec_succ b s n => by
+    have hk : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+      simp [kappa]
+      apply Nat.lt_succ_of_le
+      apply Nat.max_le
+      · apply Nat.le_trans (b := Nat.max (kappa b) (kappa s))
+        · exact Nat.le_max_right _ _
+        · exact Nat.le_max_left _ _
+      · exact Nat.le_refl _
+    exact drop_left hk
+
+-- eqW a a --> void
+| _, _, Step.R_eq_refl a => by
+    have hmu : mu void < mu (eqW a a) := by simp [mu]; omega
+    have h_le : kappa void <= kappa (eqW a a) := by simp [kappa]
+    cases Nat.lt_or_eq_of_le h_le with
+    | inl hk => exact drop_left hk
+    | inr hk => exact drop_right hmu hk
+
+-- eqW a b --> integrate (merge a b)
+| _, _, Step.R_eq_diff a b => by
+    have hmu : mu (integrate (merge a b)) < mu (eqW a b) := by simp [mu]; omega
+    have hk  : kappa (integrate (merge a b)) = kappa (eqW a b) := by simp [kappa]
+    exact drop_right hmu hk
+```
+
+Wait, in `R_rec_zero`, `kappa (recDelta b s void) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa void)`.
+So `kappa b <= Nat.max (kappa b) (kappa s)` is `Nat.le_max_left`.
+Then `Nat.max (kappa b) (kappa s) <= Nat.max (Nat.max (kappa b) (kappa s)) (kappa void)` is `Nat.le_max_left`.
+So `kappa b <= kappa (recDelta b s void)` can be proved by:
+```lean
+    have h_le : kappa b <= kappa (recDelta b s void) := by
+      simp [kappa]
+      apply Nat.le_trans (b := Nat.max (kappa b) (kappa s))
+      · exact Nat.le_max_left _ _
+      · exact Nat.le_max_left _ _
+```
+This is better and more explicit.
+
+Let's check `R_rec_succ` again.
+`kappa (app s (recDelta b s n))`
+`= Nat.max (kappa s) (kappa (recDelta b s n))`
+`= Nat.max (kappa s) (Nat.max (Nat.max (kappa b) (kappa s)) (kappa n))`
+We want to show this is `<= Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)`.
+Let `X = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)`.
+We need `Nat.max (kappa s) X <= X`.
+This requires `kappa s <= X` and `X <= X`.
+`kappa s <= X` is proved by:
+`kappa s <= Nat.max (kappa b) (kappa s)` (`Nat.le_max_right`)
+`Nat.max (kappa b) (kappa s) <= Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)` (`Nat.le_max_left`)
+So `kappa s <= X` by transitivity.
+This matches my skeleton:
+```lean
+      apply Nat.max_le
+      · apply Nat.le_trans (b := Nat.max (kappa b) (kappa s))
+        · exact Nat.le_max_right _ _
+        · exact Nat.le_max_left _ _
+      · exact Nat.le_refl _
+```
+Perfect.
+
+One detail: `Nat.le_max_left` and `Nat.le_max_right` take two arguments. In Lean 4, they can often be inferred, but providing `_ _` is safe.
+Actually, in Lean 4, `Nat.le_max_left a b` means `a <= max a b`.
+So `Nat.le_max_left (kappa b) (kappa s)` is `kappa b <= max (kappa b) (kappa s)`.
+It's easier to just write `apply Nat.le_max_left` and let Lean figure it out, or use `exact Nat.le_max_left _ _`. I'll use `apply` and `exact` with `_` where appropriate, or just rely on `simp` and `omega` if possible. But since `omega` doesn't always do well with `max` without splitting, the explicit `apply` is a very good skeleton.
+
+I will formulate the final response containing just the requested code blocks and a brief explanation.
+No modifications to the rest of the file.
+No external searches.
+The output will clearly delineate the 5 cases.

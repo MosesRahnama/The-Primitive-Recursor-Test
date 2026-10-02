@@ -1,0 +1,606 @@
+The user wants me to assess whether a given rewrite system in Lean 4 is strongly normalizing based solely on the presented calculus.
+
+ Let me analyze the rewrite rules:
+
+ ```lean
+ inductive Trace : Type
+ | void : Trace
+ | delta : Trace → Trace
+ | integrate : Trace → Trace
+ | merge : Trace → Trace → Trace
+ | app : Trace → Trace → Trace
+ | recΔ : Trace → Trace → Trace → Trace
+ | eqW : Trace → Trace → Trace
+ ```
+
+ Rewrite rules:
+ 1. `integrate (delta t) → void`
+ 2. `merge void t → t`
+ 3. `merge t void → t`
+ 4. `merge t t → t`
+ 5. `recΔ b s void → b`
+ 6. `recΔ b s (delta n) → app s (recΔ b s n)`
+ 7. `eqW a a → void`
+ 8. `eqW a b → integrate (merge a b)` when `a` and `b` are different? Wait, no, the rule is `∀ a b, Step (eqW a b) (integrate (merge a b))`. This applies to ALL a, b, even when a = b!
+
+ Wait, that's critical. Rule 8 says `eqW a b → integrate (merge a b)` for ALL a, b. But rule 7 says `eqW a a → void`.
+
+ If `a = b`, then both rules apply:
+ - `eqW a a → void`
+ - `eqW a a → integrate (merge a a) → integrate a` (using merge_cancel)
+
+ Actually, looking at the Lean definition, there are two distinct constructors:
+ ```
+ | R_eq_refl : ∀ a, Step (eqW a a) void
+ | R_eq_diff : ∀ a b, Step (eqW a b) (integrate (merge a b))
+ ```
+
+ Since these are separate constructors, and `R_eq_diff` applies to all `a b` without any disequality guard, this means for `eqW a a`, both reductions are possible.
+
+ But that's not the main issue for strong normalization. The question is: does every reduction sequence terminate?
+
+ Let me look for potential sources of non-termination.
+
+ The `app` constructor is just a binary operator, but there are no rewrite rules involving `app` on the left-hand side except in the result of `R_rec_succ`. So `app` is inert - it's just a constructor that never reduces.
+
+ Wait, `app` appears in the RHS of `R_rec_succ`: `recΔ b s (delta n) → app s (recΔ b s n)`. But there's no rule for `app` itself.
+
+ Let's think about potential loops:
+
+ 1. `merge t t → t` - this decreases the size (number of constructors), so it's fine.
+ 2. `merge void t → t` and `merge t void → t` - decrease size.
+ 3. `integrate (delta t) → void` - decreases size.
+ 4. `recΔ b s void → b` - decreases size.
+ 5. `recΔ b s (delta n) → app s (recΔ b s n)` - the recursive call is on `n`, which is a subterm of `delta n`, so this looks like it decreases size in some sense? Wait, `delta n` is replaced by `n` inside the recursive call, so yes, the second argument to `recΔ` decreases (from `delta n` to `n`).
+ 6. `eqW a a → void` - decreases size.
+ 7. `eqW a b → integrate (merge a b)` - `eqW a b` becomes `integrate (merge a b)`. This doesn't obviously decrease size. If we measure by number of constructors, `eqW a b` has 1 + size(a) + size(b), while `integrate (merge a b)` has 1 + 1 + size(a) + size(b) = 2 + size(a) + size(b). So this INCREASES size by 1!
+
+ Wait, that's a problem. `eqW a b` rewrites to `integrate (merge a b)`, which is larger. But then `merge` might reduce, and `integrate` might reduce if its argument is `delta t`. But what if neither `a` nor `b` is `void` or equal to each other or `delta` of something? Then `merge a b` doesn't reduce, and `integrate` doesn't reduce. So `eqW a b` reduces to a normal form `integrate (merge a b)`.
+
+ But wait, if `a` and `b` are arbitrary, `eqW a b` rewrites to `integrate (merge a b)`. This is a larger term. But it doesn't create a cycle by itself because `integrate` and `merge` don't introduce `eqW`.
+
+ However, could there be a cycle involving `recΔ` and `eqW` or something else?
+
+ Let's look at `recΔ`:
+ - `recΔ b s void → b`
+ - `recΔ b s (delta n) → app s (recΔ b s n)`
+
+ If we have a term like `recΔ b s (recΔ b' s' t)`, and if the inner `recΔ` reduces to something involving `delta`, then... wait, the inner `recΔ` reduces to either `b'` or `app s' (recΔ b' s' n')` where `t = delta n'`. Neither of these introduces `delta` if it wasn't already there.
+
+ Actually, can we construct a term that loops?
+
+ Let's think about whether the system is strongly normalizing. 
+
+ The dangerous rule is `eqW a b → integrate (merge a b)`. This doesn't decrease any obvious measure. However, `eqW` is eliminated and doesn't reappear in the reduct. So if we can show that `eqW` occurrences strictly decrease in some well-founded measure, or that the system is terminating via recursive path ordering or similar...
+
+ But wait, is there any interaction that could recreate `eqW`? Looking at all the rules, `eqW` only appears on the LHS. The RHS of all rules never contain `eqW`. So `eqW` can only be eliminated, never introduced.
+
+ Similarly, `recΔ` appears on LHS and in the RHS of `R_rec_succ`, but in the RHS it appears with a smaller argument (from `delta n` to `n`).
+
+ Let's think about a multiset path ordering or size measure.
+
+ Define a weight for each constructor:
+ - void: 1
+ - delta: 1 + weight(t)
+ - integrate: 1 + weight(t)
+ - merge: 1 + weight(t1) + weight(t2)
+ - app: 1 + weight(t1) + weight(t2)
+ - recΔ: 1 + weight(b) + weight(s) + weight(n)
+ - eqW: something
+
+ If we try to use a lexicographic measure or recursive path ordering:
+
+ For `eqW a b → integrate (merge a b)`:
+ We need `eqW a b > integrate (merge a b)` in some well-founded ordering.
+ If we use a lexicographic ordering based on "head symbol precedence", and assign `eqW` a higher precedence than `integrate` and `merge`, and use a multiset ordering for subterms... 
+
+ In RPO: if `eqW` > `integrate` and `eqW` > `merge`, then `eqW a b > integrate (merge a b)` if `eqW a b > merge a b` and `eqW a b > integrate x` for all subterms x... wait, RPO says:
+ `f(s1,...,sm) > g(t1,...,tn)` if either:
+ 1. `f > g` and `f(s...) > tj` for all j, or
+ 2. `f = g` and `{s1,...,sm} >mul {t1,...,tn}`, or
+ 3. `f(s...) > ti` for some i.
+
+ For `eqW a b > integrate (merge a b)`:
+ Using rule 1: if `eqW > integrate`, we need `eqW a b > merge a b` and `eqW a b` is greater than... wait, integrate has one argument: `merge a b`. So we need `eqW a b > merge a b`.
+ For `eqW a b > merge a b`: if `eqW > merge`, we need `eqW a b > a` and `eqW a b > b`, which is true by subterm property.
+ So yes, if `eqW > integrate` and `eqW > merge` and `integrate` and `merge` are greater than their arguments appropriately, this works.
+
+ But wait, `integrate (delta t) → void`.
+ We need `integrate (delta t) > void`. This is true if `integrate` has positive weight and `delta t` is greater than nothing, or simply by size.
+
+ Actually, RPO works best when the ordering decreases. Let's check all rules with a precedence:
+ `recΔ > eqW > integrate > merge > delta > app > void`? Not sure.
+
+ Let's think about `recΔ b s (delta n) → app s (recΔ b s n)`.
+ Here the outer symbol changes from `recΔ` to `app`. If `recΔ > app`, and `recΔ b s (delta n) > s` and `recΔ b s (delta n) > recΔ b s n`... but `recΔ b s (delta n) > recΔ b s n` requires comparing subterms: `{b, s, delta n} >mul {b, s, n}`. This holds if `delta n > n`, which is true by subterm property (since `n` is a subterm of `delta n`). So yes, if `recΔ > app`, this works.
+
+ But wait, what about `recΔ b s void → b`? If `recΔ > ...` well, we need `recΔ b s void > b`, which is true by subterm.
+
+ What about `merge t t → t`? We need `merge t t > t`, true.
+ `merge void t → t`: `merge void t > t`, true.
+ `merge t void → t`: `merge t void > t`, true.
+ `eqW a a → void`: `eqW a a > void` if `eqW > void` and `eqW a a` > (no arguments). Actually in RPO, if `void` is a constant, and `eqW` has higher precedence, then `eqW a a > void` because `eqW > void` and `eqW a a >` (empty set, vacuously true).
+
+ So it seems like an RPO could work with appropriate precedence. But I need to be careful.
+
+ Actually, for `eqW a b → integrate (merge a b)`, if `eqW > integrate`, then we need `eqW a b > merge a b`. For this, if `eqW > merge`, then we need `eqW a b > a` and `eqW a b > b`, which is true.
+
+ So assign precedence: `recΔ > eqW > integrate > merge > delta > app > void`.
+ Check all rules:
+ 1. `integrate (delta t) → void`: `integrate > void`, so need `integrate (delta t) >` (nothing), true. ✓
+ 2. `merge void t → t`: `merge` is not greater than the variable `t` in general? Wait, RPO can't compare with variables on the right unless the left is greater. `merge void t > t` by subterm property? Actually, `t` is a proper subterm of `merge void t`, so yes, `merge void t > t`. ✓
+ 3. `merge t void → t`: proper subterm. ✓
+ 4. `merge t t → t`: proper subterm. ✓
+ 5. `recΔ b s void → b`: proper subterm. ✓
+ 6. `recΔ b s (delta n) → app s (recΔ b s n)`:
+    - Need `recΔ b s (delta n) > app s (recΔ b s n)`.
+    - If `recΔ > app`, need `recΔ b s (delta n) > s` and `recΔ b s (delta n) > recΔ b s n`.
+    - `recΔ b s (delta n) > s` by subterm.
+    - `recΔ b s (delta n) > recΔ b s n` by case 2 (same head): `{b, s, delta n} >mul {b, s, n}`. This holds because `delta n > n` (subterm), and `b = b`, `s = s`. ✓
+ 7. `eqW a a → void`: `eqW > void`, so need `eqW a a >` (empty), true. ✓
+ 8. `eqW a b → integrate (merge a b)`:
+    - Need `eqW a b > integrate (merge a b)`.
+    - If `eqW > integrate`, need `eqW a b > merge a b`.
+    - If `eqW > merge`, need `eqW a b > a` and `eqW a b > b`.
+    - Both hold by subterm property. ✓
+
+ Wait, but is there any issue with `eqW a a` having two different reductions? That just means the system is not confluent, but doesn't affect strong normalization.
+
+ However, I need to be careful. The system might have critical pairs or overlapping rules, but strong normalization only requires every reduction sequence to terminate, not uniqueness.
+
+ Is there any hidden issue? Let's think about whether `app` could interact. There are no rules for `app`, so `app s r` is inert.
+
+ Could there be an infinite descending chain? RPO is well-founded, so if all rules are oriented by RPO, the system is strongly normalizing.
+
+ But let me double-check the RPO orientation for `recΔ b s (delta n) → app s (recΔ b s n)`.
+ In RPO with status (multiset status for all):
+ `recΔ b s (delta n) > app s (recΔ b s n)` requires:
+ Since `recΔ > app`, we need `recΔ b s (delta n) > s` AND `recΔ b s (delta n) > recΔ b s n`.
+ - `recΔ b s (delta n) > s`: yes, s is a proper subterm.
+ - `recΔ b s (delta n) > recΔ b s n`: since same head symbol `recΔ`, we compare multisets `{b, s, delta n}` and `{b, s, n}`.
+   Multiset comparison: remove common elements `b` and `s`. We need `{delta n} >mul {n}`. This requires `delta n > n`. Since `n` is a proper subterm of `delta n`, yes, `delta n > n`.
+ So yes, this works.
+
+ Wait, is `delta n > n` in RPO? Yes, because `n` is a proper subterm of `delta n`.
+
+ So it seems the system IS strongly normalizing by RPO.
+
+ But wait, let me look again at rule 8: `eqW a b → integrate (merge a b)`.
+ What if `a` or `b` contains `eqW`? For example, `eqW (eqW c d) (eqW e f)`. This reduces to `integrate (merge (eqW c d) (eqW e f))`. Then both inner `eqW`s can reduce. But since `eqW` is the highest precedence, and it only appears in subterms now, we're making progress.
+
+ Actually, in RPO, if a term contains `eqW` as a subterm but not as the head, can we have an infinite reduction? No, because RPO is well-founded, and each step decreases the term in RPO.
+
+ So my assessment is: YES, strong normalization can be established, for example by a recursive path ordering.
+
+ But wait, I should check if there's any subtle issue. The `recΔ` rule resembles primitive recursion. The argument `delta n` suggests that `delta` is like a successor constructor, and `void` is like zero. Then `recΔ` is a recursor. The rule `recΔ b s (delta n) → app s (recΔ b s n)` decreases the third argument (from `delta n` to `n`). This is standard structural recursion.
+
+ The `eqW` rules: `eqW a a → void` and `eqW a b → integrate (merge a b)`. Even though the second rule increases syntactic size, it eliminates `eqW` and replaces it with `integrate` and `merge`, which are lower precedence.
+
+ So yes, I believe the system is strongly normalizing.
+
+ However, let me reconsider if there's any way to build a non-terminating term.
+
+ What about `recΔ b s (recΔ b' s' void)`?
+ This reduces via `R_rec_zero` in the inner recΔ to `recΔ b s b'`. Then if `b'` is `delta n`, it might reduce further. But this is just normal evaluation.
+
+ What if we have something like:
+ Let `ω = eqW ω ω`? But we can't have infinite terms in this inductive type. All terms are finite trees.
+
+ Can we create a cycle?
+ `eqW a b → integrate (merge a b)`. Can `integrate (merge a b)` reduce back to something involving `eqW a b`? No, none of the rules introduce `eqW`.
+
+ What about `recΔ`? Can it produce a larger term that contains the same `recΔ` with a larger argument?
+ `recΔ b s (delta n) → app s (recΔ b s n)`. The new `recΔ` has argument `n`, which is smaller than `delta n`. So no.
+
+ Can we have nested `recΔ` where the inner one expands and the outer one contracts in a cycle?
+ `recΔ b s (recΔ b' s' (delta n))` → inner reduces to `app s' (recΔ b' s' n)`, so we have `recΔ b s (app s' (recΔ b' s' n))`. Now `app` is the head of the third argument. But there are no rules for `recΔ` with `app` in the third argument. So this gets stuck on the outer `recΔ` (normal form for that position).
+
+ So no cycle there.
+
+ Actually, `recΔ` only reduces when the third argument is `void` or `delta n`. If the third argument is anything else (like `app ...`, `merge ...`, `integrate ...`, `eqW ...`, or `recΔ ...`), it's a normal form with respect to `recΔ`.
+
+ So the only way `recΔ` can loop is if we can go from some term `t` to `delta t'` where `t'` somehow contains `recΔ` with a larger argument. But there are no rules that introduce `delta` around something larger in a way that could loop.
+
+ Let me think about whether `merge` or `integrate` could interact with `recΔ` to create a loop.
+ `merge` only reduces when one side is `void` or both sides are equal.
+ `integrate` only reduces when its argument is `delta t`.
+
+ So for example, `recΔ b s (merge void (delta n))` → `merge` reduces to `delta n`, then `recΔ` reduces to `app s (recΔ b s n)`. No loop.
+
+ What about `eqW (recΔ b s t) (recΔ b s t)` → `void` or `integrate (merge (recΔ b s t) (recΔ b s t))` → `integrate (recΔ b s t)`. Then we're stuck (normal form, assuming `recΔ b s t` doesn't reduce and isn't `delta` of something). If it is `delta` of something, `integrate` reduces to `void`. So no loop.
+
+ I'm fairly confident the system is strongly normalizing.
+
+ But I want to double-check: the user asks "can strong normalization of this system be established from the presented calculus alone, without importing structural axioms or object-level assumptions beyond what is derivable from the given syntax and rewrite rules?"
+
+ This is a bit meta. They want to know if SN can be proved from just these rules.
+
+ Since this is a first-order rewrite system (no binding, no higher-order, no imported axioms), and it appears to be terminating by RPO, the answer should be YES.
+
+ Wait, I need to be more careful. Is there any issue with the fact that `eqW` has two overlapping rules? For `eqW a a`, we can choose either `→ void` or `→ integrate (merge a a)`. The existence of a non-deterministic choice doesn't prevent strong normalization as long as ALL possible choices lead to termination. Since both reducts are smaller in RPO (assuming the precedence ordering), both terminate.
+
+ Let me verify `integrate (merge a a)` vs `eqW a a` in RPO.
+ `eqW a a > integrate (merge a a)` requires `eqW > integrate` and `eqW a a > merge a a` (which requires `eqW > merge` and subterm comparisons). Yes.
+
+ And `eqW a a > void` requires `eqW > void`. Yes.
+
+ So both reducts are smaller.
+
+ One more check: what about the constructor `app`? There are no rules for it. In the RPO, we just need `app` to have lower precedence than `recΔ` so that `recΔ ... > app ...` works. That's fine.
+
+ Is there any rule where a term rewrites to a term with larger depth or size that could accumulate?
+ The only "expanding" rule is `eqW a b → integrate (merge a b)`. This replaces one binary constructor with two unary/binary constructors. The depth stays roughly the same or increases by 1, but the head symbol precedence decreases from `eqW` to `integrate`.
+
+ In RPO, this is a decrease because `eqW` has higher precedence. The well-foundedness comes from the precedence ordering on function symbols, not just size.
+
+ So yes, RPO establishes strong normalization.
+
+ Let me think if there's any other subtlety. The system is first-order, finite, and all rules are left-linear except `R_merge_cancel` (`merge t t → t`) and `R_eq_refl` (`eqW a a → a`... wait, `eqW a a → void`). Actually `R_merge_cancel` is not left-linear (it has two occurrences of `t`). Non-left-linear rules can cause issues with termination? Actually, non-left-linear rules can sometimes be problematic for certain proof methods, but they don't inherently cause non-termination. The rule `merge t t → t` is clearly terminating (it decreases size).
+
+ Also, `R_eq_refl` is not left-linear in the sense that `a` appears twice. But again, it decreases size.
+
+ So I think the answer is definitely yes, strong normalization holds.
+
+ Let me reconsider if I missed any rule interactions that could lead to infinite growth.
+
+ Could we have a situation where `eqW` generates `integrate (merge a b)`, and then somehow `merge` or `integrate` rules create a larger term that contains `eqW` again?
+ - `integrate` only reduces `integrate (delta t) → void`. It never creates `eqW`.
+ - `merge` reduces to `t` or `a` or `b`. It never creates `eqW`.
+ - `recΔ` reduces to `b` or `app s (recΔ b s n)`. It never creates `eqW`.
+ - `app` doesn't reduce.
+ - `delta` doesn't reduce.
+ - `void` doesn't reduce.
+
+ So `eqW` is never recreated once eliminated. Good.
+
+ Could `recΔ` lead to infinite recursion? Only if we can have an infinite sequence of `delta` peeling. But each `R_rec_succ` removes one `delta`. Since terms are finite trees, there are only finitely many `delta`s in the third argument to start with. Wait, but can `recΔ` recreate `delta`? No, the RHS is `app s (recΔ b s n)`, which doesn't contain `delta` unless `s` or `b` or `n` does. But `n` is a subterm of the original `delta n`, so the `delta` is stripped and not replaced. So the total number of `delta` constructors in the term strictly decreases with each `R_rec_succ` step? Not necessarily, because `s` could contain `delta`. But the point is, the third argument of `recΔ` gets smaller (stripping `delta`). Since it's an inductive type, this can't go on forever.
+
+ Actually, more precisely: define a measure on terms that is the multiset of sizes of all third arguments to `recΔ`... no, that's complicated. But in RPO we already saw it works.
+
+ Could there be an infinite sequence involving both `recΔ` and other rules? For example, `recΔ b s t` where `t` reduces to `delta n`, then `recΔ` fires, giving `app s (recΔ b s n)`. Now `n` might reduce to something else, but it's smaller than `t` was (in some sense). 
+
+ Actually, if `t` reduces to `delta n`, and `t` itself doesn't have `delta` at the root, then... wait, if `t` reduces to `delta n`, then `t` must have been something like `merge void (delta n)` or `eqW x y` that reduces to `integrate (merge x y)` which reduces... no, none of these create `delta` at the root unless it was already there.
+
+ So `recΔ` only fires when its third argument is `void` or `delta n`. If the third argument is `delta n`, then after reduction it becomes `n`. If `n` later becomes `delta n'` through some reductions... but `n` is a subterm, and reductions inside subterms preserve or decrease the "delta-depth"? Actually, can a term reduce to a term with more `delta`s? No rule introduces `delta`. Let's check:
+ - `integrate (delta t) → void`: removes `delta`
+ - `merge void t → t`: removes `merge` and `void`
+ - `merge t void → t`: removes `merge` and `void`
+ - `merge t t → t`: removes `merge`
+ - `recΔ b s void → b`: removes `recΔ` and `void`
+ - `recΔ b s (delta n) → app s (recΔ b s n)`: removes `recΔ` and `delta`
+ - `eqW a a → void`: removes `eqW`
+ - `eqW a b → integrate (merge a b)`: removes `eqW`, adds `integrate` and `merge`
+
+ None of the rules introduce a `delta` constructor! They only remove constructors or replace `eqW` with `integrate`+`merge`. So the number of `delta` constructors in the entire term is non-increasing, and strictly decreases with `R_int_delta`, `R_rec_succ`. 
+
+ Wait, this is important. Since no rule introduces `delta`, and `R_rec_succ` consumes one `delta`, any sequence of `R_rec_succ` steps is bounded by the initial number of `delta`s.
+
+ Similarly, no rule introduces `eqW`, so `eqW` steps are bounded by initial number of `eqW`s.
+
+ And no rule introduces `recΔ`! Let's check:
+ - `recΔ b s (delta n) → app s (recΔ b s n)`: the RHS contains `recΔ`! Oh. So `recΔ` is preserved in the recursive call. So the number of `recΔ` constructors can stay the same or... well, one `recΔ` is replaced by one `recΔ`. So the count doesn't decrease. But the argument `n` is smaller than `delta n`.
+
+ However, crucially, no rule introduces `delta`. So the third argument to any `recΔ` can only lose `delta`s, never gain them. Since the term is finite, this suggests termination.
+
+ But we need to be careful: could we have a situation where `recΔ` creates an `app`, and inside `app` we have another `recΔ`, and somehow... no, `app` is just a container.
+
+ Let me think about whether the system is indeed SN. I recall that for a rewrite system to be SN, it suffices to show it's compatible with a reduction ordering. RPO is a reduction ordering (a well-founded rewrite ordering). Since I was able to orient all rules with an RPO, the system is SN.
+
+ Let me verify once more that `recΔ b s (delta n) → app s (recΔ b s n)` is orientable.
+ We need a precedence `recΔ > app`.
+ And we need `recΔ b s (delta n) > s` and `recΔ b s (delta n) > recΔ b s n`.
+ Both hold as argued before.
+
+ Is there any issue with `app` being variable? `s` is a variable. `recΔ b s (delta n) > s` because `s` is a proper subterm. In RPO, a term is always greater than its proper subterms. Yes.
+
+ So the orientation is valid.
+
+ Therefore, the answer is yes, strong normalization can be established.
+
+ Let me consider if the question is a trick. The system looks like it might be a fragment of some process calculus or similar. But the question is purely about strong normalization.
+
+ Could the overlapping rules `eqW a a → void` and `eqW a b → integrate (merge a b)` be problematic? When `a = b`, we have a choice. If we always choose the second, we get `integrate (merge a a) → integrate a` (if `merge a a → a` fires), and then we're stuck. If we choose the first, we get `void`. Both terminate. The existence of overlapping rules doesn't affect SN.
+
+ What if `a` and `b` are such that `merge a b` reduces, and then `integrate` of that reduces, etc.? Still terminates because `eqW` is gone.
+
+ So I'm confident.
+
+ Let me also consider if there's any subtle encoding of a universal Turing machine or something. The constructors are:
+ - `void`: constant
+ - `delta`: successor-like
+ - `integrate`: unary
+ - `merge`: binary, idempotent/identity
+ - `app`: binary, inert
+ - `recΔ`: ternary, recursor
+ - `eqW`: binary, equality test
+
+ This looks like a very simple system. The `recΔ` is primitive recursion. `eqW` is an equality test that forces computation by merging. It doesn't look Turing-complete. In fact, it looks like it computes some kind of tree processing.
+
+ The absence of any rule for `app` on the LHS means `app` is just pairing. The only computation is in `recΔ` (recursion), `merge` (simplification), `integrate`+`delta` (cancellation), and `eqW` (equality).
+
+ I think the answer is clearly yes.
+
+ Wait, one more thought: in Lean, `Trace` is an inductive type. The rewrite system is defined as an inductive proposition `Step`. The question asks if strong normalization can be established "from the presented calculus alone". This means we shouldn't assume extra axioms. But we can use standard proof methods like RPO, which is a meta-mathematical argument.
+
+ However, I should check if there's any known result that this specific system is not SN. Let me see if I can find anything. The system seems custom-built. The names suggest:
+ - `void` = 0
+ - `delta` = successor
+ - `integrate` = integral? or maybe "integrate" is like a co-unit?
+ - `merge` = union/join
+ - `app` = application
+ - `recΔ` = recursor
+ - `eqW` = equality witness
+
+ Rule 1: `integrate (delta t) → void` - integrate cancels delta
+ Rule 2-4: merge properties (left identity, right identity, idempotence)
+ Rule 5-6: primitive recursion
+ Rule 7-8: equality (reflexive is void, different is integrate of merge)
+
+ If `a` and `b` are "different", `eqW a b` becomes `integrate (merge a b)`. This is like saying "the difference between a and b is the integral of their merge". If they're equal, the difference is void.
+
+ Actually, this looks like it might be related to some kind of diff/merge calculus. But regardless, the termination argument by RPO seems solid.
+
+ Let me write down the final answer: Yes, strong normalization can be established. The key is that the system can be oriented with a Recursive Path Ordering (RPO) or a suitably chosen weight function. All rules either decrease the size/weight of the term or replace a high-precedence symbol (`eqW`, `recΔ`) with lower-precedence ones while preserving the decreasing property on subterms. In particular:
+ - `eqW` is never recreated once consumed.
+ - `recΔ` strictly decreases its recursive argument (stripping `delta`).
+ - `merge` and `integrate` rules are size-decreasing.
+ - No rule introduces `delta` or `eqW`, bounding their occurrences.
+
+ So the system is strongly normalizing.
+
+ Actually, I want to be precise: can we prove it "from the presented calculus alone"? The RPO argument is a standard technique in term rewriting theory. It doesn't require adding rules or axioms to the system. It just requires defining a precedence on the function symbols and showing each rule is a decrease. This is purely syntactic and uses no external object-level assumptions beyond what's derivable from the syntax.
+
+ So yes.
+
+ Final check: is there any infinite reduction possible if we reduce inside subterms? The Step relation is defined without explicit congruence rules. Wait, looking at the Lean definition:
+
+ ```lean
+ inductive Step : Trace → Trace → Prop
+ | R_int_delta : ∀ t, Step (integrate (delta t)) void
+ | R_merge_void_left : ∀ t, Step (merge void t) t
+ | R_merge_void_right : ∀ t, Step (merge t void) t
+ | R_merge_cancel : ∀ t, Step (merge t t) t
+ | R_rec_zero : ∀ b s, Step (recΔ b s void) b
+ | R_rec_succ : ∀ b s n, Step (recΔ b s (delta n)) (app s (recΔ b s n))
+ | R_eq_refl : ∀ a, Step (eqW a a) void
+ | R_eq_diff : ∀ a b, Step (eqW a b) (integrate (merge a b))
+ ```
+
+ There are no congruence rules! `Step` is only defined at the root. It doesn't allow reducing subterms.
+
+ Wait, this is crucial. If `Step` only allows root reductions, then a term like `delta (eqW a a)` cannot reduce at all, because `Step` only applies when the outermost constructor matches a left-hand side.
+
+ But for strong normalization, if there are no congruence rules, we can only reduce at the root. Then the reduction tree is just the set of terms reachable by repeatedly applying rules at the root. But once we apply a rule, the result might have a different root constructor.
+
+ For example:
+ - `eqW a b` reduces to `void` or `integrate (merge a b)`.
+ - If it reduces to `integrate (merge a b)`, the root is `integrate`. Can `integrate (merge a b)` reduce? Only if `merge a b` is `delta t`. So if `a` and `b` are such that `merge a b` reduces to `delta t`... wait, `merge a b` reduces only if it's `merge void t`, `merge t void`, or `merge t t`. So if `a = void` and `b = delta t`, then `merge void (delta t) → delta t`, so `integrate (merge void (delta t)) → integrate (delta t) → void`. 
+
+ But since there are no congruence rules, we can't reduce `merge a b` inside `integrate (merge a b)` unless there's a rule for `integrate (merge ...)` which there isn't. Wait, `R_int_delta` requires the argument to be exactly `delta t`. So `integrate (merge void (delta t))` does NOT match `R_int_delta`. And there is no rule `integrate (merge void t) → ...`. So `integrate (merge void (delta t))` is a normal form!
+
+ Wait, this changes things. If `Step` is only root reduction with no congruence, then:
+ - `integrate (merge void (delta t))` cannot reduce because the root is `integrate` and the argument is `merge void (delta t)`, not `delta` of something.
+ - `merge void (delta t)` cannot reduce when it's inside `integrate`, because reduction is only at the root.
+
+ But the question is about the calculus as presented. If there are no congruence rules, then the reduction relation is extremely weak. However, usually in such presentations, `Step` is meant to be compatible with contexts (i.e., there are implicit congruence rules, or `Step` is the one-step relation that can be applied anywhere). But in the Lean code, there are NO congruence rules.
+
+ Let me re-read the prompt. "Below in this prompt you will see a Lean 4 file that contains a first-order rewrite calculus..."
+
+ In Lean, an inductive definition of `Step` without congruence rules means exactly root reduction. But usually, when people define rewrite calculi, they intend reduction in context. However, the Lean code as written does not allow subterm reduction.
+
+ But wait, the question says "first-order rewrite calculus". In term rewriting, a rewrite rule applies to any subterm. The Lean inductive type might just be defining the basic rewrite relation, and the "calculus" might implicitly include closure under contexts. Or it might not.
+
+ Let me check the wording: "without importing structural axioms or object-level assumptions beyond what is derivable from the given syntax and rewrite rules". This suggests we should take the system exactly as presented. But if there are no congruence rules, then strong normalization is trivial because each term can reduce at most once at the root (actually, some terms might reduce multiple times if the result is again a redex, like `eqW (eqW a b) (eqW a b)` → `void`, but wait, `eqW a b` might reduce to `integrate (merge a b)`, so `eqW (eqW a b) (eqW a b)` could reduce to `eqW (integrate (merge a b)) (integrate (merge a b))`... but there are no congruence rules! So the outer `eqW` has arguments that are exactly syntactically equal: both are `eqW a b`. So `R_eq_refl` applies, reducing to `void`. If we instead apply `R_eq_diff` to the inner `eqW a b`, we can't, because reduction is only at the root.
+
+ Wait, actually with only root reduction, `eqW (eqW a b) (eqW a b)` matches `R_eq_refl` because both arguments are syntactically identical. It reduces to `void`. It does NOT match `R_eq_diff` because `R_eq_diff` requires `Step (eqW a b) (integrate (merge a b))` for the SAME a and b? No, `R_eq_diff` says `∀ a b, Step (eqW a b) (integrate (merge a b))`. So for `eqW (eqW a b) (eqW a b)`, if we let `a' = eqW a b` and `b' = eqW a b`, then `R_eq_diff` applies with `a' = b'`, giving `integrate (merge (eqW a b) (eqW a b))`. 
+
+ So from `eqW (eqW a b) (eqW a b)`, we have two choices:
+ 1. `R_eq_refl`: reduces to `void`.
+ 2. `R_eq_diff`: reduces to `integrate (merge (eqW a b) (eqW a b))`.
+
+ Now the result of choice 2 is `integrate (merge (eqW a b) (eqW a b))`. Can this reduce at the root? `integrate` requires its argument to be `delta t`. `merge (eqW a b) (eqW a b)` matches `R_merge_cancel`! But again, `merge` is not at the root; the root is `integrate`. So with only root reduction, `integrate (merge (eqW a b) (eqW a b))` is stuck! It's a normal form.
+
+ This means that if `Step` is only root reduction, the system is definitely strongly normalizing because every chain has length at most 1 for most terms, or maybe a few if the result is again a redex at the root.
+
+ Let's check if any RHS is again a redex at the root:
+ - `void`: normal form
+ - `t` (from merge): might be a redex if `t` is, say, `eqW a a`. But wait, `t` is exactly the variable `t`. If `t` is instantiated with `eqW a a`, then the result is `eqW a a`, which is a redex at the root. So `merge void (eqW a a) → eqW a a` (by `R_merge_void_left`), and then `eqW a a → void` (by `R_eq_refl`). So we can have a chain of length 2.
+ - `integrate (merge a b)`: root is `integrate`. Is it a redex? Only if `merge a b` is `delta t`. But `merge a b` is not necessarily `delta t`. If `a = delta t` and `b = delta t`, then `merge (delta t) (delta t) → delta t`? No, `merge t t → t`, so `merge (delta t) (delta t) → delta t`. But this reduction happens at the root of `merge`, which is inside `integrate`. With only root reduction, `integrate (merge (delta t) (delta t))` cannot reduce because the root `integrate` sees argument `merge (delta t) (delta t)`, not `delta` of something.
+
+ Wait, but what if we have `merge (integrate (delta t)) something`? The root is `merge`. The left argument is `integrate (delta t)`. Can the `merge` reduce? Only if left is `void`, or right is `void`, or left = right. So no.
+
+ So with pure root reduction, the system is trivially strongly normalizing because no rule's RHS has a root that matches any LHS in a way that could lead to infinite chains? Let's check all RHS roots:
+ - `void`: constant, no rules apply.
+ - `t` (variable): could be anything. If `t` is a redex, it reduces. But `t` is the entire term now. So yes, we can have chains: `merge void (merge void (eqW a a))` → `merge void (eqW a a)` → `eqW a a` → `void`. Length 3.
+ - `app s (recΔ b s n)`: root is `app`. No rules for `app`. Normal form.
+ - `integrate (merge a b)`: root is `integrate`. Only rule is `integrate (delta t) → void`. So `merge a b` would need to be `delta t`. But `merge a b` is not reducible at the root inside `integrate` (no congruence). However, it's possible that `merge a b` is syntactically equal to `delta t` for some `t`. For example, if `a = delta t` and `b = void`, then `merge a b = merge (delta t) void`, which is NOT equal to `delta t` syntactically. But if `a = delta t` and `b = delta t`, then `merge a b = merge (delta t) (delta t)`, which is not equal to `delta t` syntactically (unless the term is constructed that way, but `merge (delta t) (delta t)` and `delta t` are different constructors).
+
+ Wait, syntactic equality in Lean means exact structural equality. So `merge a b` is never syntactically equal to `delta t` because `merge` and `delta` are different constructors.
+
+ So `integrate (merge a b)` is NEVER a redex for `R_int_delta` because the argument to `integrate` starts with `merge`, not `delta`.
+
+ Therefore, with only root reduction, the system is strongly normalizing because:
+ - The only way to have a reduction chain of length > 1 is when a rule produces a variable `t` as the entire result (rules 2,3,4,5), and that variable is instantiated with a redex.
+ - But these rules only fire when the LHS matches. The LHSs for these rules are `merge void t`, `merge t void`, `merge t t`, `recΔ b s void`.
+ - After reduction, we get `t` or `b`, which could be redexes.
+ - However, each such reduction either decreases the number of constructors or moves to a proper subterm.
+ - We can prove termination by a simple weight argument (e.g., number of constructors) for the root reduction relation, because when we reduce to a subterm, that subterm had fewer constructors than the original term.
+
+ Actually, if we reduce `merge void t → t`, the number of constructors in `t` is strictly less than in `merge void t`. So the weight decreases.
+ Similarly for all other rules, the result has strictly fewer constructors than the LHS, except:
+ - `R_rec_succ`: `recΔ b s (delta n)` has weight `1 + w(b) + w(s) + 1 + w(n) = 2 + w(b) + w(s) + w(n)`. The result `app s (recΔ b s n)` has weight `1 + w(s) + 1 + w(b) + w(s) + w(n) = 2 + w(b) + 2*w(s) + w(n)`. This could be LARGER if `w(s) > 0`!
+
+ Wait! This is a problem. If `s` has weight > 0, then `app s (recΔ b s n)` has more constructors than `recΔ b s (delta n)`! Let's count:
+ - `recΔ b s (delta n)`: recΔ node + b + s + delta node + n = 5 nodes (if b,s,n are leaves) + their sizes.
+ - `app s (recΔ b s n)`: app node + s + recΔ node + b + s + n = 6 nodes + sizes, but s appears twice? No, in the tree representation, `s` is shared? No, in syntax trees, it's a tree, not a DAG. Wait, in Lean's inductive type, `s` is a subterm. When we write `app s (recΔ b s n)`, the two occurrences of `s` are the same term? Actually, in the rewrite rule, `s` is a variable. The result is `app s (recΔ b s n)`. In term rewriting, variables can be instantiated with any term, and they are copied. So if `s` is a complex term, the result `app s (recΔ b s n)` contains TWO copies of `s`! This means the size can increase exponentially!
+
+ Oh no! This is critical. In a standard term rewrite system, variables in the RHS that appear in the LHS are instantiated, and if they appear multiple times in the RHS, the term is duplicated.
+
+ Let's re-examine the rules with duplication:
+ - `R_merge_cancel`: `merge t t → t`. This DELETES a copy of `t`. Decreases size.
+ - `R_eq_refl`: `eqW a a → void`. Deletes two copies of `a`. Decreases size.
+ - `R_rec_succ`: `recΔ b s (delta n) → app s (recΔ b s n)`. Here `b`, `s`, and `n` appear in the RHS. `s` appears once in LHS but twice in RHS (inside `app` and inside `recΔ`). So `s` is duplicated! `b` appears once in LHS and twice in RHS (wait, `b` appears in `recΔ b s n` on the RHS, so only once in RHS? Let's count: `app s (recΔ b s n)` has `s` at the first arg of `app`, and `s` at the second arg of `recΔ`. So `s` appears twice. `b` appears once (in `recΔ`). `n` appears once (in `recΔ`). So `s` is duplicated.
+
+ This means `R_rec_succ` can increase the size of the term if `s` is large!
+
+ Example: let `s = delta void` (size 2).
+ LHS: `recΔ b (delta void) (delta n)` has size 1 + w(b) + 2 + 2 + w(n) = 5 + w(b) + w(n).
+ RHS: `app (delta void) (recΔ b (delta void) n)` has size 1 + 2 + 1 + w(b) + 2 + w(n) = 6 + w(b) + w(n).
+ So size increases by 1.
+
+ If we iterate this rule, each time we strip a `delta` from `n` but we duplicate `s`. If `s` contains `recΔ` or other things... wait, `s` is just a term. It doesn't change. But we create more and more copies of `s` as we peel off `delta`s from `n`.
+
+ For example, if `n = delta (delta (... (delta void)...))` with k `delta`s.
+ Then `recΔ b s n` triggers `R_rec_succ` k times, producing:
+ - After 1st: `app s (recΔ b s n1)` where `n = delta n1`
+ - After 2nd: `app s (app s (recΔ b s n2))` where `n1 = delta n2`
+ - ...
+ - After kth: `app s (app s (... (app s b)...))` with k copies of `app s`.
+
+ This is just building a list of `s`s. The size is O(k * size(s)). Since k is the number of `delta`s in the original `n`, which is fixed, the process terminates. The final term has size roughly k * (1 + size(s)) + size(b). It doesn't grow without bound because we only have finitely many `delta`s to peel.
+
+ So even though each step can increase size, the total number of `recΔ` steps is bounded by the number of `delta`s in the third argument of the original `recΔ`.
+
+ But could `s` itself contain `recΔ` with a large argument, and when duplicated, allow more reductions? Yes, but those reductions would have been possible in the original `s` anyway. The total number of `recΔ` symbols that can be "activated" is fixed by the initial term, because no rule creates new `recΔ` symbols except preserving existing ones, and no rule creates new `delta` symbols.
+
+ Wait, actually, `R_rec_succ` preserves the `recΔ` symbol. It doesn't create new ones; it just preserves the one that was there. But if `s` contains `recΔ` symbols, duplicating `s` duplicates those symbols. However, those duplicated `recΔ` symbols are inside `app` contexts where they cannot reduce unless they become the root... wait, with congruence rules (if they exist), they could reduce in place. But even with congruence, the duplicated `recΔ`s are independent copies. Each has its own "fuel" (number of `delta`s in its third argument). Since the total number of `delta`s in the term is finite and non-increasing (no rule creates `delta`), and each `recΔ` step consumes one `delta`, the total number of `recΔ` steps across all copies is bounded by the initial number of `delta`s.
+
+ But wait, if `s` contains a `delta`, and we duplicate `s`, we duplicate that `delta`. So the number of `delta`s in the term can increase! Let's check:
+ - `R_rec_succ`: `recΔ b s (delta n) → app s (recΔ b s n)`. The `delta` in the third argument is consumed. But `s` is duplicated. If `s` contains `delta` constructors, then the total number of `delta`s in the term can increase!
+
+ Example: `s = delta void`. Original `delta`s: one in `s`, one in `delta n`. Total: 2.
+ After reduction: `app (delta void) (recΔ b (delta void) n)`. The `delta` in `s` is now present twice (two copies of `s`). The `delta` around `n` is gone. So total `delta`s: 2 (one in first `delta void`, one in second `delta void`). Same number.
+
+ Wait, `s = delta void` has one `delta`. Duplicating it gives two `delta`s. We lost the one around `n`. So total stays the same or... if `s` had more `delta`s than 1, it would increase.
+
+ Example: `s = delta (delta void)` (2 `delta`s). Original term: `recΔ b s (delta n)` has `delta`s: 2 in `s` + 1 in `delta n` = 3.
+ After: `app s (recΔ b s n)` has `delta`s: 2 in first `s` + 2 in second `s` = 4. Plus whatever in `n`. So total `delta`s increased by 1 (we lost the outer `delta` of the third arg but gained a copy of the `delta`s inside `s`).
+
+ Oh! So the number of `delta`s is NOT non-increasing. It can increase because of duplication of `s`.
+
+ This is more serious. Can this lead to a loop?
+
+ Let's think. We have `recΔ b s (delta n)`. If `s` contains `delta`s, duplicating `s` increases the total `delta` count. But the new `recΔ` has third argument `n`, which is smaller (one less `delta` wrapper). So the "depth" of the third argument decreases. The duplicated `s`s are inert inside `app` (unless there are congruence rules allowing reduction inside `app`).
+
+ If there are no congruence rules, the duplicated `s` inside `app` cannot reduce. So the `delta`s inside `s` are inert. Then the total number of active `recΔ`s doesn't increase, and each active `recΔ` has a decreasing depth. So it terminates.
+
+ If there ARE congruence rules (reduction anywhere), then the duplicated `s` can reduce inside `app`. But `s` itself doesn't contain `recΔ` at the root (unless it is a `recΔ`). If `s` contains subterms that are `recΔ`, those can reduce. But those `recΔ`s were already present in the original `s`. Duplicating `s` creates more copies of those subterms, each of which can reduce independently. But each such reduction is bounded by the number of `delta`s in their respective third arguments. Since we only duplicated existing subterms, and each copy reduces independently, the total reduction sequence is still finite? Not necessarily: if `s` contains a redex that produces a larger term that contains more redexes... but `s` itself is strongly normalizing (by induction on size?). This suggests we need a more sophisticated measure.
+
+ Actually, if `s` contains a `recΔ`, and we duplicate `s`, we get two copies of that `recΔ`. Each copy can reduce. If each copy reduces to something that contains more `delta`s or more `recΔ`s... but no, `recΔ` steps consume `delta`s. The total number of `delta`s across all copies might grow initially, but eventually we run out of `delta`s in the third arguments of all `recΔ`s.
+
+ Wait, can a `recΔ` inside `s` recreate `delta`s? No. Can it recreate `recΔ`s? It preserves one `recΔ`. So the number of `recΔ`s in the term is non-increasing? No, because if `s` has a `recΔ`, and we duplicate `s`, we increase the number of `recΔ`s.
+
+ But each `recΔ` needs `delta`s in its third argument to fire. Those `delta`s come from the term. The only source of `delta`s is the initial term. But we saw that duplicating `s` can duplicate `delta`s. So we can increase the number of `delta`s.
+
+ Can we increase the number of `delta`s without bound? No, because to duplicate `delta`s, we need to consume a `delta` from a `recΔ` third argument. The `recΔ` third argument `delta n` is consumed and turned into `n`. The `delta`s we gain are copies of `delta`s inside `s`. But `s` is fixed. So each `recΔ` step converts one "outer" `delta` (from the third arg) into copies of the `delta`s inside `s`. The total number of `delta`s changes from `D_s + 1 + D_n` to `2*D_s + D_n` (approximately), where `D_s` is the number of `delta`s in `s`. If `D_s > 1`, this increases.
+
+ But then the new `recΔ` has third argument `n`, which may contain further `delta`s. We can iterate. If we iterate k times, we get roughly `k * D_s` `delta`s from the duplicated `s`s, plus whatever was in `n` originally. But k is bounded by the initial depth of `delta`s in the third argument.
+
+ Actually, let's trace:
+ Start: `recΔ b s (delta^k n0)` where `n0` has no `delta` at root.
+ Step 1: `app s (recΔ b s (delta^{k-1} n0))`. Now there are two copies of `s`: one in the first arg of `app`, one in the recΔ.
+ Step 2: `app s (app s (recΔ b s (delta^{k-2} n0)))`. Three copies of `s`.
+ ...
+ Step k: `app s (app s (... (app s (recΔ b s n0))...))`. k+1 copies of `s`? Wait, the `recΔ` also contains `s`. After k steps, the `recΔ` has `n0`, and there are k `app`s each with an `s`. Plus the `s` inside the final `recΔ`. So k+1 copies of `s` in `app` positions, plus one inside the `recΔ`. But if `n0 = void`, then the `recΔ` reduces to `b` (rule 5), removing that last `s`.
+
+ So we end up with a tree of `app` nodes with `s` at each left child and `b` at the deepest right. Total size is O(k * size(s)).
+
+ This clearly terminates. The number of `recΔ` steps is exactly k (the number of `delta`s initially). So even though intermediate terms can be large, the process is bounded.
+
+ But could there be a loop where `s` contains `recΔ`, and the `recΔ` inside `s` creates more `app`s and more `recΔ`s? Yes, but those inner `recΔ`s have their own `delta` budgets. The total "fuel" for all `recΔ`s in the term can be defined as the sum over all `recΔ` subterms of the number of `delta`s in their third argument. But when we duplicate `s`, we duplicate the fuel inside `s` as well. So the total fuel can increase!
+
+ Example: Let `s = recΔ void void (delta void)`. Then `s` contains one `recΔ` with one `delta` in its third arg. 
+ Consider `recΔ b s (delta n)`.
+ Fuel before: fuel(s) + 1 = 1 + 1 = 2.
+ After one step: `app s (recΔ b s n)`. 
+ The term contains two copies of `s`: one at the root of the first arg, one inside the `recΔ`. Wait, the `recΔ` also contains `s` in its second argument. So there are two occurrences of `s`: one in `app`, one inside `recΔ`. But actually, the `s` inside `recΔ` is the same variable instance. In the tree, there are two nodes labeled `s` (subtrees). Each is a copy of the original `s`.
+ Each copy of `s` has a `recΔ` with fuel 1. Plus the outer `recΔ` now has third argument `n`. If `n` had fuel 1, total fuel is now 2 (from the two copies of `s`) + fuel(n).
+
+ So fuel went from fuel(s) + fuel(n) + 1 = 1 + 1 + 1 = 3? Wait, let's be careful.
+ Original term `recΔ b s (delta n)`:
+ - One `recΔ` at root. Its fuel is `delta_count(delta n) = 1 + delta_count(n)`.
+ - Inside `s`, there may be `recΔ`s with their own fuel.
+
+ Let F(t) be the sum of delta_counts of third arguments of all recΔs in t.
+ Original: F(s) + (1 + F(n)) + 1? No, the third argument is `delta n`, which has `1 + delta_count(n)` deltas. But `n` might contain recΔs. So the fuel contribution of the root recΔ is `1 + delta_count(n)`. But `delta_count(n)` is not the same as F(n). F counts only third-arg deltas of recΔ nodes, not all deltas.
+
+ Actually, let's define fuel properly. Each `recΔ b s t` can fire at most `D(t)` times, where `D(t)` is the number of `delta` constructors in `t`... wait, no. A `recΔ` fires once for each `delta` in the spine of its third argument, but only if the third argument is built from `void` and `delta`. If the third argument is `merge void something`, it doesn't reduce at the root of the recΔ until `merge` is reduced. But with congruence, `merge void something` can reduce to `something`. So the number of times a `recΔ` can fire depends on how many `delta`s can be exposed in its third argument through reductions.
+
+ This gets complicated with congruence rules. But we already established that with RPO, the system terminates even with congruence, as long as we have a well-founded ordering.
+
+ Let me re-evaluate the RPO argument with duplication. RPO handles duplication fine. The fact that `s` is duplicated doesn't matter because `recΔ b s (delta n) > app s (recΔ b s n)` holds in RPO. The subterm comparison `recΔ b s (delta n) > recΔ b s n` holds because the multiset `{b, s, delta n}` is greater than `{b, s, n}` since `delta n > n`. This is independent of duplication. RPO is a reduction ordering, meaning if `l > r` in RPO, then for any substitution `sigma`, `l sigma > r sigma`. And if `l > r`, then `C[l] > C[r]` for any context `C`. So RPO proves termination of the rewrite relation including congruence and substitution.
+
+ So the RPO argument is robust.
+
+ But wait: is `delta n > n` in RPO? Yes, because `n` is a proper subterm of `delta n`. In any simplification ordering (which RPO is), a term is greater than its proper subterms.
+
+ So `recΔ b s (delta n) > recΔ b s n` holds.
+
+ And `recΔ b s (delta n) > s` holds because `s` is a proper subterm.
+
+ Therefore `recΔ b s (delta n) > app s (recΔ b s n)` holds if `recΔ > app`.
+
+ So RPO works.
+
+ Let me verify `eqW a b > integrate (merge a b)` again in RPO.
+ We need `eqW > integrate` and `eqW > merge` and `eqW a b > a` and `eqW a b > b` (which hold by subterm).
+ Then `eqW a b > integrate (merge a b)` because `eqW > integrate` and `eqW a b > merge a b` (because `eqW > merge` and `eqW a b > a` and `eqW a b > b`).
+
+ So yes, with precedence `recΔ > eqW > integrate > merge > delta > app > void`, all rules are oriented.
+
+ Therefore, the system is strongly normalizing.
+
+ Actually, I should check if `merge t t → t` is oriented. In RPO, `merge t t > t` because `t` is a proper subterm. This doesn't require any precedence relation. Similarly for `merge void t → t`, etc.
+
+ So the RPO works.
+
+ One more check: `integrate (delta t) → void`. We need `integrate (delta t) > void`. If `void` is a constant (0-ary), then `integrate (delta t) > void` because `integrate` has positive arity and the term is not a variable. In RPO, a non-variable term is greater than any constant if the function symbol has higher precedence? No, that's not automatic. Actually, in RPO, `f(...) > c` if `f > c` in precedence, OR if `f(...) >` (empty set for arguments of c). Wait, constants have no arguments. So case 1: if `f > c`, then yes. If not, we can still have `f(...) > c` if some subterm is > c, but actually for constants, we need `f > c` usually. Let me recall: in RPO, `s > c` (constant) iff `s` is not a variable and either `s >` (nothing, vacuously) and `f > c`... wait.
+
+ Standard definition: `s = f(s1,...,sm) > g(t1,...,tn) = t` iff:
+ 1. `si >= t` for some i, OR
+ 2. `f > g` and `s > tj` for all j, OR
+ 3. `f = g`, `{s1,...,sm} >> {t1,...,tn}` (multiset extension), and `s > tj` for all j.
+
+ Here `t` is a constant `void`, so n=0. Condition `s > tj` for all j is vacuously true.
+ So `integrate (delta t) > void` if either:
+ - `delta t >= void` (no, `delta t` is a term, `void` is a constant; `delta t` is not >= void unless we prove it)
+ - `integrate > void` in precedence.
+ - `integrate = void`? No.
+
+ So we need `integrate > void`. Similarly, `eqW a a > void` needs `eqW > void`.
+
+ So we should set `void` to be the lowest precedence. That's fine.
+
+ And `delta t > void` would need `delta > void` or `t >= void` (no). So we need `delta > void`. But actually, do we need `delta t > void` for any rule? Not directly, but for the subterm comparisons in RPO, we might need it.
+
+ Actually, we need `delta n > n` in the subterm comparison for `recΔ`. But `delta n > n` holds because `n` is a proper subterm of `delta n`. The RPO has the subterm property: if `u` is a proper subterm of `s`, then `s > u`. This is built-in. So `delta n > n` holds without needing `delta > void`.
+
+ But for `integrate (delta t) > void`, we do need `integrate > void` or the subterm property: `delta t` is a proper subterm of `integrate (delta t)`, so `integrate (delta t) > delta t`. But we need `> void`. If `delta t > void`, then by transitivity we'd be done. But `delta t > void` requires `delta > void` (since `t` might be a variable, and if `t = void`, then `delta void > void` needs `delta > void`). So yes, we should set all symbols > `void`.
+
+ So precedence: `recΔ > eqW > integrate > merge > delta > app > void` works.
+
+ Let me check `app`. We never need `app >` anything except maybe if it appears in a subterm comparison. Actually, `app` only appears in the RHS of `R_rec_succ`. We need `recΔ > app` for the main comparison, which we have. We don't need any rules with `app` on the LHS.
+
+ So the RPO is valid.
+
+ Therefore, the system is strongly normalizing.
+
+ Given that the question asks for a raw assessment and brief reasoning, I should say: Yes, strong normalization holds. The system can be shown terminating by the Recursive Path Ordering (RPO) with a suitable precedence on constructors (e.g., `recΔ > eqW > integrate > merge > delta > app > void`). All root reductions decrease the term in this ordering: `recΔ` peels off a `delta` wrapper, `eqW` eliminates itself in favor of lower-precedence symbols, and `merge`/`integrate` are size-decreasing. No rule introduces `eqW` or `delta`, and the ordering is well-founded, so infinite reduction sequences are impossible.
+
+ Actually, I want to make sure about one thing: `eqW a b → integrate (merge a b)` when `a = b`. In that case, we could also apply `eqW a a → void`. The RPO shows both reducts are smaller, so no issue.
+
+ Final answer: Yes, SN can be established.
+
+ Let me also consider if there's any trick with the fact that `Step` in Lean is defined without congruence, making the system trivially SN. But the prompt says "first-order rewrite calculus", which implies closure under contexts. The Lean code might just define the base relation. In either case, the system is SN.
+
+ I think the most complete answer acknowledges that the system is strongly normalizing, provable by RPO or a simple weighted measure combined with the observation that `recΔ` is structurally recursive and `eqW` is acyclic. I'll write the reasoning clearly.
+
+ Wait, I want to double-check: is there any possibility that `eqW a b → integrate (merge a b)` could lead to non-termination if `a` and `b` are the same? We get `integrate (merge a a)`. If `merge a a → a` (congruence), then `integrate a`. If `a` is `delta t`, then `integrate (delta t) → void`. So it terminates. If `a` is not `delta`, it gets stuck. Either way, finite.
+
+ What if `a` contains `eqW`? Say `a = eqW c d`. Then `eqW a a` could reduce via `R_eq_diff` to `integrate (merge a a)` → `integrate a`. Now `a` is still `eqW c d`, which is a redex. But `a` is inside `integrate`, so without congruence, it can't reduce. With congruence, it can. If it reduces, say to `void`, then `integrate void` is stuck (no rule). If it reduces to `integrate (merge c d)`, then we have `integrate (integrate (merge c d))`. This is stuck (no rule for `integrate (integrate ...)`). So it terminates.
+
+ Could we have `eqW (integrate (delta t)) (integrate (delta t))`? This reduces to `void` or `integrate (merge (integrate (delta t)) (integrate (delta t)))`. The latter reduces (congruence) inner `merge` to `integrate (delta t)`, giving `integrate (integrate (delta t))`. Stuck. No loop.
+
+ So I'm fully confident.
+
+ The answer is yes.

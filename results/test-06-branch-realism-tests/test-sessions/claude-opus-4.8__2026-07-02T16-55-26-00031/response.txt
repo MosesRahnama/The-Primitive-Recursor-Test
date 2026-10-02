@@ -1,0 +1,69 @@
+I'll analyze whether the two helper theorems are provable as written.
+
+## Analyzing `kappa_rec_delta_step`
+
+Claim: `kappa (recDelta b s (delta n)) = kappa (recDelta b s n) + 1`
+
+**LHS:** By `kappa_rec_delta`, this is `max (max (kappa b) (kappa s)) (kappa n) + 1`.
+
+**RHS:** We need `kappa (recDelta b s n)`. This depends on the structure of `n`, because the `kappa` definition pattern-matches on the third argument.
+
+Here's the critical issue. The definition:
+```
+| .recDelta b s (.delta n) => max (max (kappa b) (kappa s)) (kappa n) + 1
+| .recDelta b s n => max (max (kappa b) (kappa s)) (kappa n)
+```
+
+The first clause fires only when the third argument is syntactically `delta _`. So:
+
+- **If `n` is NOT of the form `delta n'`:** `kappa (recDelta b s n) = max (max (kappa b) (kappa s)) (kappa n)`. Then RHS = `max (max (kappa b) (kappa s)) (kappa n) + 1` = LHS. ✓
+
+- **If `n = delta n'`:** Then `recDelta b s n = recDelta b s (delta n')` matches the FIRST clause, so
+  `kappa (recDelta b s n) = max (max (kappa b) (kappa s)) (kappa n') + 1`.
+  
+  Then RHS = `max (max (kappa b) (kappa s)) (kappa n') + 1 + 1`.
+  
+  But LHS = `max (max (kappa b) (kappa s)) (kappa n) + 1` where `kappa n = kappa (delta n') = kappa n'`.
+  So LHS = `max (max (kappa b) (kappa s)) (kappa n') + 1`.
+  
+  Thus LHS = RHS is `X + 1 = X + 2`, which is **false**.
+
+So `kappa_rec_delta_step` is **false** whenever `n` has the form `delta n'`.
+
+**Concrete counterexample:** Take `b = s = void`, `n = delta void`.
+- LHS: `kappa (recDelta void void (delta (delta void)))` = `max (max 0 0) (kappa (delta void)) + 1` = `max 0 0 + 1` = `1`.
+- RHS: `kappa (recDelta void void (delta void)) + 1` = `(max (max 0 0) (kappa void) + 1) + 1` = `(0 + 1) + 1` = `2`.
+
+So `1 = 2` — the theorem is unprovable.
+
+## Consequence for `kappa_rec_succ_drop`
+
+Claim: `kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n))`.
+
+The proof begins `rw [kappa_rec_delta_step]`, which rewrites the goal's RHS to `kappa (recDelta b s n) + 1`, giving:
+```
+kappa (app s (recDelta b s n)) < kappa (recDelta b s n) + 1
+```
+i.e. `max (kappa s) (kappa (recDelta b s n)) < kappa (recDelta b s n) + 1`.
+
+This remaining goal is actually **false in general**: if `kappa s > kappa (recDelta b s n)`, the max equals `kappa s`, and we could have `kappa s ≥ kappa (recDelta b s n) + 1`.
+
+**Concrete counterexample to the whole statement:** Let `s` be something with large kappa, e.g. take `s = recDelta void void (delta void)` so `kappa s = 1`, `b = void`, `n = void`.
+- LHS: `kappa (app s (recDelta void s void))` = `max (kappa s) (kappa (recDelta void s void))` = `max 1 (max (max 0 1) 0)` = `max 1 1` = `1`.
+- RHS: `kappa (recDelta void s (delta void))` = `max (max 0 (kappa s)) (kappa void) + 1` = `max (max 0 1) 0 + 1` = `1 + 1` = `2`.
+
+Here `1 < 2` holds, so this particular case is fine. Let me push `kappa s` higher relative to `n`. Take `s` with `kappa s = 2`, `b = void`, `n = void`:
+- LHS: `max (kappa s) (kappa (recDelta void s void))` = `max 2 (max (max 0 2) 0)` = `max 2 2` = `2`.
+- RHS: `max (max 0 2) 0 + 1` = `3`. Still `2 < 3`.
+
+Actually since `kappa (recDelta b s n) ≥ kappa s` always (the max includes `kappa s`), we get `kappa (app s (recDelta b s n)) = max (kappa s)(kappa(recDelta b s n)) = kappa(recDelta b s n)`, so the *statement itself* reduces to `kappa(recDelta b s n) < kappa(recDelta b s (delta n))`, which by the correct measure is true. So `kappa_rec_succ_drop` is **true**, but its stated proof path is **broken**: after `rw [kappa_rec_delta_step]` the tool cannot even apply the (false) rewrite lemma, and the resulting goal is not what one needs.
+
+## Conclusion
+
+**The helper strategy is unsound as written.**
+
+1. `kappa_rec_delta_step` is **false** — it fails whenever the third argument `n` is of the form `delta n'`, because the `kappa` function's first pattern clause fires on nested `delta`, adding an extra `+1` on the RHS. Counterexample: `b = s = void, n = delta void` gives `1 = 2`.
+
+2. Because `kappa_rec_delta_step` cannot be proved, the `rw [kappa_rec_delta_step]` opening the proof of `kappa_rec_succ_drop` rests on an unavailable lemma. Even the target statement `kappa_rec_succ_drop`, while true, is not soundly reachable via this route.
+
+**Root cause:** the recursive clause `max ... (kappa n)` recurses on the *whole* `n`, but the "+1" pattern only triggers for a top-level `delta`. The intended relation "peeling one `delta` drops `kappa` by exactly 1" does not hold because `kappa` doesn't count the number of `delta`s — it only detects a single outermost `delta`. To fix this, `kappa` would need to count successor depth (e.g. `kappa (delta t) = kappa t + 1`) rather than special-casing `recDelta` on a single `delta`.

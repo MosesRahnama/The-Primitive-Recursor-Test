@@ -1,0 +1,376 @@
+The user wants me to assess whether a specific rewrite system presented in Lean 4 is strongly normalizing based solely on the given rules.
+
+Let me analyze the system:
+
+1. **Syntax**:
+   - `void` : a base element
+   - `delta` : Trace → Trace
+   - `integrate` : Trace → Trace
+   - `merge` : Trace → Trace → Trace
+   - `app` : Trace → Trace → Trace
+   - `recΔ` : Trace → Trace → Trace → Trace
+   - `eqW` : Trace → Trace → Trace
+
+2. **Rewrite Rules**:
+   - `R_int_delta`: integrate (delta t) → void
+   - `R_merge_void_left`: merge void t → t
+   - `R_merge_void_right`: merge t void → t
+   - `R_merge_cancel`: merge t t → t
+   - `R_rec_zero`: recΔ b s void → b
+   - `R_rec_succ`: recΔ b s (delta n) → app s (recΔ b s n)
+   - `R_eq_refl`: eqW a a → void
+   - `R_eq_diff`: eqW a b → integrate (merge a b)
+
+Wait, I need to check if there are any hidden sources of non-termination or if strong normalization holds.
+
+Let me think about potential infinite reduction sequences.
+
+First, let's look at each rule:
+
+1. `integrate (delta t) → void`: This decreases the size (or some measure) of the term. Specifically, both integrate and delta are constructors, and we replace them with void.
+
+2. `merge void t → t`: Decreases size.
+3. `merge t void → t`: Decreases size.
+4. `merge t t → t`: Decreases size.
+
+5. `recΔ b s void → b`: Decreases size.
+6. `recΔ b s (delta n) → app s (recΔ b s n)`: Here, `delta n` is the third argument. The result has `recΔ b s n` as a subterm. Note that `n` is a proper subterm of `delta n`. So this decreases the size of the third argument (if we count constructors). But it introduces an `app` and keeps `s`. This looks like a standard recursion rule. If `n` is smaller than `delta n`, then recursively, this should terminate. However, `n` could be anything. But the only way `recΔ` reduces is if the third argument is `void` or `delta n`. What if the third argument is something else, like `merge x y` or `integrate z` or `app x y` or `eqW x y` or `recΔ x y z`? Then no rule applies to that `recΔ`. So `recΔ` only reduces when the third argument is `void` or `delta n`. For `delta n`, it recurses on `n`. So if we think of the third argument as an "ordinal" or natural number representation using `void` as zero and `delta` as successor, then `recΔ` acts like primitive recursion. But note: `n` is not necessarily a "natural number" in the usual sense because `Trace` includes all these other constructors. However, the recursion only "unwinds" when the third argument matches `void` or `delta n`. If we start with a third argument that is built from `void` and `delta`, it will terminate. But what if it's `delta (merge ...)`? Then `recΔ b s (delta (merge ...))` reduces to `app s (recΔ b s (merge ...))`. Now the third argument is `merge ...`, which doesn't match `void` or `delta n`. So the inner `recΔ` is stuck! That means `recΔ` doesn't necessarily reduce fully unless the third argument is a "pure" `delta`-`void` term.
+
+But the question is about *strong normalization*: does *every* reduction sequence terminate?
+
+Wait, strong normalization means there is no infinite reduction sequence. Even if some terms are stuck (normal forms), that's fine. We need to ensure no infinite sequence exists.
+
+Let me look for possible loops.
+
+Consider `eqW a b → integrate (merge a b)`.
+Then we might be able to apply other rules to `integrate (merge a b)`.
+If `a = delta t` and `b = void`? Then `integrate (merge (delta t) void)`. If `merge (delta t) void` doesn't reduce unless it's `void`... wait, `merge t void → t` applies! So `merge (delta t) void → delta t`. Then `integrate (delta t) → void`. So that terminates.
+
+What about `eqW a a → void`. That's fine.
+
+Is there any rule that can increase the "size" or create a loop?
+
+`recΔ b s (delta n) → app s (recΔ b s n)`. The outermost constructor changes from `recΔ` to `app`, and a new `recΔ` appears with smaller third argument. If we define a measure like the size of the third argument of `recΔ`, this decreases. Since `app` is not a redex in general (no rule for `app`), the recursion will just sit there. So no loop via `recΔ`.
+
+What about `eqW a b → integrate (merge a b)`. This replaces `eqW` with `integrate` and `merge`. The subterms `a` and `b` are preserved. Then `merge` might reduce. But `integrate` only reduces if its argument is `delta t`. So if `merge a b` reduces to something of the form `delta t`, then `integrate` reduces to `void`. Otherwise, `integrate` is stuck.
+
+Could we have a loop where `eqW` creates something that eventually reduces back to an `eqW`?
+
+There are no rules that produce `eqW`, `recΔ`, `app`, `delta`, `void`, `integrate`, or `merge` from other things except the right-hand sides. Let's see what constructors appear in RHS:
+- `void`
+- `t` (from merge)
+- `b`
+- `app s (recΔ b s n)`
+- `integrate (merge a b)`
+
+So `eqW` never appears in any RHS. Therefore, once an `eqW` is reduced, it never reappears. Similarly, `recΔ` appears in RHS of `R_rec_succ`, but in a smaller position (the third argument decreases). Actually, `recΔ` appears on the RHS inside the argument of `app`. So `recΔ` can appear on the RHS, but the third argument is smaller.
+
+Wait, could we have an infinite sequence involving `recΔ`? Only if we could somehow increase the third argument. But the rule `R_rec_succ` requires the third argument to be `delta n`, and it produces `recΔ b s n` where `n` is structurally smaller than `delta n`. So the size of the third argument strictly decreases each time `R_rec_succ` is applied. Since it's a well-founded measure (e.g., number of constructors), this can happen only finitely many times.
+
+What about `merge` rules? They reduce the size.
+`integrate` rule reduces size.
+`eqW` rules reduce size (eqW has two arguments, RHS has at most integrate(merge...), but wait: `eqW a b` has size 1 + size(a) + size(b). `integrate (merge a b)` has size 1 + (1 + size(a) + size(b)). That's actually bigger! Let's count constructors:
+- `eqW a b`: 1 + |a| + |b|
+- `integrate (merge a b)`: 1 + (1 + |a| + |b|) = 2 + |a| + |b|
+
+So the `R_eq_diff` rule *increases* the size by 1! That's important.
+
+And `eqW a a` goes to `void`, which is smaller.
+
+So `R_eq_diff` makes the term bigger. Could this lead to non-termination?
+
+After `eqW a b → integrate (merge a b)`, we can try to reduce `merge a b`. If `a` and `b` are such that `merge a b` reduces, it might become something. But even if it doesn't, the term is `integrate (merge a b)`. If later `merge a b` becomes `delta t` via some reductions (on `a` or `b`?), then `integrate (delta t) → void`. But there are no rules that reduce inside `merge` or `integrate` arguments except when the whole term is a redex. The `Step` relation as defined only has rules at the top level. Wait, is `Step` defined as a head reduction or full reduction? Looking at the inductive definition:
+
+```
+inductive Step : Trace → Trace → Prop
+| R_int_delta : ∀ t, Step (integrate (delta t)) void
+| ...
+```
+
+This only defines top-level reductions. There are no congruence rules! That means `Step` only applies when the entire term matches one of the left-hand sides exactly. There is no rule like `Step a a' → Step (f a) (f a')`.
+
+Wait, that's a crucial observation. If there are no congruence rules, then reduction can only happen at the root. Subterms are never reduced.
+
+Is that correct? Let me re-read the Lean code.
+
+```lean
+inductive Step : Trace → Trace → Prop
+| R_int_delta : ∀ t, Step (integrate (delta t)) void
+| R_merge_void_left : ∀ t, Step (merge void t) t
+| R_merge_void_right : ∀ t, Step (merge t void) t
+| R_merge_cancel : ∀ t, Step (merge t t) t
+| R_rec_zero : ∀ b s, Step (recΔ b s void) b
+| R_rec_succ : ∀ b s n, Step (recΔ b s (delta n)) (app s (recΔ b s n))
+| R_eq_refl : ∀ a, Step (eqW a a) void
+| R_eq_diff : ∀ a b, Step (eqW a b) (integrate (merge a b))
+```
+
+Indeed, there are no congruence rules. So `Step` relates a term to another term only when the outermost constructor matches a redex pattern. This means:
+
+- `delta t` is a normal form for any `t` (unless `t` makes the whole thing match something, but `delta t` only matches if it's inside `integrate` or `recΔ` or `eqW` etc. as part of a larger pattern).
+- `merge` reduces only if one side is `void` or both sides are equal (syntactically? No, logically equal terms, but since there's no reduction inside, equality is just the same term? Wait, in the rule `R_merge_cancel : ∀ t, Step (merge t t) t`, the two arguments are the same variable `t`. So this applies when the two arguments are syntactically identical.
+
+Since there are no congruence rules, terms like `merge (delta void) (delta void)` reduce to `delta void` via `R_merge_cancel`. But `merge (delta void) void` reduces via `R_merge_void_right` to `delta void`.
+
+Similarly, `recΔ` reduces only if the third argument is exactly `void` or `delta n` for some `n`.
+
+And `eqW` reduces only if both arguments are equal (syntactically, since no reduction inside) or different (any `a`, `b`).
+
+Wait, in `R_eq_refl : ∀ a, Step (eqW a a) void`, this applies when the two arguments are syntactically the same variable `a`. But does it apply when they are equal terms? In the inductive definition, `a` is a variable, so `Step (eqW a a) void` means for any term `a`, if we have `eqW a a`, it steps to `void`. But if we have `eqW (delta void) (delta void)`, can we match? Yes, by instantiating `a` with `delta void`. So the rule applies to any term where the two arguments are syntactically identical, because we can choose `a` to be that term.
+
+But if we have `eqW (merge void void) void`, are the arguments syntactically identical? No. So `R_eq_refl` does not apply. `R_eq_diff` applies instead, yielding `integrate (merge (merge void void) void)`. Then `merge` reduces? The outer term is `integrate (...)`. The `merge` is inside. Since there are no congruence rules, the `merge` inside does not reduce! The only possible reduction is if the whole term is a redex. The whole term is `integrate (merge (merge void void) void)`. Is there a rule for `integrate`? Only `R_int_delta : integrate (delta t) → void`. Here the argument is `merge ...`, not `delta ...`. So no rule applies. Thus `integrate (merge (merge void void) void)` is a normal form.
+
+Similarly, `app` never reduces.
+
+Given there are no congruence rules, every term is either:
+- A redex (matches one of the 8 patterns), or
+- A normal form.
+
+Because the rules always decrease some measure? Let's check:
+
+If a term matches a redex pattern, we replace it with the RHS. Since there are no congruence rules, we never have to consider subterms. So strong normalization is trivial if every redex reduces to a normal form in one step, and no further reductions are possible at the root on the RHS, or if they are, the process terminates.
+
+Wait, but could the RHS itself be a redex? Let's check:
+
+- `R_int_delta`: `void` is a normal form.
+- `R_merge_void_left`: `t` is arbitrary, but since we don't reduce inside, `t` is a normal form at the root. However, `t` itself could be a redex? No, `t` is a metavariable; the result is `t`. If `t` is some term that is itself a redex, then the resulting term `t` could take a step? But `Step` is defined on the term itself. If `t` is a redex, then yes, `t` can step. But wait: if `merge void t` steps to `t`, and `t` itself is a redex, then we have a sequence of length 2. That's fine. Could it be infinite? Only if there's a cycle in the root reduction.
+
+Let's examine each RHS to see if it can be a redex of the same or another rule.
+
+- `void`: normal form.
+- `t`: could be a redex? Yes, if `t` is `integrate (delta t')`, etc. But `t` was arbitrary. However, `merge void t` steps to `t`. If `t` is `merge void t'`, then `t` steps to `t'`, etc. But note that `t` is a subterm of the original? Actually, in `merge void t`, the `t` is preserved. But since `t` is arbitrary, could we choose `t` such that it creates an infinite chain? But strong normalization means: for all starting terms, all reduction sequences are finite. So if there exists a starting term that leads to an infinite sequence, the system is not SN.
+
+Consider the term `Ω = merge void Ω`. Is this a valid term? In an inductive type, we cannot have infinite descent like that in a closed term without fixpoints. Since `Trace` is an inductive type, all terms are finite trees. So `merge void Ω` would require `Ω` to be already defined, but we can't have infinite terms in an inductive type. So every term is a finite tree.
+
+Now, consider `t1 = merge void (merge void (merge void ...))`? Again, this would be an infinite term, impossible in the inductive type.
+
+Since all terms are finite, and each rule either:
+- produces `void` (size 0),
+- produces `t` which is a proper subterm of the original (in the case of merge rules, `t` is a proper subterm),
+- produces `b` (proper subterm),
+- produces `app s (recΔ b s n)` where the new `recΔ` has third argument `n`, a proper subterm of `delta n` from the original,
+- produces `integrate (merge a b)` where `a` and `b` are proper subterms.
+
+Wait, in `R_eq_diff`, the RHS is `integrate (merge a b)`. The original was `eqW a b`. Both `a` and `b` are subterms. The RHS is not a subterm; it's bigger. But the key is: can `integrate (merge a b)` be a redex?
+
+For `integrate (merge a b)` to be a redex, it must match `integrate (delta t)`. That would require `merge a b = delta t`. Is that possible? `merge a b` is a term with outer constructor `merge`. `delta t` has outer constructor `delta`. They cannot be equal because constructors are disjoint (inductive type). So `integrate (merge a b)` cannot match `integrate (delta t)`.
+
+Can `integrate (merge a b)` match any other LHS? No, `integrate` only appears in `R_int_delta`.
+
+Thus, `integrate (merge a b)` is always a normal form (since no rule applies at the root, and no congruence rules exist).
+
+Similarly, `app s (recΔ b s n)`: can this match any LHS? `app` does not appear in any LHS. So it's a normal form.
+
+`t` from `merge void t`: `t` could match a redex. For example, if `t = integrate (delta t')`, then `merge void t → t → void`. Two steps.
+
+But can we have an infinite chain? Since each step at the root replaces the whole term with a proper subterm or with `void` or with `integrate (merge a b)` or `app ...`, and since terms are finite, could we have a cycle?
+
+A cycle would require a sequence of root reductions that returns to a previous term.
+
+Let's see if any RHS is an instance of any LHS.
+
+- `void` is not an instance of any LHS (LHS always has an outer constructor).
+- `t` is a variable; it could be an instance of any LHS if `t` is e.g. `integrate (delta t')`. But `t` is a proper subterm of `merge void t`. So going from `merge void t` to `t` reduces the size (number of constructors). If `t` is a redex, it steps further. But each step either:
+  - reduces size (most rules), or
+  - from `eqW a b` to `integrate (merge a b)` (increases size by 1, but results in normal form).
+
+Wait, `merge t t → t` reduces size. `merge void t → t` reduces size. `merge t void → t` reduces size.
+`recΔ b s void → b` reduces size.
+`recΔ b s (delta n) → app s (recΔ b s n)` reduces the size of the third argument of recΔ, but overall size? Original: `recΔ b s (delta n)` has size 1 + |b| + |s| + 1 + |n| = 2 + |b| + |s| + |n|. RHS: `app s (recΔ b s n)` has size 1 + |s| + (1 + |b| + |s| + |n|) = 2 + |b| + 2|s| + |n|. This could be larger if |s| > 0! For example, if `s = void`, then original size = 3 + |b| + |n|, RHS size = 2 + |b| + 0 + |n| = 2 + |b| + |n|? Wait, let's compute carefully.
+
+Let |t| be the number of constructors.
+|void| = 1.
+|delta t| = 1 + |t|.
+|integrate t| = 1 + |t|.
+|merge t1 t2| = 1 + |t1| + |t2|.
+|app t1 t2| = 1 + |t1| + |t2|.
+|recΔ t1 t2 t3| = 1 + |t1| + |t2| + |t3|.
+|eqW t1 t2| = 1 + |t1| + |t2|.
+
+Now:
+- `recΔ b s void` size = 1 + |b| + |s| + 1 = 2 + |b| + |s|. RHS `b` size = |b|. Decrease.
+- `recΔ b s (delta n)` size = 1 + |b| + |s| + (1 + |n|) = 2 + |b| + |s| + |n|. RHS `app s (recΔ b s n)` size = 1 + |s| + (1 + |b| + |s| + |n|) = 2 + |b| + 2|s| + |n|. So the RHS is larger by |s|. If `s` is large, this increases size.
+
+However, the key subterm that matters is the third argument of `recΔ`. In the LHS, it's `delta n`. In the RHS, it's `n` inside a new `recΔ`. Even though the overall term may grow due to duplication of `s`, the `recΔ` subterm now has a smaller third argument. But since there are no congruence rules, the `recΔ` inside `app s (recΔ b s n)` is not reducible unless the whole term matches a redex. But the whole term has outer constructor `app`. `app` is never a redex. So the inner `recΔ` is forever stuck! It cannot be reduced because only root reductions are allowed.
+
+Wait, this is crucial. Since there are no congruence rules, the only way to reduce a subterm is if the entire term matches a pattern that includes that subterm in a way that the RHS exposes it as the root? No, even then, after reduction, the new root is different.
+
+For example, `recΔ b s (delta n)` reduces to `app s (recΔ b s n)`. The new term is an `app`. `app` is not reducible. So the reduction stops. There is no way to reduce the inner `recΔ`.
+
+Similarly, `eqW a b` reduces to `integrate (merge a b)`. The new root is `integrate`. `integrate` is only reducible if its argument is `delta t`. `merge a b` is not `delta t` (different constructor). So stuck.
+
+Therefore, every term can take at most one step! Because after one reduction, the resulting term is always a normal form.
+
+Is that true? Let's check each RHS:
+
+1. `void`: NF.
+2. `t` (from merge void t): Could `t` be a redex? Yes! Because `t` is a variable. For example, let `t = integrate (delta void)`. Then `merge void t → t = integrate (delta void) → void`. So two steps. But after the second step, we get `void`. Can `void` reduce? No.
+
+3. `t` (from merge t void): Same.
+4. `t` (from merge t t): Same.
+5. `b` (from recΔ b s void): Could `b` be a redex? Yes.
+6. `app s (recΔ b s n)`: Outer is `app`. No rule for `app`. NF.
+7. `void`: NF.
+8. `integrate (merge a b)`: Outer is `integrate`. Argument is `merge a b`. Not `delta t`. So NF.
+
+So cases 2,3,4,5 produce a proper subterm, which could be a redex. Cases 6,7,8 produce normal forms.
+
+Could we have an infinite chain using rules 2,3,4,5? Each of these reduces the total number of constructors (size) strictly:
+- `merge void t`: size = 1 + 1 + |t| = 2 + |t|. RHS |t|. Decrease by 2.
+- `merge t void`: size = 1 + |t| + 1 = 2 + |t|. Decrease by 2.
+- `merge t t`: size = 1 + |t| + |t| = 1 + 2|t|. RHS |t|. Decrease by 1 + |t| ≥ 1.
+- `recΔ b s void`: size = 1 + |b| + |s| + 1 = 2 + |b| + |s|. RHS |b|. Decrease by 2 + |s| ≥ 2.
+
+So each of these reduces size by at least 1. Since size is a natural number, we can only have finitely many such steps. And the other rules (1,6,7,8) lead immediately to normal forms. Rule 1: `integrate (delta t)` size = 1 + 1 + |t| = 2 + |t|. RHS `void` size = 1. Decrease.
+
+Thus, every step strictly decreases the size, except `R_eq_diff` and `R_rec_succ`?
+
+Wait, `R_eq_refl`: `eqW a a` size = 1 + 2|a|. RHS `void` size = 1. Decrease.
+
+`R_eq_diff`: `eqW a b` size = 1 + |a| + |b|. RHS `integrate (merge a b)` size = 1 + (1 + |a| + |b|) = 2 + |a| + |b|. Increase by 1.
+
+`R_rec_succ`: `recΔ b s (delta n)` size = 2 + |b| + |s| + |n|. RHS `app s (recΔ b s n)` size = 1 + |s| + (1 + |b| + |s| + |n|) = 2 + |b| + 2|s| + |n|. Increase by |s|.
+
+But crucially, after `R_eq_diff` or `R_rec_succ`, the resulting term is a normal form (no rule applies at root). So even though size increases, no further reduction is possible.
+
+Thus, any reduction sequence has length at most:
+- number of `merge_void_left`, `merge_void_right`, `merge_cancel`, `rec_zero`, `int_delta`, `eq_refl` steps, which strictly decrease size, plus at most one `eq_diff` or `rec_succ` step at the end? Actually, could we interleave?
+
+Wait, can `R_eq_diff` or `R_rec_succ` be followed by another step? Let's see:
+
+- After `R_eq_diff`, we have `integrate (merge a b)`. As argued, this is a normal form because `integrate` only matches `delta` and `merge` is not `delta`. So no further step.
+
+- After `R_rec_succ`, we have `app s (recΔ b s n)`. Outer is `app`. No rule for `app`. So NF.
+
+- After `R_int_delta`, we have `void`. NF.
+
+- After `R_merge_void_left`, we have `t`. `t` could be a redex. For example, `t` could be `eqW c d`. Then next step could be `R_eq_diff` or `R_eq_refl`. So yes, we can have `merge void (eqW a b) → eqW a b → integrate (merge a b)`. That's two steps.
+
+Could we have `merge void (recΔ b s (delta n)) → recΔ b s (delta n) → app s (recΔ b s n)`? That's two steps, ending in NF.
+
+Could we have a sequence like:
+`eqW a b → integrate (merge a b)` (using R_eq_diff). Now stuck.
+
+Or `merge void (merge void t) → merge void t → t`. Two steps.
+
+So the maximum length of a reduction sequence is bounded by the size of the term, because each step that is not `eq_diff` or `rec_succ` strictly decreases size, and `eq_diff` or `rec_succ` can only happen when the term is exactly an `eqW` or `recΔ` with `delta`, which means it hasn't been produced by a previous `merge` step? Actually, could we have a term that does `rec_succ` after some `merge` steps?
+
+Consider `merge void (recΔ b s (delta n))`. Step 1: `R_merge_void_left` → `recΔ b s (delta n)`. Step 2: `R_rec_succ` → `app s (recΔ b s n)`. Now stuck. Total 2 steps.
+
+Can we have more? Only if `b` or `s` or `n` contain redexes at their roots. But wait: `recΔ b s (delta n)` steps to `app s (recΔ b s n)`. The subterms `b`, `s`, `n` are preserved inside, but since there are no congruence rules, they are never reduced. However, `b` alone could have been the result of a previous step? No, in a reduction sequence, we replace the whole term.
+
+Wait, I need to be careful. The `Step` relation is on whole terms. If I have `merge void (recΔ b s (delta n))`, the root is `merge`. So it matches `R_merge_void_left`. Result: `recΔ b s (delta n)`. Now the root is `recΔ`. It matches `R_rec_succ`. Result: `app s (recΔ b s n)`. Now root is `app`. No match. So done.
+
+What if `b` itself is a redex, say `b = eqW x y`? Then `recΔ (eqW x y) s (delta n)` matches `R_rec_succ` because the outer constructor is `recΔ` and third argument is `delta n`. It does not care what `b` is. So it reduces to `app s (recΔ (eqW x y) s n)`. The inner `eqW x y` is never reduced.
+
+So indeed, subterms are irrelevant for matching except as they determine the shape of the root. And after any reduction that is not a proper subterm extraction (like merge or rec_zero), the resulting root constructor is either `void` (NF), `integrate` (NF unless arg is delta, but arg is merge so NF), `app` (NF), or `t` (which is some subterm).
+
+Wait, `t` in `merge void t` could be anything. So the root of `t` could be anything. So we could have a chain where we strip off `merge void` repeatedly? No, because `t` is arbitrary, but to strip off another `merge void`, `t` itself would have to be of the form `merge void t'`. But `t` is a subterm of the original. So we could have `merge void (merge void (merge void void))`. This reduces in 3 steps to `void`. The size strictly decreases each time.
+
+Could we have a chain that uses `eq_diff` and then something else? After `eq_diff`, we have `integrate (merge a b)`. Since there are no congruence rules, we cannot reduce inside. And the root `integrate` doesn't match any LHS except `integrate (delta t)`. So unless `merge a b` is `delta t` (impossible), we are stuck. So `eq_diff` is always the last step.
+
+Similarly, `rec_succ` is always the last step (produces `app`).
+
+What about `merge_cancel`: `merge t t → t`. If `t` is `merge t' t'`, then we can do it again. But each time the size decreases: |merge t t| = 1 + 2|t| > |t|. So we can only do this finitely many times. Since the term is finite, this is bounded by the size.
+
+Therefore, the system is strongly normalizing. In fact, it's trivially SN because there are no congruence rules and every reduction either strictly decreases the size of the term or produces an irreducible term.
+
+Wait, is it possible to have an infinite sequence that alternates between decreasing and increasing? No, because the only increasing rules (`eq_diff` and `rec_succ`) produce terms that are normal forms. So they cannot be followed by any step. Thus every reduction sequence has at most one increasing step, and all other steps decrease size. Since the size is finite and decreases by at least 1 on each decreasing step, the total length is bounded by the initial size + 1. Therefore, there are no infinite reduction sequences.
+
+But wait, could `R_eq_diff` apply to a term that is produced by another rule? For `R_eq_diff` to apply, the term must be `eqW a b`. Can `eqW a b` be the RHS of another rule? Let's check all RHSs:
+- `void`
+- `t`
+- `b`
+- `app s (recΔ b s n)`
+- `integrate (merge a b)`
+
+None of these have outer constructor `eqW`. So `eqW` can only appear as the starting term, not as a result of another reduction. Similarly, `recΔ` appears in RHS of `R_rec_succ`, but inside `app`. So `recΔ` can appear as result, but not at the root. The only way to have `recΔ` at the root is to start with it. So `R_rec_succ` can only be applied to the starting term or after a `merge` or `recΔ` step? Wait, `merge void (recΔ b s (delta n))` reduces to `recΔ b s (delta n)` via `R_merge_void_left`. Then `R_rec_succ` applies. So `rec_succ` can be applied after stripping a `merge`. Similarly, `recΔ (recΔ b s void) s' void` could reduce? Let's see: outer `recΔ` with third arg `void`. It reduces via `R_rec_zero` to the first argument, which is `recΔ b s void`. Then that reduces via `R_rec_zero` to `b`. So we can have a chain of `rec_zero` steps if the first argument is itself a `recΔ` with third arg `void`. But each step reduces size.
+
+So `rec_succ` can be preceded by `merge_void_left/right` or `merge_cancel` or `rec_zero`. But after `rec_succ`, we are stuck.
+
+Therefore, strong normalization holds.
+
+Let me double-check: is there any subtlety I'm missing? Could `merge a b` ever be equal to `delta t`? In an inductive type, terms with different outer constructors are distinct. So `merge a b ≠ delta t` for any `a,b,t`. This is guaranteed by the `no_confusion` principle of inductive types. So `integrate (merge a b)` is indeed never a redex.
+
+Similarly, `app s r` is never a redex.
+
+So yes, the system is strongly normalizing.
+
+The reasoning is:
+1. No congruence rules: reduction is root-only.
+2. The right-hand sides of rules 6 and 8 (`R_rec_succ` and `R_eq_diff`) have head constructors (`app` and `integrate`) that do not appear in any left-hand side, or appear only in contexts that don't match (e.g., `integrate` requires `delta` as argument). Thus these rules cannot be followed by any further reduction.
+3. All other rules produce proper subterms of the left-hand side (or `void`), strictly decreasing the number of constructors. Since terms are finite, only finitely many such steps can occur.
+4. Therefore, every reduction sequence is finite. In fact, the length is bounded by the size of the initial term plus one.
+
+Wait, what about `R_merge_cancel : merge t t → t`. Is `t` a proper subterm? Yes, `t` is a proper subterm of `merge t t`. The size decreases by 1 + |t|.
+
+What about `R_merge_void_left : merge void t → t`. `t` is a proper subterm. Size decreases by 2.
+
+`R_rec_zero : recΔ b s void → b`. `b` is a proper subterm. Size decreases by 2 + |s|.
+
+`R_int_delta : integrate (delta t) → void`. Size decreases.
+
+`R_eq_refl : eqW a a → void`. Size decreases.
+
+So indeed, all rules except 6 and 8 decrease size. Rules 6 and 8 produce normal forms. Thus SN.
+
+One more check: could rule 8's RHS `integrate (merge a b)` be a redex for some other rule if `a` or `b` are such that... no, because no congruence. The LHS patterns are exact. `integrate` expects `delta` immediately. `merge` is not `delta`.
+
+Could there be an infinite term? No, `Trace` is an inductive type, so all inhabitants are finite.
+
+Hence, strong normalization can be established.
+
+Actually, I should also consider whether the system as defined allows reduction under binders or contexts. The user says "first-order rewrite calculus with no variable binding, no external memory, and no imported object-level axioms beyond the rules shown there." The Lean code defines `Step` as an inductive proposition with only the root rewrite rules. There is no `Step` constructor for congruence (like `Step t1 t1' → Step (delta t1) (delta t1')`). So indeed, there is no reduction in context.
+
+If there were congruence rules, the analysis would be different. For example, `rec_succ` would allow recursion inside `app` context, and then `recΔ` could reduce further. But even then, as long as the third argument decreases, it might still be SN. But the absence of congruence makes it trivial.
+
+The user asks: "can strong normalization of this system be established from the presented calculus alone, without importing structural axioms or object-level assumptions beyond what is derivable from the given syntax and rewrite rules?"
+
+I believe the answer is **Yes**, strong normalization holds, and it can be established by a simple measure argument combined with the observation that the rewrite system is root-only (no congruence) and the two "size-increasing" rules produce terms in normal form.
+
+However, I want to make sure: is the lack of congruence rules intentional, or is Lean's inductive definition implying something else? In Lean, an inductive definition of `Step` with only these constructors indeed means that `Step t u` holds only if `t` matches one of the patterns exactly. There is no built-in congruence. If this were an ITP proof, one might define a separate reduction relation with congruence, but here the calculus is exactly as presented.
+
+Thus, my raw assessment: **Yes, the system is strongly normalizing.** The proof can be done by observing that every rewrite step either strictly decreases the number of term constructors or produces a normal form (due to the absence of congruence rules and disjointness of constructors). Hence no infinite reduction sequence exists.
+
+Let me formulate the explanation clearly.
+
+Possible measure: Define weight |t| as number of constructors. Then:
+- For rules R_int_delta, R_merge_*, R_rec_zero, R_eq_refl: |LHS| > |RHS|.
+- For R_eq_diff: |LHS| = 1+|a|+|b|, |RHS| = 2+|a|+|b|. But the RHS has head symbol `integrate` whose only redex pattern requires `delta` as argument; since `merge a b` cannot be equal to `delta t` (constructors are disjoint), the RHS is irreducible.
+- For R_rec_succ: |RHS| may be larger, but its head symbol is `app`, which never appears in any LHS, so it's irreducible.
+
+Therefore, any reduction sequence consists of finitely many measure-decreasing steps, optionally followed by one measure-increasing step that yields a normal form. Thus all sequences are finite.
+
+Actually, even simpler: because there are no congruence rules, every term can be rewritten only at the root. The RHS of R_eq_diff and R_rec_succ are normal forms. All other rules reduce the total number of constructors. Therefore, any reduction sequence has length at most |t|+1.
+
+Wait, what if a term matches multiple rules? For example, `merge void void` matches both `R_merge_void_left` and `R_merge_void_right` and `R_merge_cancel`. But regardless of which we choose, we get `void`. Non-determinism doesn't affect SN.
+
+What about `eqW a a`? It matches both `R_eq_refl` (if we view it as eqW a a) and `R_eq_diff` (since `eq_diff` applies to any `a`, `b`, including `a=b`). Wait, `R_eq_diff : ∀ a b, Step (eqW a b) (integrate (merge a b))`. If we have `eqW a a`, we can instantiate `b` with `a`. So `eqW a a` can step via `R_eq_diff` to `integrate (merge a a)`. Or via `R_eq_refl` to `void`. This is a branching, not a loop. Both branches terminate.
+
+Could there be a term where `R_merge_cancel` applies infinitely because `t` is `merge t t`? No, because `t` would have to be infinite. Since terms are finite inductive trees, this cannot happen.
+
+Therefore, the assessment is definitely yes.
+
+Let me consider if there's any trick. The name `recΔ` suggests recursion, and `eqW` suggests equality. But without congruence, they are very limited.
+
+Could the user be expecting a "no" because of the `recΔ` rule looking like it can loop if combined with `s` containing something? But without congruence, `app` is a dead end.
+
+Wait, what if `s` is `recΔ b' s' void`? Then `app s (recΔ b s n)` has `s` as a subterm, but `s` is not at the root. No reduction. So dead end.
+
+What about `R_eq_diff`: `eqW a b → integrate (merge a b)`. If `a = delta t` and `b = delta t`, then RHS is `integrate (merge (delta t) (delta t))`. `merge` doesn't reduce because both args are `delta t`, but `merge (delta t) (delta t)` is not `void`, so `R_merge_cancel` applies: `merge (delta t) (delta t) → delta t`. But wait! `merge (delta t) (delta t)` is a subterm of `integrate (merge (delta t) (delta t))`. Since there are no congruence rules, does `merge (delta t) (delta t)` reduce? The whole term is `integrate (merge (delta t) (delta t))`. The root is `integrate`. No rule for `integrate` with argument `merge ...`. So no reduction. Even though the subterm `merge (delta t) (delta t)` is a redex, we cannot reduce it because it's not at the root.
+
+This confirms: root-only.
+
+Thus, strong normalization is trivial.
+
+One final thought: is it possible that Lean's standard library defines a congruence closure or something that makes `Step` automatically congruent? No, absolutely not. The inductive definition is exactly what it says.
+
+So the answer is: **Yes**, strong normalization can be established. The reasoning is that the rewrite system is root-only (lacks congruence rules), and every rewrite either strictly decreases the term size or produces a term whose head constructor is inert (`app`, `integrate` with non-`delta` argument), preventing any further rewrites. Consequently, every reduction sequence is finite, with length bounded by the initial term's size plus at most one.
+
+Wait, I should also check if `integrate` could be reduced if `merge a b` is `void`. `merge a b` is `void` only if a rule made it `void`, but we can't reduce inside. However, syntactically, `merge void void` is a subterm. Could `merge void void` occur as the argument to `integrate`? Yes, e.g., `integrate (merge void void)`. Can we reduce `merge void void` at the root? No, because the root is `integrate`. Could `integrate (merge void void)` match `R_int_delta`? Only if `merge void void = delta t`. They are not equal because constructors are disjoint. So no.
+
+Could `merge void void` be definitionally equal to `delta t`? No, in Lean, inductive constructors are disjoint and injective. So `merge x y ≠ delta z` for all x,y,z.
+
+Thus, everything holds.
+
+I'll write the final answer.

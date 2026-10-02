@@ -1,0 +1,775 @@
+The user wants a raw assessment of whether strong normalization (SN) can be established for the given first-order rewrite calculus in Lean 4, based solely on the presented rules, without extra axioms/imports.
+
+Let's analyze the system carefully.
+
+We have an inductive type `Trace` with constructors:
+- void
+- delta
+- integrate
+- merge
+- app
+- recΔ
+- eqW
+
+And a rewrite relation `Step` with rules:
+1. `R_int_delta`: integrate (delta t) → void
+2. `R_merge_void_left`: merge void t → t
+3. `R_merge_void_right`: merge t void → t
+4. `R_merge_cancel`: merge t t → t
+5. `R_rec_zero`: recΔ b s void → b
+6. `R_rec_succ`: recΔ b s (delta n) → app s (recΔ b s n)
+7. `R_eq_refl`: eqW a a → void
+8. `R_eq_diff`: eqW a b → integrate (merge a b)
+
+We need to assess if strong normalization (all rewrite sequences terminate) can be proved from these rules alone.
+
+First, let's think about whether the system is terminating.
+
+There are no binding constructs, so it's a first-order term rewriting system (FORS).
+
+Let's list the rules again and consider a suitable measure:
+
+1. integrate (delta t) → void
+   - delta t is a subterm, integrate decreases "weight"? Hard to say without a weight function.
+
+2. merge void t → t
+   - merge disappears.
+
+3. merge t void → t
+   - merge disappears.
+
+4. merge t t → t
+   - merge disappears.
+
+5. recΔ b s void → b
+   - recΔ disappears.
+
+6. recΔ b s (delta n) → app s (recΔ b s n)
+   - recΔ is pushed into the second argument of app, and the third argument becomes n, which is a proper subterm of delta n.
+   - However, the recΔ remains, applied to n. So this looks like a primitive recursion step. Wait, recΔ b s (delta n) → app s (recΔ b s n). The `app` constructor wraps s and the recursive call. This is similar to a recursor for natural numbers (void = 0, delta = successor).
+   - The third argument gets structurally smaller: delta n becomes n. But a new `app` is created, and the recΔ persists. Since n is a proper subterm, if we define a measure based on the size of the third argument of recΔ, this rule decreases it.
+   - But what if n itself contains recΔ? That's fine, because the measure is just the size of the third argument.
+   - However, there is a subtlety: `app s (recΔ b s n)`. The `recΔ` is still there, but its third argument is smaller. This is standard structural recursion.
+
+7. eqW a a → void
+   - eqW disappears.
+
+8. eqW a b → integrate (merge a b)
+   - eqW replaced by integrate (merge a b). Both a and b are preserved.
+   - This rule increases the size? Let's see:
+     Size(eqW a b) = 1 + size(a) + size(b)
+     Size(integrate (merge a b)) = 1 + size(merge a b) = 1 + 1 + size(a) + size(b) = 2 + size(a) + size(b).
+     So the term size increases by 1.
+     However, eqW is replaced by integrate (merge ...). Could there be an infinite loop?
+     - integrate (merge a b) might rewrite? Only if merge a b is void or something. But merge a b could be irreducible if a and b are arbitrary and distinct and non-void.
+     - Wait, but if a and b are arbitrary, maybe they reduce.
+     - But eqW a b is only applicable if a and b are identical syntactically? No, the rule `eqW a b` applies to any a and b. `eqW a a` also applies to any a. So if we have `eqW t t`, both rules apply? Actually, `eqW a a` is an instance of `eqW a b` (with b=a). So there is overlap.
+     - If we have `eqW t t`, we could apply `R_eq_refl` to get `void`. Or we could apply `R_eq_diff` to get `integrate (merge t t)`. Then `merge t t` can rewrite to `t` via `R_merge_cancel`. Then we have `integrate t`. If `t` is `delta u`, then `integrate (delta u)` → `void`. So `eqW (delta u) (delta u)` → `integrate (merge (delta u) (delta u))` → `integrate (delta u)` → `void`. That terminates.
+     - But what if `t` does not reduce? Then `integrate t` is a normal form (if t is not `delta u`). So that also terminates.
+     - However, can we loop? Let's see. `eqW a b` produces `integrate (merge a b)`. Can `integrate (merge a b)` produce something that eventually contains `eqW` again? Only if a or b contain `eqW` subterms. For example, if a = eqW c d, then `merge a b` might reduce? No, merge rules only apply when one side is void or both sides are equal. If a is not void and not equal to b, merge a b is irreducible. Then integrate (merge a b) is irreducible (unless merge a b is delta t, then integrate (delta t) → void). So no loop there.
+     - What if a or b contain recΔ that expands? The recΔ rule expands into app, but the third argument gets smaller. Since it's a constructor term, this is well-founded.
+
+Let's try to find a measure or weight function that strictly decreases with each step.
+
+We need a well-founded measure μ : Trace → Nat (or ordinal) such that if t → t' then μ(t) > μ(t').
+
+Rule 1: integrate (delta t) → void.
+μ(integrate (delta t)) > μ(void).
+Rule 2: merge void t → t.
+μ(merge void t) > μ(t).
+Rule 3: merge t void → t.
+μ(merge t void) > μ(t).
+Rule 4: merge t t → t.
+μ(merge t t) > μ(t).
+Rule 5: recΔ b s void → b.
+μ(recΔ b s void) > μ(b).
+Rule 6: recΔ b s (delta n) → app s (recΔ b s n).
+μ(recΔ b s (delta n)) > μ(app s (recΔ b s n)).
+Rule 7: eqW a a → void.
+μ(eqW a a) > μ(void).
+Rule 8: eqW a b → integrate (merge a b).
+μ(eqW a b) > μ(integrate (merge a b)).
+
+We need to find such a μ.
+
+Let's try a lexicographic combination of sizes of certain subterm positions, or a polynomial interpretation.
+
+Let's consider a polynomial interpretation over natural numbers.
+
+Assign weights to constructors:
+- void: w_void = 1
+- delta: w_delta(x) = x + c1
+- integrate: w_integrate(x) = x + c2
+- merge: w_merge(x,y) = a*x + b*y + c3
+- app: w_app(x,y) = d*x + e*y + c4
+- recΔ: w_rec(x,y,z) = f*x + g*y + h*z + c5
+- eqW: w_eq(x,y) = i*x + j*y + c6
+
+We need linear polynomials with non-negative integer coefficients (standard for termination).
+
+Let's try to find coefficients satisfying all inequalities.
+
+Rule 1: integrate(delta(t)) > void.
+w_integrate(w_delta(t)) > w_void
+=> (t + c1) + c2 > 1
+=> t + c1 + c2 > 1.
+Since t >= 1 (if all base weights are >=1), this is satisfied if c1+c2 >=1.
+
+Rule 2: merge(void, t) > t.
+w_merge(1, t) > t
+=> a*1 + b*t + c3 > t
+=> a + c3 + b*t > t.
+We need b >= 1. If b=1, then a + c3 > 0.
+
+Rule 3: merge(t, void) > t.
+a*t + b*1 + c3 > t.
+Need a >= 1. If a=1, then b + c3 > 0.
+
+Rule 4: merge(t, t) > t.
+a*t + b*t + c3 > t.
+=> (a+b)*t + c3 > t.
+Need a+b >= 1. If a+b=1, c3 > 0. But from rules 2 and 3 we likely need a,b >=1. Let's keep a,b >=1.
+
+Rule 5: recΔ(b,s,void) > b.
+f*b + g*s + h*1 + c5 > b.
+Need f >= 1. If f=1, then g*s + h + c5 > 0.
+
+Rule 6: recΔ(b,s,delta(n)) > app(s, recΔ(b,s,n)).
+f*b + g*s + h*(n + c1) + c5 > d*s + e*(f*b + g*s + h*n + c5) + c4.
+This is the tricky one. Let's expand RHS:
+RHS = d*s + e*f*b + e*g*s + e*h*n + e*c5 + c4
+= e*f*b + (d + e*g)*s + e*h*n + (e*c5 + c4).
+
+LHS = f*b + g*s + h*n + h*c1 + c5.
+
+We need:
+f > e*f  OR if f=e*f then compare next...
+Actually we need LHS > RHS for all b,s,n >= 1.
+This is a linear inequality in b, s, n.
+Coefficients:
+b: f > e*f => f*(1-e) > 0 => e < 1. Since e is a non-negative integer, e = 0.
+If e=0:
+RHS = d*s + c4.
+LHS = f*b + g*s + h*n + h*c1 + c5.
+We need:
+f*b + g*s + h*n + const > d*s + c4.
+This requires f >= 1, h >= 1.
+If f>=1 and h>=1, then LHS has positive coefficients for b and n, while RHS has none. So for large b or n, LHS > RHS. But we need it for all b,s,n >= 1.
+If d is large, say d=100, and s is large, could RHS be larger? No, because LHS also has g*s. We need g >= d? Actually, if e=0, RHS coefficient for s is d. LHS coefficient is g. So need g >= d. If g = d, then need the constant term of LHS > constant term of RHS.
+Wait, but if e=0, the recursive call recΔ(b,s,n) does not contribute to the RHS measure? Actually, the measure of app(s, recΔ(...)) is d*s + c4 if e=0. That means we are ignoring the second argument of app, which is weird but allowed in polynomial interpretations as long as coefficients are non-negative. But we need to ensure the measure of recΔ(b,s,n) is well-defined. If e=0, then app(s, x) has measure d*s + c4 regardless of x. That's fine.
+
+But if e=0, then we need to check other rules involving app. There are no rewrite rules for app! So app is just a constructor that never reduces. So its measure doesn't need to satisfy any rule.
+
+So for rule 6, choose e=0, f=1, g=d, h=1, and constants appropriately.
+
+But wait, is it allowed to have e=0? Yes, in polynomial interpretations, coefficients are usually non-negative integers. Zero is allowed. But some definitions require coefficients to be positive? No, non-negative is standard for monotonicity. If e=0, w_app(x,y) = d*x + c4. Is this monotone in y? Monotone means that if y increases, w_app does not decrease. Since coefficient is 0, it's constant in y, which is non-decreasing. So it's monotone. That's fine.
+
+So with e=0, rule 6 becomes:
+f*b + g*s + h*(n+c1) + c5 > d*s + c4.
+Since e=0, RHS = d*s + c4.
+We can set f=1, h=1.
+Then b + g*s + n + h*c1 + c5 > d*s + c4.
+We need g >= d. If g = d, we need b + n + h*c1 + c5 > c4 for all b,n >=1. So choose constants such that 1 + 1 + h*c1 + c5 > c4. Easy.
+
+Now rule 7: eqW(a,a) > void.
+i*a + j*a + c6 > 1.
+(i+j)*a + c6 > 1. OK if i+j >= 1 and c6 >=0, or constants work.
+
+Rule 8: eqW(a,b) > integrate(merge(a,b)).
+i*a + j*b + c6 > w_integrate(w_merge(a,b)) = w_merge(a,b) + c2 = a*a_coeff + b*b_coeff + c3 + c2.
+Wait, w_merge(x,y) = a_m * x + b_m * y + c3 (using a_m, b_m to avoid confusion with the Trace variable a).
+So w_integrate(w_merge(a,b)) = a_m * a + b_m * b + c3 + c2.
+
+So we need:
+i*a + j*b + c6 > a_m * a + b_m * b + c3 + c2 for all a,b >= 1.
+This requires i > a_m or (i = a_m and j > b_m) or (i = a_m, j = b_m, c6 > c3 + c2).
+Since a_m and b_m are coefficients for merge. We already set a_m >= 1 and b_m >= 1 from rules 2 and 3.
+So we need i >= a_m, j >= b_m, and if equal, constant term strictly greater.
+Let's try i = a_m, j = b_m, and c6 > c3 + c2.
+
+But wait, we also have rule 7: eqW(a,a) > void.
+With i = a_m, j = b_m, we have a_m*a + b_m*a + c6 > 1. Since a>=1 and a_m,b_m >=1, this is fine.
+
+Let's summarize coefficients:
+
+Variables for polynomial interpretation:
+- void: 1
+- delta(x): x + c_delta
+- integrate(x): x + c_int
+- merge(x,y): a_m * x + b_m * y + c_merge
+- app(x,y): d_app * x + c_app  (coefficient for y is 0)
+- recΔ(x,y,z): f_r * x + g_r * y + h_r * z + c_rec
+- eqW(x,y): i_e * x + j_e * y + c_eq
+
+Constraints:
+From rule 1: (t + c_delta) + c_int > 1 for all t >= 1. So c_delta + c_int >= 1? Actually t + c_delta + c_int > 1 for t=1 means 1 + c_delta + c_int > 1, so c_delta + c_int >= 1 (since integers, >0). OK.
+
+From rule 2: a_m * 1 + b_m * t + c_merge > t for all t>=1.
+=> b_m >= 1. If b_m = 1, then a_m + c_merge > 0.
+
+From rule 3: a_m * t + b_m * 1 + c_merge > t for all t>=1.
+=> a_m >= 1. If a_m = 1, then b_m + c_merge > 0.
+
+From rule 4: a_m * t + b_m * t + c_merge > t for all t>=1.
+=> (a_m + b_m) * t + c_merge > t. If a_m + b_m >= 1, OK. Since a_m,b_m >=1, sum >=2, so definitely OK.
+
+From rule 5: f_r * b + g_r * s + h_r * 1 + c_rec > b for all b,s >=1.
+=> f_r >= 1. If f_r=1, then g_r*s + h_r + c_rec > 0. Since s>=1, if g_r>=1 OK. If g_r=0, need h_r + c_rec > 0.
+
+From rule 6: f_r * b + g_r * s + h_r * (n + c_delta) + c_rec > d_app * s + c_app for all b,s,n >=1. (Because e=0)
+=> f_r * b + g_r * s + h_r * n + h_r * c_delta + c_rec > d_app * s + c_app.
+Need f_r >= 1, h_r >= 1.
+If g_r = d_app, need f_r*b + h_r*n + h_r*c_delta + c_rec > c_app for all b,n >=1.
+Since b,n >=1, minimal LHS = f_r + h_r + h_r*c_delta + c_rec.
+So need f_r + h_r + h_r*c_delta + c_rec > c_app.
+
+From rule 7: i_e * a + j_e * a + c_eq > 1.
+=> (i_e + j_e) * a + c_eq > 1. Since a>=1, need i_e + j_e >= 1 or c_eq > 1 - (i_e+j_e). If i_e=j_e=0, need c_eq > 1. Let's keep i_e, j_e >= 1.
+
+From rule 8: i_e * a + j_e * b + c_eq > a_m * a + b_m * b + c_merge + c_int for all a,b >=1.
+Need i_e >= a_m, j_e >= b_m.
+If i_e = a_m and j_e = b_m, need c_eq > c_merge + c_int.
+
+Now, can we assign concrete non-negative integers satisfying all?
+
+Let's pick simple values:
+c_delta = 1, c_int = 1. (Rule 1: 1+1=2>1 OK)
+a_m = 1, b_m = 1, c_merge = 1. (Rule 2: 1 + t + 1 > t => t+2 > t OK. Rule 3: t + 1 + 1 > t OK. Rule 4: t + t + 1 > t OK.)
+d_app = 1, c_app = 1. (app(x,y) = 1*x + 1 = x+1)
+f_r = 1, g_r = 1, h_r = 1, c_rec = 1. (Rule 5: b + s + 1 + 1 > b => s+2>0 OK. Rule 6: b + s + n + 1 + 1 > s + 1 => b + n + 2 > 1. Since b,n >=1, 1+1+2=4>1 OK. Wait, LHS = b + s + (n+1) + 1 = b+s+n+2. RHS = 1*s + 1 = s+1. So b+n+2 > 1. OK.)
+i_e = 1, j_e = 1. But need i_e >= a_m =1, j_e >= b_m =1. So i_e=1, j_e=1 works.
+c_eq: need c_eq > c_merge + c_int = 1 + 1 = 2. So c_eq >= 3.
+Check rule 7: (1+1)*a + 3 > 1 => 2a+3 > 1. OK.
+Check rule 8: 1*a + 1*b + 3 > 1*a + 1*b + 1 + 1 => a+b+3 > a+b+2. OK.
+
+Wait, but we need to check rule 6 more carefully.
+recΔ(b, s, delta(n)) → app(s, recΔ(b, s, n)).
+Our measure:
+μ(recΔ(b, s, delta(n))) = 1*b + 1*s + 1*(n+1) + 1 = b + s + n + 2.
+μ(app(s, recΔ(b,s,n))) = 1*s + 1 = s + 1? Wait, we set app(x,y) = d_app * x + c_app = 1*x + 1 = x+1.
+So μ(app(s, recΔ(b,s,n))) = s + 1.
+But wait, app has two arguments. The measure of app is defined as d_app * μ(first arg) + e_app * μ(second arg) + c_app.
+I set e_app = 0, d_app = 1, c_app = 1.
+So indeed, μ(app(s, recΔ(...))) = μ(s) + 1.
+μ(s) depends on s. Since s >= 1, μ(s) >= 1. So RHS >= 2.
+LHS = b + s + n + 2. Since b,n >=1, LHS >= 1 + s + 1 + 2 = s + 4.
+So LHS = s + b + n + 2 >= s + 4.
+RHS = s + 1.
+So s + b + n + 2 > s + 1 since b+n+2 > 1. This holds strongly.
+
+But is it allowed to ignore the second argument of app? Yes, in polynomial interpretations for termination, we just need that for each rewrite rule l > r. The measure is defined recursively on the term structure. The polynomial for app must be monotone in each argument. If coefficient is 0, it's monotone (non-decreasing). So that's fine.
+
+But wait: does the measure need to be strictly monotone in all arguments? Usually, for a quasi-order to be a reduction order compatible with the term structure, we need the interpretation to be weakly monotone in all arguments (i.e., if a component increases, the value does not decrease). Strict monotonicity is not required for all arguments in polynomial interpretations over natural numbers? Actually, for a proper reduction order, we usually need strict monotonicity for the interpretation to be a simplification order. But polynomial interpretation with non-negative coefficients gives a weakly monotone algebra. The ordering > on interpretations is the natural number ordering. The term ordering induced by a polynomial interpretation with non-negative coefficients is a reduction order (strictly monotone) if the polynomials are strictly monotone in each argument? Let's recall.
+
+A polynomial interpretation assigns to each function symbol f a polynomial P_f. The interpretation of a term is computed bottom-up. The induced ordering: s > t if [s] > [t] for all assignments. This is a reduction ordering (compatible with contexts) if the polynomials are weakly monotone (non-decreasing) in each variable? Actually, for compatibility with contexts, if s > t, then f(..., s, ...) > f(..., t, ...). This requires that P_f is strictly increasing in at least one argument? No. Let's check:
+
+If [s] > [t], then we need [f(...,s,...)] >= [f(...,t,...)]? Actually for a rewrite order >, we need:
+1. s > t implies C[s] > C[t].
+If P_f has coefficient 0 for some argument, then changing that argument may not change the value. So if [s] > [t], but we place them in an argument with coefficient 0, then [f(...,s,...)] = [f(...,t,...)]. So we don't get strictly greater. Thus, the ordering induced is not a rewrite ordering (not closed under contexts with strictly greater).
+
+However, for proving termination, we don't need a rewrite ordering in the sense of being closed under all contexts for the > relation. We just need that for each ground instance of a rewrite rule lσ > rσ, and that > is well-founded, and that for any context, if lσ > rσ then C[lσ] > C[rσ]. This last property does require that each polynomial is strictly monotone in every argument? Let's verify.
+
+Suppose we have a rewrite rule l → r with [l] > [r]. We want to show that for any context C, [C[l]] > [C[r]].
+By induction on C. The base case is the rule itself. For the inductive step, consider f(t1, ..., C', ..., tn).
+[C[l]] = P_f([t1], ..., [C'[l]], ..., [tn]).
+[C[r]] = P_f([t1], ..., [C'[r]], ..., [tn]).
+By induction, [C'[l]] > [C'[r]].
+We need P_f(..., x, ...) > P_f(..., y, ...) whenever x > y.
+Since coefficients are non-negative integers, P_f(..., x, ...) - P_f(..., y, ...) = coeff_i * (x - y).
+So if coeff_i >= 1, then since x-y >= 1, the difference is >= 1. If coeff_i = 0, difference is 0.
+Thus, to preserve strict inequality in any position where the replacement occurs, we need the coefficient for that position to be at least 1.
+
+But in a rewrite step, the redex can occur anywhere. So for context closure, we need all function symbols to have strictly positive coefficients for all arguments? Actually, we need that for each function symbol f and each argument position i, the coefficient is positive? Because the redex could be in any position.
+
+Wait, but if the coefficient is 0, then replacing a subterm with a smaller one (in measure) does not decrease the overall measure. So if a rewrite rule occurs inside an argument with coefficient 0, the overall term might not decrease.
+
+For example, consider app(s, recΔ(b,s,n)). In our interpretation, app has coefficient 0 for its second argument. So if we have a term `app(s, recΔ(b,s,delta(n)))`, the measure is μ(s)+1. But if we rewrite the inner recΔ to app(s, recΔ(b,s,n)), we get `app(s, app(s, recΔ(b,s,n)))`. The measure is still μ(s)+1. So the measure does not decrease! This is a problem.
+
+Wait, does the rewrite step happen inside the second argument of app? Yes. The rule is `recΔ b s (delta n) → app s (recΔ b s n)`. So if this recΔ is inside the second argument of an outer app, the outer app's measure doesn't see the change.
+
+But we don't need the outer app to decrease if the inner redex decreases, as long as the whole term decreases? Actually, the whole term is the outer app. If the outer app's measure doesn't decrease, then the rewrite step does not decrease the measure of the whole term. That's fatal.
+
+Let's re-examine. The term being rewritten is some context C[recΔ b s (delta n)]. After rewrite, it's C[app s (recΔ b s n)]. If C is a context where the hole is in a position with coefficient 0 all the way up, then the measure might not decrease.
+
+For example, let C = app void □. Then:
+Term before: app void (recΔ b s (delta n)).
+Measure before: μ(app void (recΔ...)) = 1*μ(void) + 1 = 1*1 + 1 = 2.
+Term after: app void (app s (recΔ b s n)).
+Measure after: 1*μ(void) + 1 = 2.
+So the measure does not decrease! It stays the same. So our interpretation fails.
+
+But wait, can app void (recΔ b s (delta n)) actually be rewritten? The rule R_rec_succ applies to recΔ b s (delta n) regardless of context. So yes, we can rewrite the inner recΔ.
+Thus, a valid measure must account for the fact that recΔ can be inside any context, and the whole term must decrease.
+
+Therefore, we need a measure where every constructor is strictly monotone in every argument position, or at least we need a weight function that decreases lexicographically or something.
+
+Alternatively, we can use a multiset path order or recursive path order (RPO). But with first-order rewrite rules, RPO requires a precedence on function symbols.
+
+Let's try RPO with a precedence and status.
+
+RPO termination:
+We need a precedence > on function symbols such that for each rule l → r, l >_{rpo} r.
+
+But RPO also requires that for all function symbols, they are strictly greater than their arguments in some sense? Actually, RPO: s = f(s1..sn) > g(t1..tm) = t if either:
+1. f > g and s > ti for all i.
+2. f = g (and same status) and (s1..sn) >_{lex or mul} (t1..tm) and s > ti for all i.
+3. s_i >= t for some i.
+
+And for variables, we don't have variables; these are ground terms? Actually, the rules are schematic, but for proving termination via RPO, we need l > r for all variables in l,r. RPO works for terms with variables.
+
+Let's list function symbols: void, delta, integrate, merge, app, recΔ, eqW.
+
+We need to orient the rules.
+
+Rule 1: integrate(delta(t)) → void.
+We need integrate(delta(t)) > void.
+This can be satisfied if integrate > void, and integrate(delta(t)) > void (trivially if void is minimal).
+In RPO, if integrate is the top symbol, and void is a constant less than integrate, then integrate(...) > void holds because integrate > void and all subterms of integrate(...) (which is delta(t)) are greater than void? Actually, condition 1: f > g and s > tj for all j. Here g is void (constant). There are no tj. So yes, if integrate > void, then integrate(delta(t)) > void.
+
+Rule 2: merge(void, t) → t.
+We need merge(void, t) > t. This holds if merge > all function symbols? Actually, for merge(void,t) > t, we can use case 3: one of the subterms of the left side is >= t. The second subterm is t itself, so merge(void,t) > t by subterm property. This doesn't need any precedence.
+
+Rule 3: merge(t, void) → t. Similarly, first subterm is t.
+
+Rule 4: merge(t, t) → t. Similarly, first subterm is t.
+
+Rule 5: recΔ(b, s, void) → b.
+First subterm is b, so recΔ(b,s,void) > b by case 3.
+
+Rule 6: recΔ(b, s, delta(n)) → app(s, recΔ(b,s,n)).
+We need recΔ(b,s,delta(n)) > app(s, recΔ(b,s,n)).
+This is tricky. In RPO, we can try:
+- If recΔ > app, then we need recΔ(b,s,delta(n)) > s and recΔ(b,s,delta(n)) > recΔ(b,s,n).
+  - recΔ(b,s,delta(n)) > s: subterm s is an argument, so by case 3, yes (since s is a proper subterm).
+  - recΔ(b,s,delta(n)) > recΔ(b,s,n): here top symbols are equal. If recΔ has lexicographic status (or multiset), we compare arguments.
+    - (b, s, delta(n)) vs (b, s, n).
+    - Under lexicographic status with third argument most significant? Standard lex status is left-to-right unless specified. We can assign status.
+    - If we assign lexicographic status to recΔ with the third argument being the most significant (or left-to-right, but we need delta(n) > n). Actually, in lex comparison, if the first two arguments are equal, we compare the third: delta(n) vs n. We need delta(n) > n. Is that true? delta is a constructor. For delta(n) > n, we need either delta > some top symbol in n (if n is compound), or delta(n) > n by subterm? n is a proper subterm of delta(n), so delta(n) > n by case 3. Yes! Because in RPO, a term is greater than its proper subterms. So delta(n) > n.
+    - So with lexicographic status on recΔ, we have recΔ(b,s,delta(n)) > recΔ(b,s,n) because the first two arguments are equal and the third is greater.
+    - But we also need recΔ(b,s,delta(n)) > app(s, recΔ(b,s,n)). If recΔ > app, and recΔ(...) > s, recΔ(...) > recΔ(...), then condition 1 applies.
+    - Wait, condition 1 requires s > tj for all j. Here t1 = s, t2 = recΔ(b,s,n). We have s > s? No, s is not greater than s; it's equal. RPO uses >, not >=. Actually, condition 1 requires s > tj for all j. But s is not greater than itself. So we cannot use condition 1 if one of the tj is s.
+    - However, we can try condition 3: some subterm of left >= right. The subterms of recΔ(b,s,delta(n)) are b, s, delta(n). Is any of these >= app(s, recΔ(...))? No, because app is not a subterm.
+    - So RPO with precedence recΔ > app fails for rule 6 because of condition 1 requiring strict > on all arguments.
+
+Alternatively, we can try if recΔ = app? No, they are different symbols.
+
+What if app > recΔ? Then recΔ(...) > app(...) cannot hold via condition 1. Could it hold via condition 3? Is there a subterm of recΔ(...) that is >= app(...)? No.
+
+So RPO with simple precedence does not orient rule 6.
+
+But maybe we can use a lexicographic path order with argument statuses, or a recursive path order with status. However, rule 6 is a typical recursion rule, which often requires a more sophisticated ordering, like LPO with a precedence where recΔ > app and the third argument of recΔ is compared. But as noted, condition 1 fails because of the s argument.
+
+Wait, in RPO, for condition 1: f > g and for all j, s > tj. Here left = recΔ(b, s, delta(n)), right = app(s, recΔ(b,s,n)). If recΔ > app, we need recΔ(b,s,delta(n)) > s and recΔ(b,s,delta(n)) > recΔ(b,s,n).
+- recΔ(b,s,delta(n)) > s: yes, because s is a proper subterm.
+- recΔ(b,s,delta(n)) > recΔ(b,s,n): if we can show this.
+But is recΔ(b,s,delta(n)) > recΔ(b,s,n) true? Yes, as argued, because the third argument delta(n) > n, and lexicographically the first two are equal.
+However, the first condition requires left > each argument of the right. The arguments of the right are s and recΔ(b,s,n). We need left > s and left > recΔ(b,s,n). Left > s is true (proper subterm). Left > recΔ(b,s,n) is true as argued.
+Wait, left > recΔ(b,s,n) is true because recΔ is the top symbol of the right argument, and left is recΔ(...). We compare using condition 2: same top symbol, lex status. The argument tuple (b, s, delta(n)) >_lex (b, s, n). Since b=b, s=s, delta(n) > n. So yes, left > recΔ(b,s,n).
+Thus, left > s and left > recΔ(b,s,n). So condition 1 is satisfied!
+
+Wait, earlier I thought condition 1 requires s > tj, but I confused s with the left term. The condition is: if f > g, then f(...) > g(t1..tm) if left > tj for all j. So left = recΔ(b,s,delta(n)). We need left > s and left > recΔ(b,s,n). Both hold. So rule 6 is oriented by RPO if recΔ > app. Great!
+
+Now we need to orient all other rules.
+
+Rule 1: integrate(delta(t)) → void.
+Need integrate > void. Then integrate(delta(t)) > void because no arguments on void. OK.
+
+Rule 2: merge(void, t) → t.
+Left > right because t is a proper subterm (condition 3).
+
+Rule 3: merge(t, void) → t.
+Proper subterm.
+
+Rule 4: merge(t, t) → t.
+Proper subterm.
+
+Rule 5: recΔ(b, s, void) → b.
+Proper subterm.
+
+Rule 7: eqW(a, a) → void.
+Need eqW > void? Or proper subterm: a is a subterm, but right is void. Is left > void? If eqW > void, then yes (condition 1, since no args on void). Or if we can say left > void by subterm? No, void is not a subterm. So we need eqW > void.
+
+Rule 8: eqW(a, b) → integrate(merge(a,b)).
+Need eqW(a,b) > integrate(merge(a,b)).
+If eqW > integrate, then we need eqW(a,b) > merge(a,b) (since merge is the argument of integrate). Actually, the arguments of integrate are just one: merge(a,b). So we need left > merge(a,b). If integrate > merge, then we need left > a and left > b? Wait, condition 1: if eqW > integrate, then eqW(a,b) > integrate(merge(a,b)) if eqW(a,b) > merge(a,b).
+Now is eqW(a,b) > merge(a,b)? If eqW > merge, then need eqW(a,b) > a and eqW(a,b) > b. Both hold by proper subterm. So if eqW > integrate and eqW > merge, rule 8 is oriented.
+But do we need integrate > merge? For the intermediate step, yes. Actually, we need left > merge(a,b). Since merge(a,b) is not a subterm of left, we need to compare via RPO. If eqW > merge, then eqW(a,b) > merge(a,b) because a and b are subterms and thus less than left. So yes.
+Then, since eqW(a,b) > merge(a,b), and eqW > integrate, we have eqW(a,b) > integrate(merge(a,b)) by condition 1 (since integrate has one argument merge(a,b), and left > that argument). Wait, condition 1 requires left > all arguments of the right. The right is integrate(merge(a,b)). Its only argument is merge(a,b). We have left > merge(a,b). Also we need eqW > integrate. So condition 1 applies. Great.
+
+So the precedence constraints are:
+- integrate > void
+- recΔ > app
+- eqW > integrate
+- eqW > merge
+- eqW > void (already implied by eqW > integrate > void? Not necessarily transitive unless we define it. But we can set eqW > integrate > void, and eqW > merge, and recΔ > app. Let's check if we need anything else.
+
+Also need integrate > void for rule 1.
+Need eqW > void for rule 7.
+
+Can we set a total precedence: recΔ > app, eqW > integrate > merge > void, and delta somewhere? delta doesn't appear on the right of any rule except inside integrate(delta t) → void and recΔ b s (delta n) → ... We don't need delta in precedence particularly. But for monotonicity, if we have integrate(delta(t)), we need integrate(delta(t)) > void, which is fine if integrate > void.
+
+Wait, do we need merge > void? Not necessarily for rule orientation, but for RPO to be total? Not needed.
+
+Let's check all rules with a proposed precedence:
+Precedence: recΔ > app > eqW > integrate > merge > void. And delta can be anywhere, say delta > void.
+
+Actually, we don't need app > eqW. recΔ > app is needed. eqW > integrate is needed. integrate > void is needed. eqW > merge is needed. merge doesn't need to be > anything. void is minimal.
+
+Let's test each rule:
+
+1. integrate(delta(t)) → void.
+Top left = integrate, top right = void. integrate > void. Left has one arg delta(t). Need left > void? No arguments on right. So condition 1 vacuously holds. OK.
+
+2. merge(void, t) → t.
+Left top = merge. Right = t. t is a proper subterm (second arg). Condition 3: left > right if some subterm of left is >= right. The subterm t is equal to right. So left > right. OK.
+
+3. merge(t, void) → t.
+Subterm t >= t. OK.
+
+4. merge(t, t) → t.
+Subterm t >= t. OK.
+
+5. recΔ(b, s, void) → b.
+Subterm b >= b. OK.
+
+6. recΔ(b, s, delta(n)) → app(s, recΔ(b,s,n)).
+Top left = recΔ, top right = app. recΔ > app.
+Arguments of right: s, recΔ(b,s,n).
+Need left > s: yes, s is proper subterm.
+Need left > recΔ(b,s,n): compare left and right arg.
+Left = recΔ(b, s, delta(n)). Right = recΔ(b, s, n).
+Same top symbol. Assume lexicographic status (left-to-right or any, but need delta(n) > n). With lex status, compare first arg: b = b. Second: s = s. Third: delta(n) vs n. Since delta(n) > n (proper subterm property), the tuple is greater. So left > recΔ(b,s,n).
+Thus condition 1 holds. OK.
+
+7. eqW(a, a) → void.
+Top left = eqW, top right = void. Need eqW > void. Then condition 1 vacuously. OK.
+
+8. eqW(a, b) → integrate(merge(a,b)).
+Top left = eqW, top right = integrate. Need eqW > integrate.
+Argument of right: merge(a,b).
+Need left > merge(a,b).
+Top left = eqW, top right arg top = merge. Need eqW > merge.
+Arguments of merge(a,b): a, b.
+Need left > a: yes, proper subterm.
+Need left > b: yes, proper subterm.
+So eqW(a,b) > merge(a,b) by condition 1.
+Then since eqW > integrate and eqW(a,b) > merge(a,b), condition 1 gives eqW(a,b) > integrate(merge(a,b)). OK.
+
+So all rules are oriented by a lexicographic path order (LPO) with a suitable precedence and status (multiset or lex? For rule 6 we needed lex status on recΔ to compare the third argument). Actually, even with multiset status, recΔ(b,s,delta(n)) vs recΔ(b,s,n): the multisets {b, s, delta(n)} vs {b, s, n}. Since delta(n) > n, and the rest are equal, the multiset comparison says {b,s,delta(n)} > {b,s,n} because we can match b with b, s with s, and delta(n) > n. So multiset status also works.
+
+But wait: in rule 6, left > recΔ(b,s,n) is needed. With multiset status, we compare the multisets of arguments. Since delta(n) > n, the left multiset is greater. So yes, multiset status works too.
+
+Actually, LPO typically uses lexicographic status based on the order of arguments. Since the arguments are given, we can assume left-to-right lex. In left-to-right lex, (b, s, delta(n)) > (b, s, n) because b=b, s=s, delta(n)>n. So that works.
+
+Therefore, the system is terminating by LPO (or RPO).
+
+Wait, but is LPO applicable when there are no variables? Yes, it works for ground terms too. But actually the rules have variables (implicitly universal). LPO works for terms with variables: we need l > r for all variables. Since there are no variables on the right that aren't on the left? Let's check:
+- R_int_delta: left has t, right has no variables. OK.
+- R_merge_void_left: left has t, right has t.
+- etc. All variables on right appear on left. And LPO orients them.
+
+But hold on: is there any rule that could cause non-termination despite LPO orientation? No, LPO is a reduction order, so if all rules are oriented by LPO, the system is terminating.
+
+Now, the question is: can strong normalization be established from the presented calculus alone?
+
+Wait, strong normalization means there are no infinite rewrite sequences. Termination (weak normalization? No, strong normalization is the same as termination in rewriting literature: all rewrite sequences terminate). Actually, strong normalization (SN) usually means every term is strongly normalizing (no infinite reduction sequence starting from it). This is equivalent to the rewrite relation being well-founded.
+
+So if we can establish termination via LPO using the given rules, then yes, SN can be established.
+
+But we need to be careful: is there any subtlety with the fact that this is a rewrite calculus with no variable binding, no external memory, etc.? It's just a first-order term rewrite system. The Lean definition defines Step as a relation between terms. The question asks: "can strong normalization of this system be established from the presented calculus alone, without importing structural axioms or object-level assumptions beyond what is derivable from the given syntax and rewrite rules?"
+
+In Lean, to prove SN, one would need to prove that the relation `Step` is well-founded. Since `Step` is an inductive proposition, one might try to prove `WellFounded Step`. But Lean's standard library might have definitions and theorems about well-foundedness. The question says "without importing structural axioms or object-level assumptions beyond what is derivable from the given syntax and rewrite rules". It seems to allow using standard proof methods (like LPO) as long as we don't add extra rules.
+
+But wait: is there a catch? Let's look again at the rules.
+
+`R_eq_diff : ∀ a b, Step (eqW a b) (integrate (merge a b))`
+
+If a = b, then both `R_eq_refl` and `R_eq_diff` apply. But that's just a non-confluent overlap. It doesn't affect termination.
+
+However, consider the term `eqW a b` where `a` and `b` are arbitrary. It reduces to `integrate (merge a b)`. Could `merge a b` reduce? Only if a = void, or b = void, or a = b. If none of those hold, `merge a b` is stuck. Then `integrate (merge a b)` is stuck unless `merge a b` = `delta t`. But `merge a b` is a `merge` term, not a `delta`. So `integrate (merge a b)` is a normal form.
+
+What about `recΔ`? It recurses on the third argument. If the third argument is `void`, it stops. If it's `delta n`, it recurses on `n`. But what if the third argument is something else, like `merge a b`? Then `recΔ` is stuck. So there are stuck terms.
+
+What about `app`? `app` never reduces on its own. It only appears as the result of `recΔ`.
+
+Could there be an infinite sequence involving `eqW` and `recΔ`? For example, `recΔ (eqW a a) s void` → `eqW a a` (by R_rec_zero). Then `eqW a a` → `void` (by R_eq_refl). Terminates.
+
+What about `recΔ b (eqW x y) (delta n)`? Then R_rec_succ gives `app (eqW x y) (recΔ b (eqW x y) n)`. The `eqW x y` is now inside `app`. `app` doesn't reduce. But `eqW x y` could reduce if it's the root. Here it's not the root. So stuck unless we reduce inside arguments. Wait, the rewrite relation is defined only at the root? Let's check the Lean definition.
+
+`inductive Step : Trace → Trace → Prop`
+The constructors give root reduction. For example, `R_int_delta : ∀ t, Step (integrate (delta t)) void`.
+This means `Step` relates the whole term `integrate (delta t)` to `void`.
+There are no congruence rules! So `Step` only rewrites at the root.
+
+This is crucial! The relation is not a standard rewrite relation closed under contexts. It is a root-step relation.
+
+Wait, in Lean, `Step` is defined as an inductive type with only root rewrite constructors. There is no rule like:
+`Step t t' → Step (delta t) (delta t')` or `Step t t' → Step (integrate t) (integrate t')`.
+
+So `Step` is NOT closed under contexts. It is a "small-step" semantics that only operates on the entire term. This changes everything!
+
+If `Step` only operates at the root, then a term like `app void (recΔ b s (delta n))` cannot step to `app void (app s (recΔ b s n))` because the `Step` relation does not have congruence rules. The only way to step is to match one of the root patterns.
+
+So the system is a state transition system on closed terms (ground terms? no, the constructors have parameters of type Trace, so it's just terms). The only possible reductions are when the entire term matches one of the left-hand sides.
+
+This means the system is essentially a rewriting system on the root only. So we can think of each term as a state, and the transitions are given by pattern matching the whole term.
+
+In that case, the LPO approach still works? Actually, for root rewriting, we don't need monotonicity under contexts. We just need that for each rule l → r, the measure of l is greater than the measure of r. Because the rewrite only happens at the root. The context closure is irrelevant.
+
+So the polynomial interpretation approach with coefficient 0 for some arguments would work! Because we only evaluate the measure of the whole term before and after. The fact that a subterm changes inside a larger term doesn't matter because the larger term cannot rewrite unless its root matches a pattern.
+
+Wait, but if we rewrite at the root, the entire term is replaced. So for rule 6, the term is exactly `recΔ b s (delta n)`. It rewrites to `app s (recΔ b s n)`. We need μ(recΔ b s (delta n)) > μ(app s (recΔ b s n)). And that's it. We don't need to consider the case where recΔ is inside an app because the step would not apply there.
+
+Given that, the polynomial interpretation I gave earlier works! Let's verify again.
+
+Polynomial interpretation:
+μ(void) = 1
+μ(delta t) = μ(t) + 1
+μ(integrate t) = μ(t) + 1
+μ(merge t1 t2) = μ(t1) + μ(t2) + 1
+μ(app t1 t2) = μ(t1) + 1  (coefficient for second arg is 0)
+μ(recΔ t1 t2 t3) = μ(t1) + μ(t2) + μ(t3) + 1
+μ(eqW t1 t2) = μ(t1) + μ(t2) + 3
+
+Check rules:
+1. μ(integrate (delta t)) = (μ(t)+1)+1 = μ(t)+2. μ(void) = 1. μ(t)+2 > 1. OK.
+2. μ(merge void t) = 1 + μ(t) + 1 = μ(t)+2. μ(t) = μ(t). μ(t)+2 > μ(t). OK.
+3. μ(merge t void) = μ(t) + 1 + 1 = μ(t)+2 > μ(t). OK.
+4. μ(merge t t) = μ(t) + μ(t) + 1 = 2μ(t)+1 > μ(t). OK.
+5. μ(recΔ b s void) = μ(b) + μ(s) + 1 + 1 = μ(b)+μ(s)+2. μ(b) = μ(b). Since μ(s) >= 1, LHS > RHS. OK.
+6. μ(recΔ b s (delta n)) = μ(b) + μ(s) + (μ(n)+1) + 1 = μ(b)+μ(s)+μ(n)+2.
+   μ(app s (recΔ b s n)) = μ(s) + 1.
+   Need μ(b)+μ(s)+μ(n)+2 > μ(s)+1 => μ(b)+μ(n)+1 > 0. Since μ(b),μ(n) >= 1, this is 1+1+1 > 0. OK.
+7. μ(eqW a a) = μ(a)+μ(a)+3 = 2μ(a)+3. μ(void)=1. 2μ(a)+3 > 1. OK.
+8. μ(eqW a b) = μ(a)+μ(b)+3.
+   μ(integrate (merge a b)) = (μ(a)+μ(b)+1)+1 = μ(a)+μ(b)+2.
+   Need μ(a)+μ(b)+3 > μ(a)+μ(b)+2. OK.
+
+So this polynomial interpretation works perfectly because we only need root-step decrease.
+
+Since `Step` is defined without congruence, the system is a finitely branching root rewriting system. The measure above decreases by at least 1 on every step. Since the measure is a natural number, the relation is well-founded.
+
+But wait: is the system finitely branching? For a given term, how many rules apply?
+- `integrate (delta t)`: only R_int_delta (for that t).
+- `merge void t`: R_merge_void_left. Also if t = void, R_merge_void_right? No, the term is `merge void t`. If t = void, then `merge void void` matches R_merge_void_left (with t=void) and R_merge_void_right (with t=void) and R_merge_cancel (with t=void). So there are multiple possible steps. But finitely many.
+- `recΔ b s void`: R_rec_zero.
+- `recΔ b s (delta n)`: R_rec_succ.
+- `eqW a a`: R_eq_refl and R_eq_diff (since b can be a). So two steps.
+- `eqW a b` with a≠b: only R_eq_diff.
+
+So it's finitely branching. With a decreasing natural number measure, every reduction sequence is finite. Strong normalization holds.
+
+But wait: can there be infinite sequences due to rules like `eqW a b` where a or b contain reducible subterms? No, because the rules only apply at the root. A term `eqW (merge void void) void` matches `eqW a b` with a = merge void void, b = void. So it can step via R_eq_diff to `integrate (merge (merge void void) void)`. But the inner `merge void void` does not reduce because the root is `eqW`. So the only possible step is the root step.
+
+This is extremely important. The system is not a standard term rewriting system with contexts; it's a root-only rewriting system. This is much simpler.
+
+However, one must be careful: can the measure ever increase? No, because we only rewrite at the root, and each root rewrite decreases the measure. So after one step, the new term might have a different root, and we compare its measure. The measure is defined purely syntactically.
+
+Therefore, strong normalization is straightforward via a polynomial interpretation or even a simple weight function.
+
+But let's double-check the definition of `Step` in Lean. It is an inductive type:
+```
+inductive Step : Trace → Trace → Prop
+| R_int_delta : ∀ t, Step (integrate (delta t)) void
+| ...
+```
+Indeed, there are no congruence constructors. So `Step` is a relation on the whole `Trace`. It's not the compatible closure of the rewrite rules. It's just the rewrite rules applied at the root.
+
+So the question is: can SN be established from the presented calculus alone? The answer is yes. Because we can define a measure function `size : Trace → Nat` (or similar) and prove that it strictly decreases with each `Step`.
+
+But we need to check if there is any hidden subtlety. For instance, `R_eq_diff` maps `eqW a b` to `integrate (merge a b)`. If `a` and `b` are huge, the output is larger than the input in terms of tree size? Let's compute:
+size(eqW a b) = 1 + size(a) + size(b)
+size(integrate (merge a b)) = 1 + size(merge a b) = 1 + 1 + size(a) + size(b) = 2 + size(a) + size(b).
+So tree size increases by 1! So a simple size measure does not decrease.
+
+But my polynomial interpretation assigned a smaller weight to `merge` relative to `eqW`. Specifically, μ(eqW a b) = μ(a)+μ(b)+3, while μ(integrate (merge a b)) = μ(a)+μ(b)+2. So I weighted `eqW` more heavily than `integrate` and `merge`.
+
+Is this allowed? Yes, because we can assign any positive weights to constructors as long as the inequalities hold. This is a standard polynomial interpretation.
+
+Wait, but does the problem allow us to "use any standard proof method provided it does not require strengthening the system"? Yes. And proving SN via a polynomial interpretation is standard and does not require extra rules.
+
+However, there is a subtle point: in the rule `R_rec_succ`, the output contains `app s (recΔ b s n)`. The `recΔ` persists, but its third argument is smaller. In my measure, μ(recΔ b s (delta n)) = μ(b)+μ(s)+μ(n)+2, while μ(app s (recΔ b s n)) = μ(s)+1. This is a huge decrease. But is it valid? Yes, because the measure of `recΔ` includes the measures of all its arguments, while the measure of `app` ignores the second argument (or gives it weight 0). Since there are no congruence rules, we can assign weight 0 to the second argument of `app`.
+
+But is there any issue with well-definedness? No. The measure is a function from `Trace` to `Nat`. It's well-defined by recursion on the inductive type.
+
+One might worry that the measure uses the same function recursively, but that's fine.
+
+So the conclusion is: yes, strong normalization can be established.
+
+But let's think if there's any reason it might NOT be strongly normalizing.
+
+Suppose we have a term `eqW t t`. It can step to `void` via `R_eq_refl`. Or it can step to `integrate (merge t t)` via `R_eq_diff`. Then `merge t t` steps to `t` via `R_merge_cancel`. Then `integrate t` is a normal form unless `t` is `delta u`, in which case it steps to `void`. So both paths terminate.
+
+Could there be a cycle? For a cycle, we need a sequence of root steps that returns to a previous term. Let's see:
+
+- `integrate (delta t)` → `void`. `void` does not step anywhere. So no cycle.
+- `merge void t` → `t`. If `t` = `merge void t'`, then we could step again. This gives a chain: `merge void (merge void t')` → `merge void t'` → `t'`. Terminates.
+- `merge t t` → `t`. If `t` = `merge t t`, then `merge (merge t t) (merge t t)` → `merge t t`. But `merge t t` itself reduces to `t`. Wait, can a term be equal to a proper subterm of itself? In an inductive type like `Trace`, there are no infinite descending chains or anything, but more importantly, there is no term `t` such that `t = merge t t` because `merge` is a constructor and the inductive type is well-founded (no cycles in terms). Terms are finite trees. So `t` cannot be equal to `merge t t`. The only way `merge t t` reduces to `t` is to a proper subterm. Since terms are finite, repeatedly taking proper subterms terminates.
+
+Similarly, `recΔ b s (delta n)` → `app s (recΔ b s n)`. The result has a subterm `recΔ b s n`, which is smaller in the third argument. Since the third argument is a proper subterm of `delta n`, repeated application of this rule (if the root remains recΔ with a delta in the third arg) will eventually reach a third argument that is not `delta`, at which point the recΔ is stuck (or if it's `void`, it reduces to `b`). So no infinite chain there.
+
+The only rule that increases tree size is `R_eq_diff`. Could it lead to an infinite chain?
+`eqW a b` → `integrate (merge a b)`. Now the root is `integrate`. The only rule for `integrate` is `R_int_delta` on `integrate (delta t)`. So if `merge a b` is `delta t`, we can step to `void`. But `merge a b` cannot be `delta t` because `merge` and `delta` are different constructors. So `integrate (merge a b)` is a normal form. So `eqW` steps to a normal form in one step (if a≠b) or two steps (if a=b and we choose the diff rule).
+
+Wait, could `merge a b` step? Only if its root matches a merge rule. But the root of the whole term is `integrate`, not `merge`. So `merge a b` does not step.
+
+Thus, `integrate (merge a b)` is always a normal form because `integrate` only matches `integrate (delta t)`.
+
+So `eqW` always terminates.
+
+What about `app`? It never steps. It's a dead end.
+
+Thus, every rule strictly reduces some measure, and there are no cycles.
+
+But to be thorough, let's think about whether there is any term that can be reduced infinitely by alternating rules.
+
+Suppose we have `recΔ (eqW a b) s (delta n)`. Root is `recΔ`. Third arg is `delta n`. So rule `R_rec_succ` applies:
+→ `app s (recΔ (eqW a b) s n)`.
+Now root is `app`. No rule applies. So stuck.
+
+Suppose we have `recΔ b (eqW a a) void`. Root is `recΔ`, third arg void.
+→ `eqW a a` (by R_rec_zero).
+Now root is `eqW`. Can step to `void` or `integrate (merge a a)`.
+If we go to `void`, done.
+If we go to `integrate (merge a a)`, root is `integrate`. `merge a a` is not `delta t`. So stuck.
+
+Everything seems to terminate.
+
+One more check: is there any way to construct a term that grows forever via `R_eq_diff`? For instance, if `a` or `b` themselves are `eqW` terms that reduce? But reduction is only at the root. So if we have `eqW (eqW a b) c`, the root is `eqW`. It steps to `integrate (merge (eqW a b) c)`. Now root is `integrate`, stuck. The inner `eqW a b` never gets to step.
+
+So indeed, root-only rewriting is very constrained.
+
+Given all this, strong normalization is provable easily. We can define a measure:
+Let w(void) = 1
+w(delta t) = w(t) + 1
+w(integrate t) = w(t) + 2
+w(merge t1 t2) = w(t1) + w(t2) + 1
+w(app t1 t2) = w(t1) + 1
+w(recΔ t1 t2 t3) = w(t1) + w(t2) + w(t3) + 2
+w(eqW t1 t2) = w(t1) + w(t2) + 3
+
+Actually, let's refine to match the inequalities:
+We need:
+- w(integrate (delta t)) > w(void). LHS = w(t)+1 + 2? Let's set coefficients.
+Let's use the earlier successful assignment:
+w(void) = 1
+w(delta x) = x + 1
+w(integrate x) = x + 1
+w(merge x y) = x + y + 1
+w(app x y) = x + 1
+w(recΔ x y z) = x + y + z + 1
+w(eqW x y) = x + y + 3
+
+Check:
+1. integrate(delta t): (t+1)+1 = t+2 > 1. OK.
+2. merge void t: 1 + t + 1 = t+2 > t. OK.
+3. merge t void: t + 1 + 1 = t+2 > t. OK.
+4. merge t t: t + t + 1 = 2t+1 > t. OK.
+5. recΔ b s void: b + s + 1 + 1 = b+s+2 > b. OK.
+6. recΔ b s (delta n): b + s + (n+1) + 1 = b+s+n+2. app s (recΔ b s n): s+1. Need b+s+n+2 > s+1 => b+n+1 > 0. Since b,n >= 1, OK.
+7. eqW a a: a+a+3 = 2a+3 > 1. OK.
+8. eqW a b: a+b+3. integrate(merge a b): (a+b+1)+1 = a+b+2. Need a+b+3 > a+b+2. OK.
+
+All strict decreases by at least 1. So well-foundedness is immediate.
+
+Therefore, strong normalization can be established.
+
+But wait, the user asks: "can strong normalization of this system be established from the presented calculus alone, without importing structural axioms or object-level assumptions beyond what is derivable from the given syntax and rewrite rules? You may use any standard proof method provided it does not require strengthening the system with extra rewrite rules, guards, side conditions, or hidden assumptions."
+
+So the answer should be: Yes, SN can be established. The reasoning: it is a finitely branching root rewrite system, and one can define a weight function (polynomial interpretation) that strictly decreases with every rewrite step. Since the weight maps into the natural numbers, all rewrite sequences are finite.
+
+I should also mention that because the step relation is defined only at the root (no congruence rules), the system is essentially a set of state transitions on closed terms, and termination follows from a global measure. I should explicitly note the lack of congruence rules as a key observation that makes the measure method trivial.
+
+But wait: is it possible the user intends `Step` to be used as a standard rewrite relation, and expects us to consider its compatible closure? In Lean, when one defines an operational semantics, one often defines `Step` as a relation on closed terms, and then defines `Step*` as its reflexive transitive closure. However, there is no context closure. In some calculi, `Step` is defined with congruence rules like:
+```
+| Ctxt : Step t t' → Step (delta t) (delta t')
+```
+But here there are none. The problem statement says "first-order rewrite calculus". In rewriting theory, a calculus usually means the compatible closure. But the Lean code explicitly defines the relation without congruence. So we must take the definition as given. The relation `Step` is exactly what is written.
+
+If the user meant the compatible closure, they would likely have included congruence rules or said "compatible closure of Step". But they didn't. So we interpret `Step` literally as defined.
+
+Even if one were to consider the compatible closure, the system might still terminate, but the measure would need to be monotone. However, as discussed, we could use an RPO or a more careful measure. But with root-only rewriting, it's even easier.
+
+Given the prompt's emphasis on "no variable binding, no external memory, and no imported object-level axioms", it's likely that the system is designed to be obviously terminating (or obviously non-terminating) and the test is whether I notice the root-only nature or try to overcomplicate it.
+
+Let me think if there's any trick. The constructors `Trace` are:
+- void
+- delta
+- integrate
+- merge
+- app
+- recΔ
+- eqW
+
+The `recΔ` rule resembles primitive recursion. But because there is no evaluation context, `recΔ` only fires when it is the root. This means it's not really a recursor in the usual sense; it's just a state machine.
+
+Could there be an infinite loop via `eqW`? Let's see:
+`eqW a b` → `integrate (merge a b)` (if a≠b).
+Can `integrate (merge a b)` ever reduce to something containing `eqW`? No.
+Can it reduce to something that contains `eqW` at the root? No.
+So no loop.
+
+Could `recΔ` produce an `eqW` at the root? Yes: `recΔ b s void` → `b`. If `b` is `eqW a c`, then the next step could be `eqW a c` → ... So you can have a sequence of length >1. But each step reduces the measure.
+
+Let's verify the measure for that case:
+Start with `recΔ (eqW a c) s void`.
+Measure = w(eqW a c) + w(s) + 1 + 1 = (a+c+3) + s + 2 = a+c+s+5.
+After step: `eqW a c`.
+Measure = a + c + 3.
+Decrease by s+2 >= 3. OK.
+
+Then `eqW a c` steps to `integrate (merge a c)`.
+Measure before: a+c+3.
+After: a+c+2.
+Decrease by 1. OK.
+
+So fine.
+
+What about `recΔ b s (delta n)` → `app s (recΔ b s n)`.
+Measure before: b + s + (n+1) + 1 = b+s+n+2.
+After: s+1.
+Decrease by b+n+1 >= 3. OK.
+
+So measure always decreases.
+
+Is there any rule where the measure does not decrease? No, all are strict.
+
+Therefore, SN is provable.
+
+Could the question be a trick where the answer is NO because without congruence rules it's not a "calculus" in the usual sense, or because strong normalization of the congruence closure requires more? The prompt says "first-order rewrite calculus with no variable binding...". It presents the Lean file. We must assess based on the file.
+
+The file defines `Step` without congruence. So we should answer based on that.
+
+I will answer: Yes, strong normalization can be established. The reasoning: define a weight function on `Trace` that strictly decreases with each `Step`. Because `Step` is a root-only relation (no congruence or context rules), a global polynomial interpretation suffices. For example, assign weights such that `eqW` is heavier than `integrate`+`merge`, `recΔ` is heavier than `app`, etc. This yields a well-founded order isomorphic to the naturals, proving every rewrite sequence terminates. No additional axioms or rules are needed beyond the syntax and the rules shown.
+
+I should be concise but clear.
+
+Wait, the user asks for "raw assessment" and "briefly explain the reasoning, staying within that boundary."
+
+So answer: Yes. Provide the measure.
+
+Let's write the measure clearly:
+- |void| = 1
+- |delta t| = |t| + 1
+- |integrate t| = |t| + 1
+- |merge x y| = |x| + |y| + 1
+- |app x y| = |x| + 1
+- |recΔ x y z| = |x| + |y| + |z| + 1
+- |eqW x y| = |x| + |y| + 3
+
+Then verify each rule decreases. This proves strong normalization.
+
+Actually, I should double-check rule 5 with this measure:
+|recΔ b s void| = |b|+|s|+1+1 = |b|+|s|+2 > |b|. Yes.
+
+Rule 6: |recΔ b s (delta n)| = |b|+|s|+(|n|+1)+1 = |b|+|s|+|n|+2. |app s (recΔ b s n)| = |s|+1. Since |b|,|n| >= 1, LHS >= 1+|s|+1+2 = |s|+4 > |s|+1. Yes.
+
+All good.
+
+One more thought: is it necessary to mention that the system is finitely branching? Not strictly for SN via measure, but strong normalization means no infinite sequence. A measure into well-founded naturals directly forbids infinite sequences.
+
+I think the answer is solid.
+
+Final check: the user says "without importing structural axioms or object-level assumptions beyond what is derivable from the given syntax and rewrite rules". The measure is defined by recursion on the inductive type `Trace`, which is derivable from the syntax. The proof uses induction on the weight and the fact that `Nat` is well-founded, which is standard. No extra axioms needed.
+
+So: Yes, SN holds.

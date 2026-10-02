@@ -1,0 +1,760 @@
+We have a first-order rewrite system. Let me analyze it.
+
+Traces (terms):
+- plum (constant)
+- grape t
+- mango t
+- peach t s
+- pear t s
+- banana b s n
+- cherry a b
+
+Step rules:
+1. R_mango_grape: mango (grape t) → plum
+2. R_peach_plum_left: peach plum t → t
+3. R_peach_plum_right: peach t plum → t
+4. R_peach_cancel: peach t t → t
+5. R_banana_zero: banana b s plum → b
+6. R_apple_orange: banana b s (grape n) → pear s (banana b s n)
+7. R_cherry_refl: cherry a a → plum
+8. R_cherry_diff: a ≠ b → cherry a b → mango (peach a b)
+
+For R_cherry_diff, "a ≠ b" is a Prop premise. This is concerning for strong normalization because it's an external condition — but it's decidable since Traces are finite and we can check equality. Actually in Lean, given any two terms a, b, we can decide a ≠ b. So this rule can be applied whenever a and b are syntactically different.
+
+But the issue: R_cherry_diff creates mango (peach a b) and then we can apply R_mango_grape to get plum (if we could). Wait, R_mango_grape requires mango (grape t), not mango (peach a b). So cherry a b → mango (peach a b), and then we're stuck because the argument to mango is peach, not grape.
+
+Hmm, but peach a b can be reduced via the various peach rules. Let's think about what this system is. It looks like a representation of some known system. Let me think...
+
+Actually this resembles the "Kiselyov's lambda calculus with delimited continuations" or some other term calculus. Let me think about whether this is a known system.
+
+Actually, let me look more carefully. The banana term takes 3 arguments: b, s, n. With rules:
+- banana b s plum → b (zero case, like foldr on nil)
+- banana b s (grape n) → pear s (banana b s n) (cons case, like foldr on cons)
+
+This is like a fold over lists! plum is nil, grape n is cons n. So banana b s is foldr s b.
+
+peach has rules:
+- peach plum t → t
+- peach t plum → t
+- peach t t → t
+
+This is like a "monus" or "anti-addition" operation? Or it's the operation x ⊖ y with 0 = plum. So peach t s = max(0, t - s)? Hmm but it's not the right structure. Actually with x and y, peach t s where t, s are lists (peach t t → t). This is like set minus or symmetric difference?
+
+Wait, let me think. If plum = empty list, grape n = [n], then peach t s with:
+- peach [] t → t (no wait, peach plum t → t)
+- peach t [] → t
+- peach t t → t
+
+This is symmetric difference! peach (xs) (ys) = (xs ∪ ys) \ (xs ∩ ys), or equivalently xs △ ys.
+
+Then banana b s (grape n) → pear s (banana b s n). Here pear is the operation used in the cons case. So pear s b' = s b', i.e., pear is function application! s is a function, b' is the result of folding the rest.
+
+Wait, but pear takes two Traces, not a function and an argument. Hmm. Let me reconsider.
+
+If banana is foldr, then:
+- banana b s [] = b
+- banana b s (n::rest) = s n (banana b s rest)
+
+So banana b s (grape n) = pear n (banana b s ...). And we get pear s (banana b s n). Hmm, so pear s (...) means apply s to n? But the order is pear s (banana b s n), which means s is the function and banana b s n is the argument? But banana b s n has 3 args and the first one (n) is just inside.
+
+Wait, let me re-read: R_apple_orange: Step (banana b s (grape n)) (pear s (banana b s n))
+
+So banana b s [n] → pear s (banana b s n). In foldr: fold b s [n] = s n (fold b s []). So pear should be function application where the function is the second arg? pear s x = s x. That makes sense.
+
+pear is application: pear s x applies s to x. The result type Trace.
+
+cherry: cherry a a → plum, and cherry a b → mango (peach a b) when a ≠ b. This is like a "not equal" operator. If a = b, return plum (which might mean false/empty). If a ≠ b, return mango (peach a b). The peach a b part: if a = b (we're not in this case), or not... hmm.
+
+Actually wait. Let's think: cherry a b returns something that we can keep reducing. If a = b, reduces to plum. If a ≠ b, becomes mango (peach a b), which has to be reduced. mango (peach a b) is a "mango of (peach a b)". For R_mango_grape to apply, we'd need peach a b = grape t. So we need peach a b →* grape t.
+
+But peach reduces: if a = plum, peach plum b → b. If b = plum, peach a plum → a. If a = b (already excluded), peach a a → a.
+
+In the case a ≠ b (and neither is plum, since if a = plum then b ≠ plum, and peach plum b → b which is a Trace).
+
+Let me try cherry (plum) (grape t). Here a = plum, b = grape t, a ≠ b. So → mango (peach plum (grape t)) → mango (grape t) → plum. Good, reduces to plum in 2 steps.
+
+cherry (grape t) (plum) → mango (peach (grape t) plum) → mango (grape t) → plum. Good.
+
+cherry (grape t1) (grape t2) where t1 ≠ t2: → mango (peach (grape t1) (grape t2)). peach (grape t1) (grape t2) - none of the rules apply (neither is plum, and they're not equal). So it's stuck. So this is a normal form? Or do we have other rules?
+
+Wait, we need to look at all Step rules again. The rules are:
+1. mango (grape t) → plum
+2. peach plum t → t
+3. peach t plum → t
+4. peach t t → t
+5. banana b s plum → b
+6. banana b s (grape n) → pear s (banana b s n)
+7. cherry a a → plum
+8. cherry a b → mango (peach a b) when a ≠ b
+
+So peach (grape t1) (grape t2) doesn't reduce. So mango (peach (grape t1) (grape t2)) doesn't reduce. Hmm.
+
+So the system has normal forms that aren't just plum. Is it strongly normalizing? Let me think about size.
+
+Each rewrite step: let's see the size of the resulting term compared to the original.
+1. |mango (grape t)| = 1 + 1 + |t| → |plum| = 1. So decreases if |t| > 0, but if t = plum, mango (grape plum) → plum: sizes are 3 vs 1. Decreases.
+2. |peach plum t| = 1 + 1 + |t| → |t|. Decreases.
+3. |peach t plum| = 1 + 1 + |t| → |t|. Decreases.
+4. |peach t t| = 1 + 2|t| → |t|. Decreases.
+5. |banana b s plum| = 1 + |b| + |s| + 1 → |b|. Decreases if s non-trivial.
+6. |banana b s (grape n)| = 1 + |b| + |s| + 1 + |n| → |pear s (banana b s n)| = 1 + |s| + 1 + |b| + |s| + |n| = 2 + |b| + 2|s| + |n|. 
+
+Comparing: LHS = 2 + |b| + |s| + |n|. RHS = 2 + |b| + 2|s| + |n|. RHS > LHS if |s| > 0!
+
+So the size can increase with rule 6! For example, if s = grape s', then banana b (grape s') (grape n) → pear (grape s') (banana b (grape s') n). Size of LHS = 2 + |b| + 1 + |s'| + 1 + |n| = 4 + |b| + |s'| + |n|. RHS = 1 + 1 + |s'| + 1 + |b| + 1 + |s'| + |n| = 4 + |b| + 2|s'| + |n|. So size increases by |s'|.
+
+So a simple size measure won't give strong normalization.
+
+Let me think of a more sophisticated measure. Maybe a lexicographic combination.
+
+Idea: define measure M: Trace → N. Try M(banana b s (grape n)) > M(pear s (banana b s n)). 
+
+If pear s x = "apply s to x", maybe pear s x = (1 + M(s)) * (1 + M(x)) or similar.
+
+Alternative interpretation: the system might represent a known calculus. Let me think...
+
+Actually, the term "R_apple_orange" and the term "cherry" make me think of Kiselyov's "Lambda calculus with let-ins" or a delimited continuation calculus. Or this might be a representation of the untyped lambda calculus via a known encoding.
+
+Wait! I think this is related to the encoding of untyped lambda calculus where peach is something like "α-equivalence", pear is application, banana is an iterator.
+
+Hmm, but with the type structure, this might be the 1st-order fragment of something.
+
+Actually, let me think. Is this system SN? Let me try a specific term.
+
+Consider b = plum, s = pear (mango grape_plum) grape_plum... hmm getting complicated.
+
+Let me think of banana b s (grape n) → pear s (banana b s n). If we look at what banana b s n "does": it's like foldr s b on the list where plum is nil and grape n is cons n. So banana b s [n1, n2, n3] → pear s (banana b s [n2, n3]) → pear s (pear s (banana b s [n3])) → pear s (pear s (pear s b)).
+
+So banana b s (grape (grape (grape n))) reduces to pear s (pear s (pear s b)) after 3 steps. Total size has grown, but the "spine" depth...
+
+For SN, we need a measure that decreases on each step.
+
+Let me try: measure M(t) = number of constructors + something.
+
+Alternative: try interpreting peach, pear as operations on numbers/lists/trees.
+
+Actually, let me think about whether this is supposed to be the simply-typed lambda calculus or similar. With:
+- banana = fold
+- pear = apply
+- plum = nil
+- grape = cons
+- peach = ? 
+- cherry = equality test
+- mango = ?
+
+Hmm.
+
+Let me consider a specific question: is the system SN?
+
+I think we need to determine this. Let me look at rule 6 more carefully.
+
+banana b s (grape n) → pear s (banana b s n)
+
+This unfolds the banana. Each unfold adds an extra "pear s" at the front. So if we have banana b s (grape (grape ... (grape n))), each unfold adds another pear s.
+
+Eventually, the grape n at the deepest level — once we reach banana b s n where n is not of the form grape _, this is in normal form? Wait, actually banana has 3 args: b, s, n. n is the last arg. banana b s n is a normal form unless n = plum or n = grape _.
+
+Wait, what if n itself is a more complex term? Then the rules don't apply, but maybe n can be reduced inside? But banana's rules only fire on specific n. And there's no "context rule" in the inductive definition, so... wait, the induction gives us Step only for these specific term patterns. There are no congruences.
+
+So actually, the only reductions are those listed. There is no reduction under banana, under pear, under mango, under grape. So the system is purely a "root-step" rewrite system, not a "term rewriting system" with congruence.
+
+So each term has only finitely many reductions, and we need to show that we can't have an infinite sequence.
+
+For SN, the question is: is the relation well-founded?
+
+Let me look at the structure. Each term is built from constructors. A reduction matches the term against one of the patterns and produces another term. Then we can keep reducing the result.
+
+Let me think about this. Each reduction strictly replaces one of the constructor patterns with a smaller term. But within the smaller term, we might have new redexes.
+
+Let me look at the result of each rule:
+1. mango (grape t) → plum. The plum has no redexes. So this is a "terminal" reduction.
+2-4. peach t t, peach plum t, peach t plum → t. Now t is the result, and we need to check if t has a redex. t is unchanged from before, so we just continue reducing t.
+5. banana b s plum → b. Reduces to b.
+6. banana b s (grape n) → pear s (banana b s n). Reduces to pear s (banana b s n). The new term is pear applied to s and (banana b s n). Now, pear s x — is there a redex? Looking at the rules, none of them match pear s x. So pear s x is in normal form unless x reduces.
+
+But x = banana b s n can reduce! And we need to know if it terminates.
+
+Hmm, this is getting tricky. Let me think about a potential counterexample.
+
+Consider: banana b s (grape n). If s = cherry a a, then pear s (banana b s n) = pear (cherry a a) (banana b s n). Does this reduce? Looking at rules, no rule applies to pear (cherry a a) _. So no reduction at the pear level.
+
+Then we reduce banana b s n. If n = grape m, we apply rule 6 again: → pear s (banana b s m). Each iteration peels off one grape. If n = grape^k (something) where something is not grape _ and not plum, we eventually get to banana b s (something) which is in normal form.
+
+Wait, but rule 6 only applies when n is grape _. So the banana stops when n is neither plum nor grape _.
+
+Hmm, so the system seems pretty constrained.
+
+Let me think about what could cause non-termination. The only rule that "loops back" is rule 8: cherry a b → mango (peach a b) when a ≠ b. The result is mango (peach a b). Then peach a b can reduce (rules 2-4), giving us some t. Then we have mango t. For mango t to reduce, t = grape u (rule 1).
+
+If a ≠ b, then peach a b → t. We need t = grape u for rule 1 to apply. When is peach a b = grape u? peach a b in normal form is a Trace. grape u is a Trace for any u.
+
+If a = plum, b ≠ plum: peach plum b → b. So t = b. For mango b to reduce via rule 1, we need b = grape u. So if b = grape u, then cherry plum (grape u) → mango (grape u) → plum.
+
+Similarly, if a ≠ plum, b = plum: cherry a plum → mango (peach a plum) → mango a. Reduces to plum iff a = grape u.
+
+If a ≠ plum, b ≠ plum, a ≠ b: cherry a b → mango (peach a b). peach a b can be reduced by rules 2, 3, 4 only if one of them is plum or both equal. We assumed neither is plum and a ≠ b. So peach a b is in normal form. So we get mango (peach a b), which is in normal form (peach a b is not grape _). So cherry a b with a, b ≠ plum and a ≠ b is in normal form.
+
+OK so the system has many normal forms (terms not matching any rule's left side).
+
+For SN, the question is whether we can have an infinite chain of reductions.
+
+Let me try to construct an infinite chain. Start with cherry t s. If t = s, then → plum. Done. If t ≠ s, → mango (peach t s), and then we have to reduce peach t s. peach t s reduces only if t = plum, s = plum, or t = s. We assumed t ≠ s, so we need t = plum or s = plum for further reduction.
+
+So cherry t s where neither is plum and t ≠ s: this reduces in 1 step to mango (peach t s), which is a normal form. Fine, terminates.
+
+cherry t (grape s) where t ≠ grape s: → mango (peach t (grape s)). For this to reduce further, we need peach t (grape s) to become grape _ via rule 1. peach t (grape s) can reduce via:
+- rule 3 if t = plum: → grape s. Then mango (grape s) → plum.
+- rule 2 if grape s = plum: impossible.
+- rule 4 if t = grape s: excluded.
+- otherwise no rule.
+
+So cherry plum (grape s) → mango (peach plum (grape s)) → mango (grape s) → plum. Terminating.
+
+cherry (peach t1 t2) (grape s) where peach t1 t2 ≠ grape s:
+→ mango (peach (peach t1 t2) (grape s)). 
+peach (peach t1 t2) (grape s): if peach t1 t2 = plum, → grape s. Then mango (grape s) → plum.
+Otherwise, no rule applies. Normal form.
+
+So no infinite chain from cherry.
+
+Let me look at banana. banana b s x can only be reduced if x = plum (→ b) or x = grape n (→ pear s (banana b s n)). Once we get to pear s (banana b s n), pear doesn't reduce. So we look at banana b s n.
+
+If n is a "spine" of grapes, we keep applying rule 6 until we hit something that's not grape _. At that point, banana b s n' is a normal form. So banana has finite chain.
+
+Now, the result of banana reduction is pear s (banana b s n), and we need to know if this is in normal form or can be reduced.
+
+Wait, the only rules are the 8 listed. None of them match pear s x. So pear s x is always in normal form.
+
+So if we ever get to pear s x, we're done.
+
+But wait, the chain in banana: banana b s (grape n) → pear s (banana b s n). Then we have to reduce banana b s n (if possible). If n = grape m, then → pear s (pear s (banana b s m)). If n = grape^k (z) where z is not grape and not plum, we get pear s (pear s (... (pear s (banana b s z))...)) and banana b s z is normal form. So chain terminates.
+
+If n = plum, then banana b s plum → b, and we replace the innermost banana with b, then continue unwinding.
+
+So the system seems to strongly normalize!
+
+Wait, but the question is whether this can be PROVED from the given calculus alone.
+
+Yes, I think so. We can use a well-founded measure on Traces. Let me think about a good measure.
+
+Let M(trace) be defined as follows:
+- M(plum) = 1
+- M(grape t) = 2 + M(t)
+- M(mango t) = M(t) + 1
+- Hmm, but we need to handle rule 6: banana b s (grape n) → pear s (banana b s n).
+
+Actually let me think. Let M(banana b s n) be a "size" measure. We have:
+- banana b s plum → b: M(b) < M(banana b s plum)?
+- banana b s (grape n) → pear s (banana b s n): M(pear s (banana b s n)) < M(banana b s (grape n))?
+
+If we set M(pear s x) = M(s) + M(x) + 1 and M(banana b s n) = M(b) + M(s) + M(n) + 3, then:
+- M(banana b s plum) = M(b) + M(s) + 1 + 3 = M(b) + M(s) + 4
+- M(b) < M(b) + M(s) + 4. ✓
+- M(banana b s (grape n)) = M(b) + M(s) + 2 + M(n) + 3 = M(b) + M(s) + M(n) + 5
+- M(pear s (banana b s n)) = M(s) + 1 + M(b) + M(s) + M(n) + 3 = M(b) + 2M(s) + M(n) + 4
+
+We need M(b) + 2M(s) + M(n) + 4 < M(b) + M(s) + M(n) + 5, i.e., M(s) < 1. False (M(s) ≥ 1).
+
+So simple addition doesn't work. We need a more sophisticated measure.
+
+Idea: think of banana as a foldr. Then banana b s (grape n) = pear s (banana b s n) means s is applied to n and the result of folding the rest. So semantically, the unfolding of banana b s [n1, ..., nk] is s n1 (s n2 (... (s nk b)...)). 
+
+If we think of pear as application, then the system is essentially the simply-typed lambda calculus with some specific structure. SN follows from SN of STLC.
+
+But we need to PROVE it from the rules, not by appeal to external systems.
+
+Approach: define a measure on Traces that strictly decreases with each step.
+
+Let's think of the size of the term after desugaring. Or, define an interpretation into a well-founded order.
+
+Actually, here's an idea: encode Traces as natural numbers and show the measure decreases. But the size can increase.
+
+Alternative: lexicographic measure. First component: structural measure (size or similar). Second component: some other measure.
+
+Or: well-founded induction on a carefully chosen measure.
+
+Let me try: define M(trace) as a natural number with the following:
+- M(plum) = 0
+- M(grape t) = 1 + M(t)
+- M(mango t) = M(t) (or 1 + M(t))
+- M(peach t s) = 1 + max(M(t), M(s))
+- M(pear s x) = M(s) + M(x) (no, increases)
+
+Hmm.
+
+Let me try a different approach. Let me think about it as a "size" with weights.
+
+Define a weight function w: Trace → N such that w decreases on each step. Let me try:
+- w(plum) = 0
+- w(grape t) = 1 + w(t)
+- w(mango t) = 1 + w(t)
+- w(peach t s) = 1 + w(t) + w(s)
+- w(pear t s) = 1 + w(t) + w(s)
+- w(banana b s n) = 1 + w(b) + w(s) + w(n)
+- w(cherry a b) = 1 + w(a) + w(b)
+
+Now check each rule:
+1. w(mango (grape t)) = 1 + 1 + w(t) = 2 + w(t). w(plum) = 0. Decreases. ✓
+2. w(peach plum t) = 1 + 0 + w(t) = 1 + w(t). w(t). Decreases. ✓
+3. w(peach t plum) = 1 + w(t) + 0 = 1 + w(t). w(t). Decreases. ✓
+4. w(peach t t) = 1 + 2w(t). w(t). Decreases (if w(t) ≥ 0). ✓
+5. w(banana b s plum) = 1 + w(b) + w(s) + 0 = 1 + w(b) + w(s). w(b). Decreases. ✓
+6. w(banana b s (grape n)) = 1 + w(b) + w(s) + 1 + w(n) = 2 + w(b) + w(s) + w(n).
+   w(pear s (banana b s n)) = 1 + w(s) + 1 + w(b) + w(s) + w(n) = 2 + w(b) + 2w(s) + w(n).
+   We need 2 + w(b) + 2w(s) + w(n) < 2 + w(b) + w(s) + w(n), i.e., w(s) < 0. ✗
+7. w(cherry a a) = 1 + 2w(a). w(plum) = 0. Decreases. ✓
+8. w(cherry a b) = 1 + w(a) + w(b). w(mango (peach a b)) = 1 + 1 + w(a) + w(b) = 2 + w(a) + w(b). Decreases. ✓
+
+So the issue is rule 6. We need a better measure.
+
+Idea: pear s x is "applying s to x". The structure of banana is "foldr s b on a list". The list structure: plum = [], grape x = x :: xs. So banana b s xs is a "fold".
+
+Alternative: think of the "spine" of banana, i.e., the chain of banana's. Each application of rule 6 removes one grape from the spine. So if we count the number of grapes in the spine, this decreases. But the result has a "pear s" added, and the recursion is in the second component of pear.
+
+Hmm. Let me think of the "interpretation" approach. 
+
+Define a measure M such that M(trace) measures the "complexity" of the trace. For rules 1-5, 7, 8, M decreases. For rule 6, we need M(pear s (banana b s n)) < M(banana b s (grape n)).
+
+Idea: M(pear s x) = ω · M(s) + M(x) (ordinal arithmetic, ω-natural numbers). Then M(pear s (banana b s n)) = ω · M(s) + M(banana b s n) < ω · M(s) + M(banana b s n) + 1 = ?
+
+But M(banana b s n) for the LHS: M(banana b s (grape n)) = M(banana b s) + 1 + M(n) or something.
+
+Let me try M(banana b s n) = ω · (M(b) + M(s)) + M(n). 
+
+Then M(banana b s (grape n)) = ω · (M(b) + M(s)) + 1 + M(n).
+M(banana b s n) = ω · (M(b) + M(s)) + M(n).
+M(pear s (banana b s n)) = ω · M(s) + ω · (M(b) + M(s)) + M(n) = ω · (M(b) + 2M(s)) + M(n).
+
+We need ω · (M(b) + 2M(s)) + M(n) < ω · (M(b) + M(s)) + 1 + M(n). 
+
+This requires M(b) + 2M(s) < M(b) + M(s), i.e., M(s) < 0. Doesn't work.
+
+Hmm. Let me think differently.
+
+The issue: rule 6 duplicates s. Each application of rule 6 "uses" s once more in the result.
+
+Insight: pear s x is essentially "s applied to x", but the result type is the same as x. So pear s x reduces to s(x). 
+
+If pear is application, then the system resembles an applied lambda calculus. SN would follow if we can show the system is well-typed and STLC is SN.
+
+Let me think of types. Let me try assigning types:
+- plum : A (some base type)
+- grape : A → A → A? Or A → A? banana b s (grape n) suggests grape n is a "list element" type, and banana returns A. Let me say:
+  - grape : L → L (L is list type, plum : L, grape : L → L)
+  - Wait, then grape t : L. banana b s x : B (some type). Hmm.
+  
+Actually, let me try: 
+- Let A be a type.
+- plum : A
+- grape : A → A (so we have a list-like structure: plum is empty, grape x is "cons" — but then we need grape to have type A → L or similar)
+
+Actually, let's say:
+- plum : L (L is "list")
+- grape : L → L (prepend)
+- Then banana b s : L → X for some X. banana b s plum = b : X, banana b s (grape n) = pear s (banana b s n) : X. So pear : (L → X) → X → X. And banana : X → (L → X) → L → X, like foldr.
+
+- peach : L → L → L. (Symmetric difference on lists?)
+- mango : L → L. (Some operation.)
+- pear : (L → X) → X → X. 
+- cherry : L → L → L.
+- banana : X → (L → X) → L → X.
+
+For SN, the type system might help. In particular, banana b s has the form ∀X, X → (L → X) → L → X, which is the Church encoding of foldr. The system is essentially foldr in a Church encoding.
+
+For strong normalization, we can use a "type-directed" measure: assign each Trace a "type" and a "weight" based on its type.
+
+Alternative simpler approach: use a measure that counts the "depth" of banana/cherry nesting and the "spine" of banana.
+
+Let me try: define M(trace) recursively as the sum of a "weight" for each constructor, with weights chosen so that rule 6 decreases.
+
+Define:
+- w(plum) = (0, 0)
+- w(grape t) = (1 + w(t).1, 0)
+- w(mango t) = (w(t).1 + 1, w(t).2)
+- w(peach t s) = (max(w(t).1, w(s).1) + 1, max(w(t).2, w(s).2) + 1)
+
+Hmm, getting complex. Let me think differently.
+
+Observation: the system is "essentially" the untyped lambda calculus via a particular encoding, or it has a finite reduction system. Let me think about whether the chain lengths are bounded.
+
+Actually, let me think about it as: each rule produces a "simpler" term in some well-founded sense.
+
+Key insight for rule 6: banana b s (grape n) → pear s (banana b s n). The number of "grape" applications in the spine of banana (i.e., the depth of nesting of grapes as the third argument) decreases. Specifically, if we define a "banana depth" measure, the outermost banana decreases in this depth. But the result has a pear, and the new banana might be reducible again.
+
+Let me think of it as a list operation. The "value" of banana b s (grape^k (z)) where z is not grape _ and not plum is:
+pear s (pear s (... (pear s (banana b s z))...))
+
+Now, banana b s z is in normal form (z not plum, not grape _). And the outer pear s _ is in normal form. So the chain terminates.
+
+If z = plum, then banana b s (grape^k (plum)) reduces to pear s (pear s (... (pear s b)...)) with k pears.
+
+If z = grape^k'(z') where z' is not plum and not grape, then the chain has a banana b s (grape^k' (z')) in the middle, but wait z' isn't grape _. Hmm wait, my notation is confusing. Let me re-define.
+
+Let me say the "spine" of a banana b s _ term is the number of grapes peeled off. If the input is grape^k (x) where x is not grape _ and not plum, then we apply rule 6 exactly k times until we get to banana b s x. Then we stop. So the chain is finite.
+
+What if the input is more complex, like banana (cherry t1 t2) s x? We can still apply rule 5 or 6 to banana. And the result of rule 5 is cherry t1 t2, which we can continue reducing (if applicable).
+
+Hmm OK so the question is: can we have cherry t1 t2 → mango (peach t1 t2) and then somehow the chain continues with peach?
+
+peach t1 t2 reduces to t1, t2, or t1 = t2. If peach t1 t2 → t1 (t1 = plum) or → t2 (t2 = plum), then we have mango t1 or mango t2, and then rule 1 applies if t1 = grape _. 
+
+So the system has these "convergence points" where things reduce to plum or normal form.
+
+Let me think about the structure. The system is a "tree" of reductions, and each leaf is a normal form. SN means the tree has no infinite paths. 
+
+Actually, the system is "orthogonal" — each term has at most one redex (left side matches at most one way), and the rules don't overlap. So no critical pairs, no need for joinability.
+
+Let me list the redex patterns and their results:
+1. mango (grape t) — redex → plum
+2. peach plum t — redex → t
+3. peach t plum — redex → t
+4. peach t t — redex → t
+5. banana b s plum — redex → b
+6. banana b s (grape n) — redex → pear s (banana b s n)
+7. cherry a a — redex → plum
+8. cherry a b — redex (when a ≠ b) → mango (peach a b)
+
+So each term has at most one redex. Good.
+
+Now, for SN: I claim each term has a finite chain of reductions. This follows if we can find a well-founded measure.
+
+Let me try the following measure: M(trace) ∈ N^ω (or just N) defined as follows.
+
+Let M(t) = pair (a, b) where a is the number of "active" redexes and b is the size. With lexicographic ordering, each step decreases a or decreases a and b.
+
+Hmm, let me think. For each step, what's the change?
+
+Let me define M(trace) as the number of "applicative" structures. Let me think of pear s (banana b s n) — the pear s _ and the banana b s n are nested. 
+
+Try: M(trace) = (number of constructor occurrences in the term).
+
+LHS of rule 6: banana b s (grape n). Size = 1 + |b| + |s| + 1 + |n| = 2 + |b| + |s| + |n|.
+RHS: pear s (banana b s n). Size = 1 + |s| + 1 + |b| + |s| + |n| = 2 + |b| + 2|s| + |n|.
+
+Size increases by |s|. So size doesn't decrease.
+
+Try: number of "non-grape" constructors or something.
+
+Alternative: M(t) = sum over each "banana b s _" of (1 + depth of grape nesting in _), maybe?
+
+Hmm, this is getting complex. Let me try another approach: define M(trace) to be a tuple (a, b, c, ...) with lexicographic order.
+
+Let me define:
+- f(t) = number of "non-pear" constructors (or some measure of structure)
+- g(t) = number of "pear s" applications in spine
+
+Idea: each rule decreases some measure. For rule 6, the new term has a "pear s" added at the front, and the inner banana has one fewer grape. So the structure changes, but if we think of the term as a "fold" representation, the "fold unfolds" but each unfold adds a pear.
+
+Actually, let me think of it as: banana b s xs is "saturated" with structure. The result of unfolding is a pear s chain with a banana inside.
+
+Let me try: define M(t) for each term as follows.
+- M(plum) = 0
+- M(grape t) = M(t)
+- M(mango t) = M(t)
+- M(peach t s) = max(M(t), M(s))
+- M(pear t s) = max(M(t), M(s)) + 1 — no, increases. 
+
+Hmm. Let me think.
+
+Wait, maybe I should think of pear as a "delayed" application. pear s (banana b s n) — we need to "evaluate" this. But we don't have a rule for pear. So pear s x is a normal form. So banana b s (grape n) → pear s (banana b s n), and then we have a normal form on the outside (pear) and a reducible inside (banana b s n).
+
+But we keep reducing the inside. After fully reducing the inside, we have pear s (final). The whole thing is in normal form (no rule matches pear s x).
+
+OK so the chain length is bounded by: the number of grapes in the spine of banana (times 1 step each) plus reductions inside the other terms.
+
+Let me try: define M(t) by induction, in such a way that each rule reduces M.
+
+M(plum) = 0
+M(grape t) = M(t)
+M(mango t) = M(t)
+M(peach t s) = max(M(t), M(s))
+M(pear t s) = M(t) + M(s) (or some other)
+M(banana b s n) = M(b) + M(s) + M(n) + 1
+M(cherry a b) = 1 + M(a) + M(b) (or use a max-like)
+
+Check rules:
+1. mango (grape t): M = M(grape t) = M(t). Result plum: M = 0. Decreases ✓
+2. peach plum t: M = max(0, M(t)) = M(t). Result t: M = M(t). Same! ✗
+
+Hmm, the peach rules don't strictly decrease if we use max. Need strict decrease.
+
+Let me use M(peach t s) = M(t) + M(s).
+1. M(mango (grape t)) = M(grape t) = M(t). M(plum) = 0. M(t) > 0. Decreases ✓ (if we ensure M(t) > 0)
+2. M(peach plum t) = 0 + M(t) = M(t). M(t). Same ✗
+
+Hmm. Let me add 1 to M(peach).
+
+M(peach t s) = 1 + M(t) + M(s).
+2. M(peach plum t) = 1 + 0 + M(t) = 1 + M(t). M(t) = M(t) - 1 < 1 + M(t). Decreases ✓
+3. Same.
+4. M(peach t t) = 1 + 2M(t). M(t). Decreases (since 1 + 2M(t) > M(t) for M(t) ≥ 0). ✓
+
+For rule 6: M(banana b s n) = 1 + M(b) + M(s) + M(n).
+M(banana b s (grape n)) = 1 + M(b) + M(s) + M(grape n) = 1 + M(b) + M(s) + M(n).
+M(pear s (banana b s n)) = M(s) + M(banana b s n) = M(s) + 1 + M(b) + M(s) + M(n) = 1 + M(b) + 2M(s) + M(n).
+
+Need 1 + M(b) + 2M(s) + M(n) < 1 + M(b) + M(s) + M(n), i.e., M(s) < 0. ✗
+
+Same issue.
+
+Alternative: M(pear t s) = max(M(t), M(s)) or similar.
+
+Let me try: M(pear t s) = M(s) (only the second arg).
+M(banana b s n) = 1 + M(b) + M(s) + M(n).
+M(banana b s (grape n)) = 1 + M(b) + M(s) + M(n).
+M(pear s (banana b s n)) = M(banana b s n) = 1 + M(b) + M(s) + M(n). Same. ✗
+
+Need a different measure. The problem is that the size of the LHS and RHS of rule 6 are essentially the same (in terms of b, s, n), but the structure is different (pear s _ vs _ in a different position).
+
+Key insight: the only way the new banana b s n in the RHS can be reduced is if n is plum or grape. So if n is in normal form (as a "list spine"), the new banana is a normal form. So the chain length is finite.
+
+Inductive argument: every term has a finite reduction chain. Proof by strong induction on some measure.
+
+Let me try this. Define a function F: Trace → N such that F decreases with each step.
+
+F(banana b s n) = F(n) + 1 + (F(b) + F(s)) * 2 or something.
+
+Hmm, let me think.
+
+Approach: ordinal interpretation. Map each term to an ordinal, and show the ordinal decreases.
+
+Let me try: 
+- F(plum) = 0
+- F(grape t) = F(t) + 1
+- F(mango t) = F(t) + 1
+- F(peach t s) = max(F(t), F(s)) + 1
+- F(pear t s) = F(s) + ω^{F(t)}  (or similar)
+- F(banana b s n) = ω · (F(b) + F(s)) + F(n) + 1
+- F(cherry a b) = F(a) + F(b) + 1
+
+Hmm let me check rule 6 again.
+
+F(banana b s n) = ω · (F(b) + F(s)) + F(n) + 1.
+F(banana b s (grape n)) = ω · (F(b) + F(s)) + F(n) + 1 + 1 = ω · (F(b) + F(s)) + F(n) + 2.
+F(pear s (banana b s n)) = F(banana b s n) + ω^{F(s)} = ω · (F(b) + F(s)) + F(n) + 1 + ω^{F(s)}.
+
+Wait, F(pear t s) = F(s) + ω^{F(t)} — but this could be huge. We need F(pear t s) < F(pear t s) + F(t) for some setup. This is getting complex.
+
+Let me try yet another approach: directly prove by structural induction that every term has a finite chain.
+
+Claim: For every t : Trace, the relation { (t, t') | Step t t' } is well-founded (no infinite chain).
+
+Proof idea: induction on t. Each t has a unique redex (if any) at the "root". Apply the rule, get t'. Then t' is "simpler" in some sense, so by induction t' has a finite chain.
+
+For this, we need: t' (after one step) is "simpler" than t in the sense that we can apply induction.
+
+Rule 1: t = mango (grape t1), t' = plum. plum has no redex, so chain is just [t, t']. We need t' simpler than t. plum is a constant; mango (grape t1) is more complex. So yes.
+
+Rule 2: t = peach plum t1, t' = t1. We need t1 "simpler" than peach plum t1. By structural induction, t1 has a finite chain. So peach plum t1 has chain [peach plum t1, t1, ...] which is finite. ✓
+
+Rule 5: t = banana b s plum, t' = b. By ind. hyp., b has finite chain. ✓
+
+Rule 6: t = banana b s (grape n), t' = pear s (banana b s n). 
+
+Now, is pear s (banana b s n) "simpler" than banana b s (grape n)? In what sense?
+
+If pear s x is always a normal form (no rule applies to it), then the chain in t' is: [pear s (banana b s n), ...], and we need to reduce banana b s n. The chain of banana b s n by induction is finite (if banana is "simpler" in some sense), so the chain in pear s (banana b s n) is just [pear s (banana b s n), pear s (chain of banana)].
+
+Wait, but how do we know pear s _ doesn't reduce? We need to verify that no rule applies to pear s _. Looking at the 8 rules, none of them have pear on the LHS. So pear s _ is always a normal form. ✓
+
+So the chain in t' = pear s (banana b s n) is: [pear s (banana b s n), pear s x1, pear s x2, ...] where x0 = banana b s n and x_{i+1} is the next step of x_i.
+
+We need to know: chain of banana b s n is finite, so chain of pear s (banana b s n) is finite.
+
+But for induction, we need a measure on t = banana b s (grape n) such that t' is "smaller". 
+
+Approach: define a "rank" function R(trace) ∈ N (or ordinal) such that:
+- R(banana b s n) > R(pear s (banana b s n)) (in the case of rule 6)
+- R(banana b s (grape n)) > R(banana b s n) for the "spine depth"
+
+Actually, here's a clean approach: define R(t) as the "well-founded rank" that accounts for the fact that banana b s (grape n) reduces to a pear s _ that is in normal form modulo banana b s n.
+
+Let me try:
+- R(plum) = 0
+- R(grape t) = R(t) + 1
+- R(mango t) = R(t) + 1
+- R(peach t s) = R(t) + R(s) + 1
+- R(pear t s) = R(s) + 1 — but is R(pear t s) < R(some bigger term) useful? Hmm, we need this to be smaller than banana terms.
+- R(banana b s n) = R(b) + R(s) + R(n) + 3 (or some such)
+- R(cherry a b) = R(a) + R(b) + 1
+
+For rule 6: R(banana b s (grape n)) = R(b) + R(s) + R(n) + 1 + 3 = R(b) + R(s) + R(n) + 4.
+R(pear s (banana b s n)) = R(banana b s n) + 1 = R(b) + R(s) + R(n) + 3 + 1 = R(b) + R(s) + R(n) + 4.
+
+Same! Not strictly less. ✗
+
+Need a different M(pear t s).
+
+Let me try M(pear t s) = 0 (pear is "free" — well, not a redex).
+
+Then rule 6: M(pear s (banana b s n)) = 0 (no change, since pear doesn't count). Hmm but we still need a measure.
+
+Wait, let me think differently. The issue is that banana b s (grape n) → pear s (banana b s n), and we need to show the chain terminates. The chain looks like:
+- banana b s (grape n) → pear s (banana b s n) → pear s (pear s (banana b s n')) → ... (if banana b s n = grape n' or plum)
+
+So the chain is finite iff the chain in banana b s n is finite.
+
+By strong induction, assume every "simpler" term has a finite chain. The question is: is banana b s n simpler than banana b s (grape n)?
+
+The third argument: n vs grape n. n is "simpler" than grape n. So banana b s n is simpler than banana b s (grape n). ✓
+
+OK so here's the idea for SN proof by structural induction:
+
+Define a measure M: Trace → N such that for the structural order:
+- M(grape t) > M(t) (so grape wraps "deeper" stuff)
+- M(peach t s) > M(t), M(s)
+- etc.
+
+But we also need rule 6 to "decrease" the measure in some sense.
+
+Try: M(trace) = size of the term, i.e., number of constructors. But rule 6 increases size.
+
+Alternative: define M with weights. Let me try a "weight" assignment that makes the result of rule 6 smaller.
+
+Define ω : Trace → N by:
+- ω(plum) = 0
+- ω(grape t) = 1 + ω(t)
+- ω(mango t) = 1 + ω(t)
+- ω(peach t s) = 1 + ω(t) + ω(s)
+- ω(pear t s) = ω(t) + ω(s)  (no +1)
+- ω(banana b s n) = 1 + ω(b) + ω(s) + ω(n)
+- ω(cherry a b) = 1 + ω(a) + ω(b)
+
+Check rule 6: ω(banana b s (grape n)) = 1 + ω(b) + ω(s) + 1 + ω(n) = 2 + ω(b) + ω(s) + ω(n).
+ω(pear s (banana b s n)) = ω(s) + 1 + ω(b) + ω(s) + ω(n) = 1 + ω(b) + 2ω(s) + ω(n).
+
+Need 1 + ω(b) + 2ω(s) + ω(n) < 2 + ω(b) + ω(s) + ω(n), i.e., ω(s) < 1. ✗
+
+Hmm. Let me try a different weight.
+
+What if ω(pear t s) is very small, like 0? Then ω(pear s (banana b s n)) = 0 + ω(banana b s n) = 1 + ω(b) + ω(s) + ω(n). Compare to ω(banana b s (grape n)) = 2 + ω(b) + ω(s) + ω(n). 
+
+So 1 + ω(b) + ω(s) + ω(n) < 2 + ω(b) + ω(s) + ω(n). ✓ Strictly less by 1.
+
+But we need to check other rules involving pear. Pear doesn't appear on the LHS of any rule, so we just need ω(pear t s) to be a valid measure (≥ 0). Let's say ω(pear t s) = 0.
+
+Check all rules:
+1. ω(mango (grape t)) = 1 + 1 + ω(t) = 2 + ω(t). ω(plum) = 0. 0 < 2 + ω(t). ✓
+2. ω(peach plum t) = 1 + 0 + ω(t) = 1 + ω(t). ω(t) < 1 + ω(t). ✓
+3. Same. ✓
+4. ω(peach t t) = 1 + 2ω(t). ω(t) < 1 + 2ω(t). ✓
+5. ω(banana b s plum) = 1 + ω(b) + ω(s) + 0 = 1 + ω(b) + ω(s). ω(b) < 1 + ω(b) + ω(s). ✓
+6. As above, ✓
+7. ω(cherry a a) = 1 + 2ω(a). ω(plum) = 0. ✓
+8. ω(cherry a b) = 1 + ω(a) + ω(b). ω(mango (peach a b)) = 1 + 1 + ω(a) + ω(b) = 2 + ω(a) + ω(b). 2 + ω(a) + ω(b) < 1 + ω(a) + ω(b)? ✗ Need strict less.
+
+So we need ω(mango t) < ω(t) for rule 8. But we have ω(mango t) = 1 + ω(t) > ω(t).
+
+So setting ω(mango t) = 1 + ω(t) breaks rule 8. Let's try ω(mango t) = ω(t). Then rule 1: ω(mango (grape t)) = 1 + ω(t). ω(plum) = 0 < 1 + ω(t). ✓ Rule 8: ω(mango (peach a b)) = 1 + ω(a) + ω(b). Need this < 1 + ω(a) + ω(b) = ω(cherry a b). Same! ✗
+
+Hmm. Rule 8: cherry a b → mango (peach a b). ω(cherry a b) = 1 + ω(a) + ω(b). ω(mango (peach a b)) = 1 + ω(a) + ω(b) (with ω(mango t) = ω(t)) = same. Not strictly less.
+
+Set ω(mango t) = ω(t) - 1? But then we might have negative.
+
+What if ω(mango t) = max(0, ω(t) - 1)? Or use a different ordering.
+
+Alternative: make ω(cherry a b) > 1 + ω(a) + ω(b) somehow.
+
+ω(cherry a b) = ω(a) + ω(b) + 2 (add more). Then rule 7: ω(cherry a a) = 2ω(a) + 2. ω(plum) = 0. ✓. Rule 8: ω(cherry a b) = ω(a) + ω(b) + 2. ω(mango (peach a b)) = ω(peach a b) = 1 + ω(a) + ω(b). Is 1 + ω(a) + ω(b) < ω(a) + ω(b) + 2? Yes, by 1. ✓
+
+So set:
+- ω(plum) = 0
+- ω(grape t) = 1 + ω(t)
+- ω(mango t) = ω(t)  (not +1)
+- ω(peach t s) = 1 + ω(t) + ω(s)
+- ω(pear t s) = 0
+- ω(banana b s n) = 1 + ω(b) + ω(s) + ω(n)
+- ω(cherry a b) = ω(a) + ω(b) + 2
+
+Check all rules:
+1. ω(mango (grape t)) = ω(grape t) = 1 + ω(t). ω(plum) = 0. 0 < 1 + ω(t). ✓
+2. ω(peach plum t) = 1 + 0 + ω(t) = 1 + ω(t). ω(t). ✓
+3. Same. ✓
+4. ω(peach t t) = 1 + 2ω(t). ω(t). ✓
+5. ω(banana b s plum) = 1 + ω(b) + ω(s) + 0 = 1 + ω(b) + ω(s). ω(b). ✓
+6. ω(banana b s (grape n)) = 1 + ω(b) + ω(s) + 1 + ω(n) = 2 + ω(b) + ω(s) + ω(n). 
+   ω(pear s (banana b s n)) = 0 + (1 + ω(b) + ω(s) + ω(n)) = 1 + ω(b) + ω(s) + ω(n). 
+   1 + ω(b) + ω(s) + ω(n) < 2 + ω(b) + ω(s) + ω(n). ✓
+7. ω(cherry a a) = 2ω(a) + 2. ω(plum) = 0. ✓
+8. ω(cherry a b) = ω(a) + ω(b) + 2. ω(mango (peach a b)) = ω(peach a b) = 1 + ω(a) + ω(b). 
+   1 + ω(a) + ω(b) < ω(a) + ω(b) + 2. ✓
+
+So this measure works.
+
+Now I need to argue: for any t, if t → t', then ω(t') < ω(t). Since ω is a natural number and each step strictly decreases it, the chain is finite.
+
+But wait, we also need to check: is ω(t) ≥ 0 for all t? 
+- ω(plum) = 0 ✓
+- ω(grape t) = 1 + ω(t) ≥ 1 ✓
+- ω(mango t) = ω(t) ≥ 0 ✓
+- ω(peach t s) = 1 + ω(t) + ω(s) ≥ 1 ✓
+- ω(pear t s) = 0 ✓
+- ω(banana b s n) = 1 + ω(b) + ω(s) + ω(n) ≥ 1 ✓
+- ω(cherry a b) = ω(a) + ω(b) + 2 ≥ 2 ✓
+
+By induction, ω(t) ≥ 0 for all t.
+
+So the measure works! SN follows from the fact that ω is well-defined and strictly decreases with each step.
+
+Wait, but the rules have premises like "a ≠ b" in R_cherry_diff. Does this affect the argument? No, because we're showing that if t → t' (i.e., Step t t'), then ω(t') < ω(t). The premise is part of the definition of Step, but doesn't change the structure of t and t'.
+
+So the answer: YES, strong normalization can be established from the given calculus alone, using a simple well-founded measure.
+
+Let me double-check the weight function and the rules.
+
+ω : Trace → N
+- ω(plum) = 0
+- ω(grape t) = 1 + ω(t)
+- ω(mango t) = ω(t)
+- ω(peach t s) = 1 + ω(t) + ω(s)
+- ω(pear t s) = 0
+- ω(banana b s n) = 1 + ω(b) + ω(s) + ω(n)
+- ω(cherry a b) = ω(a) + ω(b) + 2
+
+Hmm wait, ω(mango t) = ω(t) means mango doesn't add to the weight. But then the inductive definition: ω(mango (peach a b)) = ω(peach a b) = 1 + ω(a) + ω(b). And we need this < ω(cherry a b) = ω(a) + ω(b) + 2. Yes, by 1. ✓
+
+Actually, I realize the measure needs to be a well-order. N with the standard order is well-ordered, so we're good.
+
+Also, I should check that the rules cover the case where the same term might have multiple redexes, but the rules are non-overlapping (each LHS has a unique constructor pattern), so no conflict.
+
+Wait, actually let me reconsider. The inductive type Step defines Step t t' for specific t patterns. There's no "context rule" — so Step is purely the 8 cases. Each t matches at most one case (since the patterns are: mango(grape _), peach(plum, _), peach(_, plum), peach(_, _), banana(_, _, plum), banana(_, _, grape _), cherry(_, _), cherry(_, _)).
+
+Wait, cherry a a and cherry a b (with a ≠ b) overlap in the sense that both apply to cherry a b. But for a = b, only rule 7 applies (since the premise of rule 8 fails). For a ≠ b, only rule 8 applies. So no actual conflict.
+
+What if a = b in R_cherry_diff? Then the premise a ≠ b is false, so the rule doesn't apply. ✓
+
+So the system is deterministic (each t has at most one redex).
+
+OK so my answer: Yes, SN can be established using the well-founded measure ω defined above.
+
+Actually, let me also think: is the question asking whether SN is provable? I think yes, and I should explain the reasoning.
+
+Let me also verify by considering some test cases.
+
+Test: cherry (grape plum) (grape plum). 
+Step 1: cherry a a → plum. ✓
+ω(cherry (grape plum) (grape plum)) = 2 + 2ω(grape plum) = 2 + 2(1 + 0) = 4. 
+ω(plum) = 0. 0 < 4. ✓
+
+Test: banana b s (grape n) → pear s (banana b s n) → ... 
+ω(banana b s (grape n)) = 2 + ω(b) + ω(s) + ω(n).
+ω(pear s (banana b s n)) = 0 + 1 + ω(b) + ω(s) + ω(n) = 1 + ω(b) + ω(s) + ω(n).
+Decreases by 1. ✓
+
+Test: cherry plum (grape plum) → mango (peach plum (grape plum)) → mango (grape plum) → plum.
+ω(cherry plum (grape plum)) = ω(plum) + ω(grape plum) + 2 = 0 + 1 + 2 = 3.
+ω(mango (peach plum (grape plum))) = ω(peach plum (grape plum)) = 1 + 0 + 1 = 2. ✓
+ω(mango (grape plum)) = ω(grape plum) = 1. ✓
+ω(plum) = 0. ✓
+
+So each step decreases. ✓
+
+Therefore, the system is strongly normalizing, and the proof uses a simple size-like measure that strictly decreases with each step.
+
+Now, one concern: in Lean, "a ≠ b" is a Prop. For R_cherry_diff, we have a premise that needs to be proved. This is fine for the application of the rule (we can decide a = b syntactically), but the structurality of the measure doesn't depend on this.
+
+The measure ω is defined structurally and is well-defined by recursion on the term.
+
+So my final answer: Yes, strong normalization can be established using a well-founded measure that strictly decreases with each step.
+
+Let me write up the answer.

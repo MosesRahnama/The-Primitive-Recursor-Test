@@ -1,0 +1,441 @@
+The user wants to know if the given rewrite calculus is strongly normalizing based solely on the presented rules.
+
+ Let me analyze the system:
+
+ 1. **Syntax**:
+    - `void`: A base constant
+    - `delta t`: Some constructor (looks like successor or increment)
+    - `integrate t`: Some operation
+    - `merge t1 t2`: Binary operation
+    - `app t1 t2`: Application/binary operation
+    - `recΔ b s n`: Recursion/eliminator for delta (similar to nat rec)
+    - `eqW t1 t2`: Equality witness
+
+ 2. **Rewrite Rules**:
+    - `R_int_delta`: `integrate (delta t) → void`
+    - `R_merge_void_left`: `merge void t → t`
+    - `R_merge_void_right`: `merge t void → t`
+    - `R_merge_cancel`: `merge t t → t`
+    - `R_rec_zero`: `recΔ b s void → b`
+    - `R_rec_succ`: `recΔ b s (delta n) → app s (recΔ b s n)`
+    - `R_eq_refl`: `eqW a a → void`
+    - `R_eq_diff`: `eqW a b → integrate (merge a b)`
+
+ 3. **Potential issues for strong normalization**:
+
+    The critical rule is `R_eq_diff`: `eqW a b → integrate (merge a b)`
+
+    If we have `eqW t t`, we can rewrite to `integrate (merge t t)`, which rewrites to `integrate t` (by `R_merge_cancel`), and then... wait, there's no rule for `integrate t` when `t` is not of the form `delta t'`.
+
+    Actually, looking at the rules:
+    - `integrate (delta t) → void`
+    - But what about `integrate void`? Or `integrate (merge a b)`? Or `integrate (app a b)`? Or `integrate (recΔ ...)`? Or `integrate (eqW ...)`? Or `integrate (integrate ...)`?
+
+    The rule `R_eq_diff` produces `integrate (merge a b)`. If `a = b`, this becomes `integrate (merge a a) → integrate a` (by merge_cancel). But then we're stuck with `integrate a` unless `a` is of the form `delta t`.
+
+    Wait, but strong normalization means every reduction sequence terminates. The problem is whether there are infinite reduction sequences.
+
+    Let me look for potential infinite loops:
+
+    **Candidate 1**: `eqW` rules
+    - `eqW a a → void`
+    - `eqW a b → integrate (merge a b)` when `a ≠ b`
+
+    If `a ≠ b`, we get `integrate (merge a b)`. 
+    - If `a = b` (syntactically), we use the first rule.
+    - If `a ≠ b`, we use the second.
+
+    But `merge a b` doesn't reduce further unless one of the merge rules applies.
+    - If `a = void`, then `merge void b → b`, so we get `integrate b`.
+    - If `b = void`, then `merge a void → a`, so we get `integrate a`.
+    - If `a = b` (and not void), then `merge a a → a`, so we get `integrate a`.
+    - Otherwise, stuck.
+
+    So `integrate` is only reducible when its argument is `delta t`.
+
+    **Candidate 2**: `recΔ`
+    - `recΔ b s void → b`
+    - `recΔ b s (delta n) → app s (recΔ b s n)`
+
+    This looks like primitive recursion on natural numbers (with `void` as 0 and `delta` as successor). This should terminate if `n` is finite (well-founded). But here `n` is just a trace, not necessarily a numeral.
+
+    Wait, `delta` is just a constructor. So `recΔ` reduces the "natural number" argument.
+
+    But what if `n` is something like `delta (delta (...))`? That terminates.
+    What if `n` is `merge a b`? Then no rule applies to `recΔ b s (merge a b)`.
+
+    **Candidate 3**: Interaction between rules
+
+    The dangerous one is `R_eq_diff`: `eqW a b → integrate (merge a b)`.
+
+    Suppose we have `eqW (delta t) (delta t)`.
+    - By `R_eq_refl`: `eqW (delta t) (delta t) → void`. Terminates.
+
+    Suppose we have `eqW (delta t) void`.
+    - By `R_eq_diff`: `→ integrate (merge (delta t) void)`.
+    - By `R_merge_void_right`: `→ integrate (delta t)`.
+    - By `R_int_delta`: `→ void`. Terminates.
+
+    Suppose we have `eqW void (delta t)`.
+    - By `R_eq_diff`: `→ integrate (merge void (delta t))`.
+    - By `R_merge_void_left`: `→ integrate (delta t)`.
+    - By `R_int_delta`: `→ void`. Terminates.
+
+    Suppose we have `eqW t t` where `t` is not of the form suitable for other rules...
+    Actually, if `a = b` syntactically, we use `R_eq_refl`.
+
+    But what if we have cycles?
+
+    Consider `eqW (integrate (merge a b)) void`. 
+    This reduces to `integrate (merge (integrate (merge a b)) void)` → `integrate (integrate (merge a b))`.
+    Now we have `integrate` of `integrate (merge a b)`. 
+    If `merge a b` is `delta t`, then this reduces to `integrate void`.
+    But there's no rule for `integrate void`!
+
+    Actually, looking carefully at the rules, `integrate` is only eliminated when its argument is `delta t`. In all other cases, it's a normal form (or stuck).
+
+    So `integrate (integrate x)` is a normal form (assuming `integrate x` is not `delta t`).
+
+    Wait, but `R_eq_diff` produces `integrate (merge a b)`. 
+    If `merge a b` reduces to something, say `c`, then we have `integrate c`.
+    If `c` is `delta t`, we can reduce further to `void`.
+    If `c` is not `delta t`, we're stuck.
+
+    So the only way to get an infinite reduction is if we can create a cycle.
+
+    Let me check if `app` has any rules. No! `app` is just a constructor with no rewrite rules. So `app s (recΔ b s n)` is a normal form if `recΔ b s n` is.
+
+    So `recΔ` reduces its third argument if it's `void` or `delta n`. If it's anything else (like `merge`, `app`, `eqW`, `integrate`, `recΔ`), it's stuck.
+
+    Now, the critical observation: **there is no rule that introduces `delta` or `void` in a way that could create a loop with `integrate`.**
+
+    Specifically:
+    - `integrate (delta t) → void` (removes `delta` and `integrate`)
+    - `eqW a b → integrate (merge a b)` (introduces `integrate`, but `merge` reduces)
+    - `merge` rules either eliminate `void` or collapse identical terms
+
+    But wait, what if we have `eqW (eqW a b) void`?
+    - First, reduce inner `eqW a b`:
+      - If `a = b`: becomes `eqW void void → void`
+      - If `a ≠ b`: becomes `eqW (integrate (merge a b)) void`
+    - Then `eqW (integrate (merge a b)) void`:
+      - If `integrate (merge a b) = void` (syntactically), use `R_eq_refl`
+      - Otherwise: `→ integrate (merge (integrate (merge a b)) void)` → `integrate (integrate (merge a b))`
+
+    Now we have `integrate (integrate (merge a b))`. This is a normal form unless `integrate (merge a b)` is `delta t`.
+    But `integrate (merge a b)` is never `delta t` because `integrate` is a constructor and `delta` is a different constructor.
+
+    So this seems to terminate.
+
+    However, there's a subtlety: **The system might not be strongly normalizing because `R_eq_diff` can increase the size of terms in a way that allows recursive re-introduction of `eqW` or other constructs.**
+
+    Actually, looking at `R_eq_diff`: `eqW a b → integrate (merge a b)`.
+    The `merge a b` is smaller in some sense? Not necessarily.
+
+    But `merge` rules reduce the size:
+    - `merge void t → t` (smaller)
+    - `merge t void → t` (smaller)
+    - `merge t t → t` (smaller)
+
+    So `merge` always reduces the term size (number of constructors).
+
+    Then `integrate` is applied to the result. If the result is `delta t`, it reduces to `void`. Otherwise, it's stuck.
+
+    So `eqW` either:
+    1. Disappears (becomes `void` via `R_eq_refl`), or
+    2. Becomes `integrate c` where `c` is the merge-normal form of `a` and `b`.
+
+    Since `merge` always terminates (it's just a terminating rewrite system), and then `integrate` either disappears (if argument is `delta t`) or stays, `eqW` reductions terminate.
+
+    Now, can we nest `eqW` in a way that creates infinite recursion?
+    `eqW` appears in the syntax, but no rule produces `eqW`. The only rules that have `eqW` on the left are `R_eq_refl` and `R_eq_diff`, which consume `eqW`.
+
+    So `eqW` is "eliminated" by reduction.
+
+    Similarly, `recΔ` is eliminated when its third argument is `void` or `delta n`. It produces `app`, which is inert.
+
+    `app` is never reduced.
+
+    `delta` is never reduced (except inside `integrate` or as argument to `recΔ`).
+
+    `integrate` is only reduced when applied to `delta`.
+
+    `merge` is always reduced.
+
+    So the only "active" constructors that participate in reduction are:
+    - `integrate` (when applied to `delta`)
+    - `merge` (always)
+    - `recΔ` (when applied to `void` or `delta`)
+    - `eqW` (always)
+
+    The system looks like it should be strongly normalizing because:
+    1. `merge` is strongly normalizing (decreases size)
+    2. `integrate` either decreases size (when applied to `delta`) or is inert
+    3. `eqW` either disappears or becomes `integrate` of a merge-normal form
+    4. `recΔ` does primitive recursion on its third argument
+
+    But wait, `recΔ` can create larger terms via `app s (recΔ b s n)`. This is the usual primitive recursion step. As long as `n` is "smaller" than `delta n`, we're fine. But `n` is just a subterm of `delta n`, so structurally smaller.
+
+    So `recΔ` terminates by structural induction on the third argument.
+
+    However, there's a catch: **the third argument to `recΔ` could contain `eqW` or other reducible expressions.**
+
+    But reduction happens anywhere in the term (I assume standard rewriting). So we need to check if reducing a subterm can create a larger term that prevents termination.
+
+    Actually, strong normalization requires that there is no infinite sequence of reductions.
+
+    The critical question is: can `R_eq_diff` create a term that is "larger" and allows further `eqW` reductions that cycle?
+
+    Consider: `eqW (merge a b) c`.
+    This could reduce to `integrate (merge (merge a b) c)`.
+    Then `merge` reduces: `merge (merge a b) c`.
+    If `c = void`, this becomes `merge a b`.
+    If `c = merge a b`, this becomes `merge a b`.
+    Otherwise...
+
+    But `eqW` is eliminated. The new term doesn't contain `eqW` (unless `a`, `b`, or `c` do).
+
+    So `eqW` is strictly decreasing in the sense that it removes the `eqW` constructor at the top.
+
+    Similarly, `recΔ` removes the `recΔ` constructor at the top (replacing it with `b` or `app s (...)`).
+
+    `integrate` removes `integrate` and `delta` (when applicable).
+
+    `merge` removes `merge` (replacing with one argument or void).
+
+    So every reduction step reduces the number of "active" constructors (`eqW`, `recΔ`, `integrate`+`delta`, `merge`).
+
+    Wait, that's not quite right. `recΔ` produces `app` and a smaller `recΔ`. So the number of `recΔ` constructors might stay the same (one replaced by one), but the argument is smaller.
+
+    Actually, `recΔ b s (delta n) → app s (recΔ b s n)`. The new `recΔ` has argument `n`, which is structurally smaller than `delta n`.
+
+    So we can define a measure:
+    - Weight of `void`: 1
+    - Weight of `delta t`: weight(t) + 1
+    - Weight of `integrate t`: weight(t) + 1 (but if t is `delta t'`, it reduces)
+    - Weight of `merge t1 t2`: weight(t1) + weight(t2) + 1
+    - Weight of `app t1 t2`: weight(t1) + weight(t2) + 1
+    - Weight of `recΔ b s n`: omega * weight(n) + ... (transfinite)
+    - Weight of `eqW t1 t2`: weight(t1) + weight(t2) + 1
+
+    Actually, a simpler approach: show that the system is orthogonal (left-linear, no critical pairs) and terminating by a suitable measure.
+
+    But is it left-linear?
+    - `R_int_delta`: `integrate (delta t)` — linear in `t`
+    - `R_merge_void_left`: `merge void t` — linear in `t`
+    - `R_merge_void_right`: `merge t void` — linear in `t`
+    - `R_merge_cancel`: `merge t t` — **not left-linear!** It has two occurrences of `t`.
+
+    Non-left-linear rules can cause non-termination! For example, `f x x → f x x` is non-terminating (loop). Or more subtly, `f x x → g x x x` could cause issues.
+
+    But here `merge t t → t` is a simplification (decreasing). This should be fine.
+
+    However, non-left-linearity can prevent confluence, but for termination, it's usually okay if the rule is "simplifying" (decreasing).
+
+    But there's a more subtle issue: **the interaction between `R_eq_diff` and `R_merge_cancel` could potentially create a loop if we're not careful.**
+
+    No, `eqW a b` becomes `integrate (merge a b)`. If `a = b`, then `merge a b → a`, so we get `integrate a`. 
+    But if `a = b`, we could have used `R_eq_refl` to get `void` immediately.
+    So there's a choice: `eqW t t` can either become `void` or `integrate t`.
+
+    This is a **critical pair**! The system is not confluent (unless `integrate t` and `void` are equal, which they're not).
+
+    But the question is about **strong normalization**, not confluence.
+
+    Does this non-determinism affect strong normalization? Not necessarily. We need to check if one of the choices leads to non-termination.
+
+    If we always choose `R_eq_refl` for `eqW t t`, we get `void` (terminates).
+    If we choose `R_eq_diff` for `eqW t t`, we get `integrate (merge t t) → integrate t`.
+
+    Now, if `t` contains `eqW`, we might continue.
+
+    But can we construct a term where we're forced to use `R_eq_diff` repeatedly?
+
+    No, because `R_eq_diff` consumes `eqW`. The result `integrate t` does not contain `eqW` at the top (unless `t` does).
+
+    So if we have `eqW (eqW a b) (eqW c d)`, we reduce inner first or outer first...
+
+    Actually, we need to check if there's any way to create an infinite chain.
+
+    Consider the term: `recΔ void (eqW (delta void) void) (delta void)`.
+
+    This is messy. Let's try to find a real counterexample.
+
+    The most suspicious rule is `R_eq_diff` because it introduces `integrate` and `merge`, and `merge` can duplicate terms (though here it collapses them).
+
+    Actually, `merge` never duplicates. It only eliminates `void` or collapses identical terms.
+
+    So `R_eq_diff` produces `integrate (merge a b)` which is "simpler" than `eqW a b` in some sense?
+
+    Size of `eqW a b`: 1 + size(a) + size(b)
+    Size of `integrate (merge a b)`: 1 + size(merge a b)
+    Size of `merge a b`: 1 + size(a) + size(b) initially, but then reduces.
+
+    If `merge a b` reduces to `c`, then size(c) <= size(merge a b) (actually strictly less for these rules).
+
+    So `integrate (merge a b)` reduces to `integrate c` where `c` is smaller than `merge a b`.
+
+    If `c` is `delta t`, then `integrate c → void`.
+    Otherwise, `integrate c` is stuck.
+
+    So `eqW a b` reduces to something smaller or equal, and eventually to a normal form.
+
+    But is there a way for `integrate` to re-introduce `eqW`? No.
+
+    Is there a way for `recΔ` to re-introduce `eqW`? Only if `s` or `b` contains it, but that's just propagation.
+
+    So it seems strongly normalizing.
+
+    However, I need to be careful. The rule `R_merge_cancel` is non-linear. While it looks like it decreases size (from `merge t t` to `t`), the fact that it requires equality checking could be problematic in some contexts, but here it's pattern matching on syntax.
+
+    Wait, is there any interaction that could cause infinite reduction?
+
+    What about: `eqW (merge a a) void`.
+    - Using `R_eq_diff`: `integrate (merge (merge a a) void)` → `integrate (merge a a)` → `integrate a`.
+    - Using `R_eq_refl` only if `merge a a = void` syntactically, which requires `a = void`... messy.
+
+    Actually, if `a` is arbitrary, `merge a a` is not `void` unless `a = void`.
+
+    So for `eqW (merge a a) void` with `a ≠ void`:
+    - `R_eq_diff`: `integrate (merge (merge a a) void)` → `integrate (merge a a)` → `integrate a`.
+
+    Now we have `integrate a`. If `a` is `delta t`, we get `void`. Done.
+    If `a` is something else, we're stuck.
+
+    So no loop.
+
+    **Conclusion**: The system appears to be strongly normalizing. Every rewrite rule strictly decreases some well-founded measure (like the sum of the sizes of the terms, with special weighting for `recΔ` arguments).
+
+    Specifically:
+    - `recΔ` decreases the size of the third argument (structural induction)
+    - `merge` decreases the total size
+    - `integrate` either disappears (when applied to `delta`) or is inert, but `R_int_delta` decreases size
+    - `eqW` either disappears or becomes `integrate` of a smaller term
+
+    There are no rules that increase the size of terms. All rules are "simplifying".
+
+    Therefore, strong normalization should hold.
+
+    Wait, I should double-check: does `recΔ` really decrease the size?
+    `recΔ b s (delta n)` has size roughly `1 + size(b) + size(s) + 1 + size(n)`.
+    `app s (recΔ b s n)` has size roughly `1 + size(s) + 1 + size(b) + size(s) + size(n)`.
+    This is larger! It duplicates `s`.
+
+    Oh! This is crucial. In the rule `R_rec_succ`:
+    `recΔ b s (delta n) → app s (recΔ b s n)`
+
+    The term `s` appears twice on the right if we count occurrences, but actually, it's the same `s` shared. But in terms of tree size, if we measure the size as the number of nodes:
+    - LHS: nodes for `recΔ`, `b`, `s`, `delta`, `n`
+    - RHS: nodes for `app`, `s`, `recΔ`, `b`, `s`, `n`
+
+    So `s` appears twice on the RHS, once on the LHS. So the size increases!
+
+    For example, if `s` is large, say `delta^k void`, then each recursive call doubles the size (roughly).
+
+    This is the standard primitive recursion on natural numbers. Even though the term size grows, the recursion terminates because the *depth* of recursion (the number) decreases.
+
+    In term rewriting, we handle this by using a measure like: the pair (size of third argument, total size) ordered lexicographically.
+
+    Specifically:
+    - For `recΔ`: the third argument decreases structurally (from `delta n` to `n`).
+    - Even though the total size might increase (because `s` is duplicated), the structural measure on the recursion argument ensures termination.
+
+    So we can define a weight function:
+    - `w(void) = 1`
+    - `w(delta t) = w(t) + 1`
+    - `w(integrate t) = w(t) + 1`
+    - `w(merge t1 t2) = w(t1) + w(t2) + 1`
+    - `w(app t1 t2) = w(t1) + w(t2) + 1`
+    - `w(recΔ b s n) = omega * w(n) + w(b) + w(s) + 1` (ordinal arithmetic)
+    - `w(eqW t1 t2) = w(t1) + w(t2) + 1`
+
+    Then check that each rule decreases this weight:
+    - `R_int_delta`: `integrate (delta t)` has weight `omega * (w(t)+1) + ...` no wait.
+
+    Actually, `integrate (delta t)` is not a `recΔ`, so its weight is just `w(delta t) + 1 = w(t) + 2`.
+    `void` has weight `1`. So `w(t) + 2 > 1`. This decreases.
+
+    - `R_merge_void_left`: `merge void t` has weight `1 + w(t) + 1 = w(t) + 2`. `t` has weight `w(t)`. Decreases.
+
+    - `R_merge_void_right`: similar.
+
+    - `R_merge_cancel`: `merge t t` has weight `2*w(t) + 1`. `t` has weight `w(t)`. Decreases since `w(t) >= 1`.
+
+    - `R_rec_zero`: `recΔ b s void` has weight `omega * 1 + w(b) + w(s) + 1 = omega + w(b) + w(s) + 1`.
+      `b` has weight `w(b)`. Since `omega > w(b)` (in ordinal arithmetic), this decreases.
+
+    - `R_rec_succ`: `recΔ b s (delta n)` has weight `omega * (w(n) + 1) + w(b) + w(s) + 1 = omega * w(n) + omega + w(b) + w(s) + 1`.
+      `app s (recΔ b s n)` has weight `w(s) + (omega * w(n) + w(b) + w(s) + 1) + 1 = omega * w(n) + w(b) + 2*w(s) + 2`.
+      Since `omega > 2*w(s) + 2` for any finite `w(s)`, this decreases.
+
+    - `R_eq_refl`: `eqW a a` has weight `2*w(a) + 1`. `void` has weight `1`. Decreases.
+
+    - `R_eq_diff`: `eqW a b` has weight `w(a) + w(b) + 1`.
+      `integrate (merge a b)` has weight `w(merge a b) + 1 = w(a) + w(b) + 2`.
+      Wait, this is larger! `w(a) + w(b) + 1` vs `w(a) + w(b) + 2`.
+
+    Oh no! `R_eq_diff` increases the weight by 1 (from `eqW a b` to `integrate (merge a b)`).
+
+    But then `merge` reduces:
+    - If `a = void`: `merge void b → b`, so we get `integrate b` with weight `w(b) + 1`.
+      Original: `1 + w(b) + 1 = w(b) + 2`.
+      New: `w(b) + 1`. Decreases!
+    - If `b = void`: similar, `w(a) + 1` vs `w(a) + 2`. Decreases.
+    - If `a = b`: `merge a a → a`, so we get `integrate a` with weight `w(a) + 1`.
+      Original: `2*w(a) + 1`.
+      New: `w(a) + 1`. Decreases since `w(a) >= 1`.
+    - Otherwise: `merge a b` is stuck (normal form), so we have `integrate (merge a b)` with weight `w(a) + w(b) + 2`.
+      Original was `w(a) + w(b) + 1`. This is an increase!
+
+    So if `merge a b` is already in normal form and not reducible by `merge` rules, then `R_eq_diff` increases the weight from `w(a)+w(b)+1` to `w(a)+w(b)+2`.
+
+    This is a problem for the simple weight argument.
+
+    However, we can refine the measure. Note that after applying `R_eq_diff`, the resulting term has `integrate` at the top, which is "inert" (doesn't reduce further unless its argument is `delta`). And `merge` is eliminated (reduced).
+
+    So we can assign a weight where `eqW` has a heavy penalty, or use a multiset ordering.
+
+    Better: use the pair (number of `eqW` nodes, total size).
+    - `R_eq_diff` decreases the number of `eqW` nodes by 1 (from 1 to 0), even if it increases the size.
+    - All other rules either:
+      - Decrease the number of `eqW` nodes (if they reduce inside `eqW` arguments), or
+      - Keep the number of `eqW` nodes the same but decrease the size (for `merge`, `integrate`, `recΔ` rules).
+
+    Actually, `recΔ` and `integrate` and `merge` rules don't contain `eqW` in their LHS, so they don't affect the count of `eqW` nodes (except by reducing subterms which might reduce `eqW` count).
+
+    So by lexicographic ordering: (number of `eqW` nodes, total size), all rules decrease this measure.
+
+    Let's verify:
+    - `R_eq_refl`: removes one `eqW`, decreases first component.
+    - `R_eq_diff`: removes one `eqW`, decreases first component (even though size increases).
+    - `R_int_delta`: no `eqW`, decreases size (from `integrate (delta t)` to `void`).
+    - `R_merge_*`: no `eqW`, decreases size.
+    - `R_rec_zero`: no `eqW`, decreases size (from `recΔ b s void` to `b`).
+    - `R_rec_succ`: no `eqW`, decreases the "recursion measure" (the third argument of `recΔ`).
+
+    Wait, `R_rec_succ` might increase the total size, but it doesn't change the number of `eqW` nodes. So we need to ensure it decreases the second component or use a more refined measure for `recΔ`.
+
+    For `recΔ`, we can use the ordinal measure mentioned earlier, which is independent of the `eqW` count.
+
+    So the combined measure: (number of `eqW`, ordinal measure for `recΔ` depth, total size) ordered lexicographically.
+
+    Or simply: map each term to a pair (n, m) where n is the number of `eqW` constructors, and m is the sum of ordinals for `recΔ` and sizes for others. Since all rules either decrease n, or keep n the same and decrease m, the system terminates.
+
+    Therefore, yes, strong normalization can be established.
+
+    One final check: are there any hidden interactions where `R_eq_diff` produces a term that can be reduced to something with more `eqW` nodes?
+
+    `R_eq_diff`: `eqW a b → integrate (merge a b)`.
+
+    Can `integrate (merge a b)` reduce to something containing `eqW`?
+    - `integrate` doesn't reduce to `eqW`.
+    - `merge` doesn't reduce to `eqW`.
+    - So no.
+
+    Can `integrate (merge a b)` reduce to something that later grows `eqW`? Only if `a` or `b` contain `eqW`, but those are preserved (just wrapped in `integrate` or processed by `merge`).
+
+    So the number of `eqW` nodes strictly decreases with `R_eq_diff` and `R_eq_refl`.
+
+    Thus, the system is strongly normalizing.
+
+    **Final Answer**: Yes, strong normalization can be established. The system is terminating because the rewrite rules are simplifying with respect to a suitable well-founded measure (e.g., lexicographic combination of the number of equality witnesses, the structural depth of recursion arguments, and the term size).

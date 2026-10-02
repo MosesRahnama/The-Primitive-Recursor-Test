@@ -1,0 +1,153 @@
+Below are the measure computations, the lex strategy, and a Lean code skeleton for each of the five remaining cases. The key facts are the fully-reduced values of `kappa` and `mu` on LHS/RHS (all definitional, so `rfl` / `simp [mu]` close them), plus a few routine `Nat.max` inequalities that use `le_max_left`, `le_max_right`, `le_trans`, and `max_eq_right`.
+
+### Quick reference: strategies
+
+| rule | `kappa` behaviour | `mu` behaviour | helper |
+|---|---|---|---|
+| `R_int_delta` | drops or ties at 0 | drops by `1 + mu t` | case-split on `kappa t = 0` |
+| `R_rec_zero` | `kappa b` ≤ LHS-`kappa` | drops by `3 + mu s` | `Nat.lt_or_eq_of_le` |
+| `R_rec_succ` | always drops by 1 (RHS = inner max) | (not needed) | `drop_left` |
+| `R_eq_refl`   | drops or ties at 0 | drops by `4 + 2·mu a` | case-split on `kappa a = 0` |
+| `R_eq_diff`   | ties exactly | drops by 1 | `drop_right` |
+
+Note: `kappa` for `recDelta` is *not* uniform — the `delta n` arm adds `+1`, and there is no `@[simp]` lemma for the non-delta arm. So for the `recDelta` cases I assert the fully-reduced form with `rfl` (definitional) rather than `simp`. For `mu`, `mu_recDelta` is `@[simp]` and covers both arms uniformly, so `simp [mu]` works.
+
+---
+
+### `R_int_delta : integrate (delta t) → void`
+
+Measure facts (all definitional):
+- `kappa (integrate (delta t)) = kappa t`, `mu (integrate (delta t)) = 1 + mu t`.
+- `kappa void = 0`, `mu void = 0`.
+
+If `kappa t = 0`, both kappas are `0` and `mu` strictly drops, so `drop_right`. Otherwise `0 < kappa t` gives `drop_left`.
+
+```lean
+| _, _, Step.R_int_delta t => by
+    have hkL : kappa (integrate (delta t)) = kappa t := rfl
+    have hmL : mu      (integrate (delta t)) = 1 + mu t   := rfl
+    by_cases hk0 : kappa t = 0
+    · -- tie on kappa (both 0); mu drops
+      have hk : kappa void = kappa (integrate (delta t)) := by
+        rw [hkL]; exact hk0
+      have hm : mu void < mu (integrate (delta t)) := by
+        rw [hmL]; omega
+      exact drop_right hm hk
+    · -- kappa strictly drops
+      have hk : kappa void < kappa (integrate (delta t)) := by
+        rw [hkL]; exact Nat.pos_of_ne_zero hk0
+      exact drop_left hk
+```
+
+---
+
+### `R_rec_zero : recDelta b s void → b`
+
+Measure facts:
+- `kappa (recDelta b s void) = max (max (kappa b) (kappa s)) 0` (non-delta arm, `rfl`).
+- `mu      (recDelta b s void) = 3 + mu b + mu s` (by `simp [mu]`).
+- `kappa b`, `mu b` on the RHS.
+
+Key inequality: `kappa b ≤ max (max (kappa b) (kappa s)) 0` (compose two `le_max_left`s). Use `Nat.lt_or_eq_of_le` to split into the strict case (`drop_left`) and the tie case (`drop_right`, with `mu b < 3 + mu b + mu s`).
+
+```lean
+| _, _, Step.R_rec_zero b s => by
+    have hkL : kappa (recDelta b s void) = max (max (kappa b) (kappa s)) 0 := rfl
+    have hmL : mu      (recDelta b s void) = 3 + mu b + mu s            := by simp [mu]
+    -- kappa b ≤ LHS kappa
+    have hle : kappa b ≤ kappa (recDelta b s void) := by
+      rw [hkL]
+      exact le_trans (le_max_left (kappa b) (kappa s))
+                     (le_max_left (max (kappa b) (kappa s)) 0)
+    rcases Nat.lt_or_eq_of_le hle with hklt | hkeq
+    · exact drop_left  hklt
+    · have hm : mu b < mu (recDelta b s void) := by rw [hmL]; omega
+      exact drop_right hm hkeq
+```
+
+---
+
+### `R_rec_succ : recDelta b s (delta n) → app s (recDelta b s n)`
+
+Measure facts:
+- LHS: `kappa (recDelta b s (delta n)) = max (max (kappa b) (kappa s)) (kappa n) + 1` (delta arm, `rfl`).
+- RHS: `kappa (app s (recDelta b s n)) = max (kappa s) (max (max (kappa b) (kappa s)) (kappa n))` (rfl, full unfolding of `app` then non-delta `recDelta`).
+
+Let `M = max (max (kappa b) (kappa s)) (kappa n)`. Then LHS-`kappa` = `M + 1` and RHS-`kappa` = `max (kappa s) M`. Since `kappa s ≤ M` (from `le_max_right` ∘ `le_max_left`), `max (kappa s) M = M` by `max_eq_right`. Hence `kappa` drops by exactly 1 — `drop_left`.
+
+```lean
+| _, _, Step.R_rec_succ b s n => by
+    have hkL : kappa (recDelta b s (delta n)) =
+        max (max (kappa b) (kappa s)) (kappa n) + 1 := rfl
+    have hkR : kappa (app s (recDelta b s n)) =
+        max (kappa s) (max (max (kappa b) (kappa s)) (kappa n)) := rfl
+    -- collapse RHS-`max` to the inner max, using kappa s ≤ M
+    have hkR' : kappa (app s (recDelta b s n)) =
+        max (max (kappa b) (kappa s)) (kappa n) := by
+      rw [hkR]
+      exact max_eq_right
+        (le_trans (le_max_right (kappa b) (kappa s))
+                  (le_max_left  (max (kappa b) (kappa s)) (kappa n)))
+    have hk : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+      rw [hkL, hkR']; omega
+    exact drop_left hk
+```
+
+---
+
+### `R_eq_refl : eqW a a → void`
+
+Identical shape to `R_int_delta`.
+
+Measure facts:
+- `kappa (eqW a a) = max (kappa a) (kappa a) = kappa a` (use `kappa_eqW` then `max_self`).
+- `mu (eqW a a) = 4 + 2 * mu a`.
+- RHS: `0`, `0`.
+
+```lean
+| _, _, Step.R_eq_refl a => by
+    have hkL : kappa (eqW a a) = kappa a := by
+      show kappa (eqW a a) = max (kappa a) (kappa a)
+      simp [kappa]; exact max_self _
+    have hmL : mu (eqW a a) = 4 + 2 * mu a := by simp [mu]
+    by_cases hk0 : kappa a = 0
+    · -- tie
+      have hk : kappa void = kappa (eqW a a) := by rw [hkL]; exact hk0
+      have hm : mu void < mu (eqW a a) := by rw [hmL]; omega
+      exact drop_right hm hk
+    · -- kappa drops
+      have hk : kappa void < kappa (eqW a a) := by
+        rw [hkL]; exact Nat.pos_of_ne_zero hk0
+      exact drop_left hk
+```
+
+---
+
+### `R_eq_diff : eqW a b → integrate (merge a b)`
+
+Measure facts:
+- `kappa (eqW a b) = max (kappa a) (kappa b)` (`kappa_eqW`).
+- `kappa (integrate (merge a b)) = max (kappa a) (kappa b)` (integrate-transparent, then `kappa_merge`).
+- `mu (eqW a b) = 4 + mu a + mu b`.
+- `mu (integrate (merge a b)) = 1 + mu (merge a b) = 1 + (2 + mu a + mu b) = 3 + mu a + mu b`.
+
+Kappas tie, `mu` drops by 1 → `drop_right`.
+
+```lean
+| _, _, Step.R_eq_diff a b => by
+    have hk : kappa (integrate (merge a b)) = kappa (eqW a b) := by
+      simp [kappa]
+    have hm : mu (integrate (merge a b)) < mu (eqW a b) := by
+      simp [mu]; omega
+    exact drop_right hm hk
+```
+
+---
+
+### Summary of the two small supporting facts the skeletons lean on
+
+1. `Nat.pos_of_ne_zero : n ≠ 0 → 0 < n` — to turn the "else" branch of a `kappa _ = 0` case-split into a strict `0 < kappa _`.
+2. `Nat.lt_or_eq_of_le : n ≤ m → n < m ∨ n = m` — to split `kappa b ≤ LHS-kappa` into strict / equal.
+3. `le_trans`, `le_max_left`, `le_max_right`, `max_eq_right`, `max_self` — all of which are in `Mathlib.Order.Max` / basic `Init`.
+
+With the three proven cases and these five skeletons, the `measure_decreases` theorem is complete and `strong_normalization` follows by the existing `InvImage.wf` argument.

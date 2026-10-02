@@ -1,0 +1,177 @@
+**Short answer:**  
+The two “helper” lemmas are **not** sound as they stand.  The first equation `kappa_rec_delta_step` is false in general, and the second one `kappa_rec_succ_drop` cannot be derived from it (it also fails for the same counter‑example).  Consequently the termination argument that uses these lemmas is unsound.
+
+Below is a detailed justification, together with the necessary calculations.
+
+---
+
+## 1.  What the definitions say
+
+The measure `kappa` is defined by pattern‑matching on the last argument of `recDelta`:
+
+```
+recDelta b s (delta n)  =>  Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1
+recDelta b s n          =>  Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)
+```
+
+All other constructors leave the measure unchanged (`delta` and `integrate`) or take a `Nat.max` of the two sub‑terms (`merge`, `app`, `eqW`).
+
+Because `delta` does **not** increase the measure (`kappa (delta t) = kappa t`), the only place where a “+1’’ appears is the **outermost** delta that surrounds the third argument of `recDelta`.  Inner deltas are invisible to `kappa`.
+
+---
+
+## 2.  The first lemma – `kappa_rec_delta_step`
+
+> **Lemma (as stated).**  
+> `kappa (recDelta b s (delta n)) = kappa (recDelta b s n) + 1`.
+
+### 2.1  Compute both sides
+
+*Left‑hand side* – the term `recDelta b s (delta n)` always matches the first equation, because the third argument is a delta.  Hence  
+
+```
+kappa (recDelta b s (delta n)) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1
+```
+
+*Right‑hand side* – we have to evaluate `kappa (recDelta b s n)`.  This depends on whether `n` itself is a delta term:
+
+* If **n is not a delta** (e.g. `void`, `merge …`, `app …` …) then the second (catch‑all) equation applies and  
+
+  ```
+  kappa (recDelta b s n) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)
+  ```
+
+  Adding the extra `+1` gives exactly the LHS, so the equality **holds** in this case.
+
+* If **n *is* a delta** (`n = delta m` for some `m`) then the first equation applies to `recDelta b s n` as well, giving  
+
+  ```
+  kappa (recDelta b s n) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa m) + 1
+  ```
+
+  Adding the extra `+1` yields  
+
+  ```
+  kappa (recDelta b s n) + 1 = Nat.max (Nat.max (kappa b) (kappa s)) (kappa m) + 2
+  ```
+
+  whereas the LHS is  
+
+  ```
+  kappa (recDelta b s (delta n)) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa m) + 1
+  ```
+
+  The two sides differ by **1** (the LHS is smaller).
+
+### 2.2  Concrete counter‑example
+
+Take the simplest non‑trivial traces, e.g.  
+
+```
+b := void
+s := void
+n := delta void            -- a single delta around void
+```
+
+Now compute:
+
+* `kappa (recDelta void void (delta (delta void)))`  
+  = `Nat.max (Nat.max (0,0)) (kappa (delta void)) + 1`  
+  = `Nat.max (0,0) + 1 = 1`.
+
+* `kappa (recDelta void void (delta void))`  
+  = `Nat.max (0,0) + 1 = 1`.
+
+Hence  
+
+```
+kappa (recDelta void void (delta (delta void))) = 1
+kappa (recDelta void void (delta void)) + 1    = 1 + 1 = 2
+```
+
+The equality claimed in `kappa_rec_delta_step` is violated.  Therefore the lemma is **not** valid for all `b, s, n`.
+
+---
+
+## 3.  The second lemma – `kappa_rec_succ_drop`
+
+> **Lemma (as stated).**  
+> `kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n))`.
+
+If we accept the (incorrect) first lemma we would rewrite the RHS to `kappa (recDelta b s n) + 1` and try to prove  
+
+```
+kappa (app s (recDelta b s n)) ≤ kappa (recDelta b s n)
+```
+
+Since `kappa (app s t) = Nat.max (kappa s, kappa t)`, the left‑hand side is never larger than `kappa (recDelta b s n)`.  Thus the inequality would be true **if** the first lemma were correct.  However, because the first lemma is false, the second lemma also fails in general.
+
+### 3.1  Counter‑example using the same `n = delta void`
+
+Take `b = s = void` and `n = delta void` as above.
+
+* `kappa (app void (recDelta void void (delta void)))`  
+  = `Nat.max (kappa void, kappa (recDelta void void (delta void)))`  
+  = `Nat.max (0, 1) = 1`.
+
+* `kappa (recDelta void void (delta (delta void)))`  
+  = `1` (as computed in the counter‑example for the first lemma).
+
+Thus we obtain  
+
+```
+kappa (app void (recDelta void void (delta void))) = 1
+kappa (recDelta void void (delta (delta void)))   = 1
+```
+
+The required strict inequality `<` is **not** satisfied; the two sides are equal.
+
+Hence `kappa_rec_succ_drop` is also false for arbitrary `n`.
+
+---
+
+## 4.  Why the lemmas fail – the real problem with `kappa`
+
+The underlying issue is that `kappa` only adds **one** for the *outermost* delta around the third argument of `recDelta`.  It does **not** count how many delta‑constructors are nested inside that argument.  Consequently:
+
+* Removing the outermost delta (the rewrite `recDelta b s (delta n) → app s (recDelta b s n)`) reduces the measure by **exactly one** only when the inner `n` is **not** itself a delta.
+* If `n` already is a delta, the measure stays the same (or even increases by one after the erroneous `+1` is added), so the rewrite does **not** guarantee termination.
+
+To obtain a correct termination proof one must define a measure that truly counts the number of delta‑layers in the third argument, for example:
+
+```lean
+def depth : Trace → Nat
+  | void          => 0
+  | delta t       => depth t + 1
+  | _             => 0   -- all other constructors give 0
+
+def kappa (t : Trace) : Nat :=
+  match t with
+  | recDelta b s n => Nat.max (kappa b) (kappa s) + depth n
+  | …              => …   -- the other cases as before
+```
+
+With this definition the equation
+
+```
+kappa (recDelta b s (delta n)) = kappa (recDelta b s n) + 1
+```
+
+holds **for every** `n`, because `depth (delta n) = depth n + 1`.  The subsequent inequality
+
+```
+kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n))
+```
+
+then follows immediately.
+
+---
+
+## 5.  Verdict
+
+*The helper lemmas `kappa_rec_delta_step` and `kappa_rec_succ_drop` are **unsound** as written.*  
+
+* They are false in general; concrete counter‑examples (e.g. `b = s = void`, `n = delta void`) demonstrate the failure.
+* The root cause is the definition of `kappa`, which does not count nested deltas.  To make the termination argument work the measure must be changed so that each delta contributes `+1` to the measure, irrespective of whether it is the outermost one.
+
+Therefore the proposed “helper strategy’’ cannot be used as a sound termination argument for the given rewrite system.

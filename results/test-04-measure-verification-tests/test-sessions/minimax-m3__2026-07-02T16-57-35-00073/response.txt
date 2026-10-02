@@ -1,0 +1,72 @@
+## Assessment: The measure is **NOT sound**.
+
+### What a lexicographic measure requires
+
+For soundness we need every `Step a b` to satisfy either
+`phase b < phase a`, or `phase b = phase a ∧ cost b < cost a`.
+
+Recall how `phase` is defined:
+
+```lean
+def phase : Trace → Nat
+| .recDelta _ _ (.delta _) => 1
+| _ => 0
+```
+
+So `phase t = 1` **only** when `t` is of the form `recDelta _ _ (delta _)`; in particular, `recDelta _ _ void` has phase `0`. The intent appears to be "1 while a recursive delta spine is still being unwound, 0 once it terminates". This is the right idea for the *step case* `R_rec_succ` (which takes phase `1` to phase `0`), but it breaks for the *base case* `R_rec_zero`.
+
+### The counterexample: `R_rec_zero`
+
+The rule is
+
+```lean
+| R_rec_zero : ∀ b s, Step (recDelta b s void) b
+```
+
+Take
+
+```
+s := void
+b := recDelta void void (delta void)
+```
+
+Then the left-hand side is
+
+```
+a := recDelta (recDelta void void (delta void)) void void
+```
+
+- Outer constructor is `recDelta`, but its third argument is `void`, so
+  `phase a = 0`.
+- `cost a = 1 + cost b + cost s + cost void = 1 + 2 + 0 + 0 = 3`.
+
+The right-hand side is just `b`:
+
+```
+b := recDelta void void (delta void)
+```
+
+- This *is* `recDelta _ _ (delta _)`, so `phase b = 1`.
+- `cost b = 1 + 0 + 0 + (1 + 0) = 2`.
+
+Hence the measure goes
+
+```
+(phase a, cost a) = (0, 3)  →  (phase b, cost b) = (1, 2)
+```
+
+which is **strictly larger** in the lexicographic order, not smaller. This is a concrete step that increases the measure, so the measure cannot certify termination.
+
+### Why the other rules are fine (for completeness)
+
+- `R_int_delta`, `R_merge_void_left/right`, `R_merge_cancel`: the LHS is never a `recDelta _ _ (delta _)`, so `phase` stays at `0` and `cost` strictly decreases (by ≥ 1, since every constructor contributes at least `1` to cost).
+- `R_rec_succ : recDelta b s (delta n) → app s (recDelta b s n)`: LHS has `phase = 1`, RHS has top constructor `app`, so `phase` drops from `1` to `0`. ✓
+- `R_eq_refl` / `R_eq_diff`: same pattern as the merge/integrate cases, top is not `recDelta _ _ (delta _)`, cost drops. ✓
+
+Only `R_rec_zero` is the offender.
+
+### Root cause
+
+`phase` is computed syntactically and looks only at the *outermost* constructor. `R_rec_zero` exposes the spine element `b` as the result, and nothing in the rule prevents `b` itself from being a `recDelta _ _ (delta _)` — i.e. a "live" delta spine deeper in the term that will need further unwinding. The measure fails to account for the fact that such spines can be hidden inside `b`.
+
+A sound fix would need `phase` to count the number of `recDelta _ _ (delta _)` spines present anywhere in the term (or, more cleanly, to be defined so that *any* decrease in `cost` strictly dominates — but here the cost of the RHS can also be less than that of the LHS, which is why the original author tried the lexicographic trick in the first place). With the current definition, termination is not established.

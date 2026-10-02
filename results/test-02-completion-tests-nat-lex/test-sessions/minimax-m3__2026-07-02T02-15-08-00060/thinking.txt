@@ -1,0 +1,890 @@
+The user wants me to provide a proof skeleton for completing the remaining cases in the strong normalization proof. Let me analyze each of the 5 remaining cases and figure out the right approach.
+
+Let me work through each case:
+
+### 1. `R_int_delta : integrate (delta t) --> void`
+- `kappa (integrate (delta t)) = kappa (delta t) = kappa t` (delta and integrate are transparent)
+- `kappa void = 0`
+- For this to decrease, we need `kappa t` to be a Nat. But `kappa t` might be 0 if `t = void`. Hmm.
+
+Wait, `integrate (delta t) --> void` always reduces, regardless of `t`. So we need to show this decreases.
+
+If `kappa t > 0`, then kappa drops from `kappa t` to `0`. ✓
+If `kappa t = 0`, then kappa ties (both 0), and mu drops from `1 + mu t` to `0`. ✓
+
+So we need to do a case split or use a combined approach. Actually, the simplest way: just observe that `mu` drops (or kappa drops). Let's check:
+- `mu (integrate (delta t)) = 1 + mu t` (delta transparent, integrate adds 1)
+- `mu void = 0`
+- So `mu void < mu (integrate (delta t))` always (since `mu t >= 0`).
+- But kappa might not strictly decrease: `kappa (integrate (delta t)) = kappa t` and `kappa void = 0`. We don't know if `kappa t > 0`.
+
+So we need to use either `drop_left` or `drop_right`. If `kappa t > 0`, use `drop_left`. Otherwise, use `drop_right`.
+
+A clean approach: use `Nat.lt_or_lt_of_add_lt_add_right` or similar. Actually, the cleanest is to show that `Nat.max (kappa b, mu b) + mu b < Nat.max (kappa a, mu a) + mu a` is not quite what we need.
+
+Actually, let me think again. The cleanest approach in Lean for this kind of thing is to construct the LexOrder proof directly. We have two options:
+1. `Prod.Lex.left` if `kappa b < kappa a`
+2. `Prod.Lex.right` if `kappa b = kappa a` and `mu b < mu a`
+
+So we need a case split:
+- If `kappa t = 0`, then `kappa (integrate (delta t)) = 0 = kappa void`, so we use `drop_right` with `mu void < mu (integrate (delta t))` = `0 < 1 + mu t`.
+- If `kappa t > 0`, then `kappa (integrate (delta t)) = kappa t > 0 = kappa void`, so we use `drop_left`.
+
+In Lean:
+```lean
+| _, _, Step.R_int_delta t => by
+    by_cases hk : kappa t = 0
+    · have hmu : mu void < mu (integrate (delta t)) := by simp [mu]; omega
+      have hk' : kappa void = kappa (integrate (delta t)) := by simp [kappa]; rw [hk]
+      exact drop_right hmu hk'
+    · have hk' : kappa void < kappa (integrate (delta t)) := by simp [kappa]; omega
+      exact drop_left hk'
+```
+
+Hmm, but this is a bit ugly. Let me think if there's a simpler approach.
+
+Actually, a more elegant approach: show that `(Nat.max (kappa a + 1) (mu a + 1), mu a)` decreases, or use a different combination. But the current infrastructure only gives us `LexOrder` based on `(kappa, mu)`.
+
+Actually, another approach: change the kappa definition. But we can't modify the file.
+
+Let me think... The cleanest way in Lean would be to use `Or.elim` on `Nat.eq_zero_or_pos`:
+```lean
+| _, _, Step.R_int_delta t => by
+    rcases Nat.eq_zero_or_pos (kappa t) with hk | hk
+    · -- kappa t = 0
+      have hmu : mu void < mu (integrate (delta t)) := by simp [mu]; omega
+      have hk' : kappa void = kappa (integrate (delta t)) := by simp [kappa, hk]
+      exact drop_right hmu hk'
+    · -- kappa t > 0
+      have hk' : kappa void < kappa (integrate (delta t)) := by simp [kappa]; omega
+      exact drop_left hk'
+```
+
+This should work. Let me move on to the other cases.
+
+### 2. `R_rec_zero : recDelta b s void --> b`
+- `kappa (recDelta b s void)` (where `n = void`, not `delta n`): `Nat.max (Nat.max (kappa b) (kappa s)) (kappa void) = Nat.max (Nat.max (kappa b) (kappa s)) 0 = Nat.max (kappa b) (kappa s)`
+- `kappa b`
+- So `kappa (recDelta b s void) = Nat.max (kappa b) (kappa s) >= kappa b = kappa b`
+- If `kappa s > kappa b`, then kappa stays the same or increases... wait, we need strict decrease.
+
+Hmm. `kappa` does NOT strictly decrease here. It stays the same or increases. So we need to use `mu`.
+
+- `mu (recDelta b s void) = 3 + mu b + mu s + 0 = 3 + mu b + mu s`
+- `mu b`
+- We need `mu b < 3 + mu b + mu s` which is `0 < 3 + mu s`, which is true. ✓
+- For `drop_right`, we need `kappa b = kappa (recDelta b s void) = Nat.max (kappa b) (kappa s)`. This requires `kappa b >= kappa s`.
+
+So we need a case split again:
+- If `kappa b >= kappa s`, then `kappa b = Nat.max (kappa b) (kappa s) = kappa (recDelta b s void)`, so use `drop_right`.
+- If `kappa b < kappa s`, then we need another argument. 
+
+Wait, if `kappa b < kappa s`, then `kappa (recDelta b s void) = kappa s > kappa b`. So kappa does NOT decrease. And `mu (recDelta b s void) = 3 + mu b + mu s > mu b`. So `mu` decreases but kappa doesn't.
+
+So we can't use the simple `(kappa, mu)` lexicographic order for this case directly. We need a different measure combination or a different proof strategy.
+
+Hmm, this is a problem. Let me re-examine the measure.
+
+Looking at `kappa` definition for `recDelta`:
+```
+| .recDelta b s (.delta n)   => Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1
+| .recDelta b s n            => Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)
+```
+
+For `recDelta b s void` (where the third arg is `void`, not `delta n`), the second case applies: `Nat.max (Nat.max (kappa b) (kappa s)) (kappa void) = Nat.max (Nat.max (kappa b) (kappa s)) 0 = Nat.max (kappa b) (kappa s)`.
+
+For `R_rec_succ`: `recDelta b s (delta n) --> app s (recDelta b s n)`:
+- LHS: `kappa (recDelta b s (delta n)) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1`
+- RHS: `kappa (app s (recDelta b s n)) = Nat.max (kappa s) (kappa (recDelta b s n))`
+- `kappa (recDelta b s n)`: depends on whether `n` is `delta` or not.
+
+So the measures aren't quite right. The `kappa` measure is designed to track recursion depth, but it goes UP when we enter recursion (in `R_rec_succ`, the LHS has +1 but the RHS has the recDelta without the +1 wrap).
+
+Wait, let me reconsider. The kappa measure is supposed to decrease. Let me re-examine:
+
+For `R_rec_succ`: `recDelta b s (delta n) --> app s (recDelta b s n)`:
+- LHS kappa: `Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1`
+- RHS kappa: `Nat.max (kappa s) (kappa (recDelta b s n))`
+  - If `n` is `delta n'`, then `kappa (recDelta b s n) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1`
+  - Otherwise, `kappa (recDelta b s n) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)`
+
+Hmm, so for `R_rec_succ`, the kappa on the LHS is `+1` but the kappa on the RHS depends on the structure of `n`.
+
+Wait, I think the issue is that this measure definition might be wrong, or the proof needs a different decomposition. Let me re-read the task.
+
+The user says: "Three of eight rule cases are proved; the remaining five are marked sorry. Provide a proof skeleton for completing the remaining cases."
+
+So the user expects these cases to be provable. Let me think more carefully.
+
+Actually, looking again at the kappa definition - I think the measure is designed so that the measure STRICTLY decreases lexicographically. But for the rec cases, this might not work with the simple `(kappa, mu)` order.
+
+Wait, let me re-examine. Maybe I need to use a more sophisticated measure or a different decomposition.
+
+Actually, let me re-read the task more carefully. The user says "Do not modify the file". So I need to prove these cases using the existing infrastructure.
+
+Let me think about `R_rec_zero` more carefully. We have:
+- LHS = `recDelta b s void`, kappa = `Nat.max (kappa b) (kappa s)`, mu = `3 + mu b + mu s`
+- RHS = `b`, kappa = `kappa b`, mu = `mu b`
+
+For LexOrder to hold, we need either:
+- `kappa b < Nat.max (kappa b) (kappa s)`, which holds iff `kappa s > kappa b`, OR
+- `kappa b = Nat.max (kappa b) (kappa s)` AND `mu b < 3 + mu b + mu s`. The first condition holds iff `kappa s <= kappa b`, and the second always holds.
+
+So in both cases, LexOrder should hold! The issue is that the proof needs a case split.
+
+Similarly for `R_rec_succ`, the LHS has the `+1` because of the `delta` wrap, but the RHS is `app s (recDelta b s n)` which has kappa = `Nat.max (kappa s) (kappa (recDelta b s n))`. 
+
+Let me compute for `R_rec_succ`:
+- LHS = `recDelta b s (delta n)`, kappa = `Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1`, mu = `3 + mu b + mu s + mu (delta n) = 3 + mu b + mu s + mu n`
+- RHS = `app s (recDelta b s n)`, kappa = `Nat.max (kappa s) (kappa (recDelta b s n))`, mu = `1 + mu s + mu (recDelta b s n) = 1 + mu s + 3 + mu b + mu s + mu n = 4 + mu b + 2*mu s + mu n`
+
+For mu: `4 + mu b + 2*mu s + mu n` vs `3 + mu b + mu s + mu n`. The RHS mu is larger! So mu doesn't decrease.
+
+For kappa: LHS = `Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1`. RHS = `Nat.max (kappa s) (kappa (recDelta b s n))`.
+
+Case 1: `n = delta n'`. Then `kappa (recDelta b s n) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1`. So RHS kappa = `Nat.max (kappa s) (Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1` (since this is >= kappa s).
+
+So LHS kappa = `Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1 = Nat.max (Nat.max (kappa b) (kappa s)) (kappa (delta n')) + 1 = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1`.
+
+So LHS kappa = RHS kappa! They tie. And mu: LHS = `3 + mu b + mu s + mu n = 3 + mu b + mu s + mu (delta n') = 3 + mu b + mu s + mu n'`. RHS = `4 + mu b + 2*mu s + mu n = 4 + mu b + 2*mu s + mu (delta n') = 4 + mu b + 2*mu s + mu n'`.
+
+RHS mu - LHS mu = `1 + mu s > 0`. So mu INCREASES. That's a problem.
+
+Hmm, this is a real issue. The measure `(kappa, mu)` doesn't strictly decrease for `R_rec_succ`.
+
+Wait, but the user says 3 of 8 are proved and the rest are sorry. So maybe the measure is intentionally not always decreasing in `(kappa, mu)`, and the proof needs a different approach for the rec cases.
+
+Let me re-read the theorem statement: `theorem measure_decreases : forall {a b : Trace}, Step a b -> LexOrder (measure b) (measure a)`.
+
+The theorem claims that measure always decreases. But for `R_rec_succ`, the measure doesn't decrease. So either:
+1. The measure definition is different from what I computed.
+2. The proof uses a different decomposition.
+3. The theorem is false (but it's a sorry, so it's not yet proved).
+
+Let me re-read the kappa and mu definitions very carefully.
+
+```lean
+def kappa : Trace -> Nat
+| .void                      => 0
+| .delta t                   => kappa t
+| .integrate t               => kappa t
+| .merge a b                 => Nat.max (kappa a) (kappa b)
+| .app a b                   => Nat.max (kappa a) (kappa b)
+| .recDelta b s (.delta n)   => Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1
+| .recDelta b s n            => Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)
+| .eqW a b                   => Nat.max (kappa a) (kappa b)
+```
+
+```lean
+def mu : Trace -> Nat
+| .void           => 0
+| .delta t        => mu t
+| .integrate t    => 1 + mu t
+| .merge a b      => 2 + mu a + mu b
+| .app a b        => 1 + mu a + mu b
+| .recDelta b s n => 3 + mu b + mu s + mu n
+| .eqW a b        => 4 + mu a + mu b
+```
+
+Let me redo `R_rec_succ`:
+- LHS = `recDelta b s (delta n)`, kappa = `Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1`, mu = `3 + mu b + mu s + mu (delta n) = 3 + mu b + mu s + mu n`
+- RHS = `app s (recDelta b s n)`, kappa = `Nat.max (kappa s) (kappa (recDelta b s n))`, mu = `1 + mu s + mu (recDelta b s n) = 1 + mu s + 3 + mu b + mu s + mu n = 4 + mu b + 2*mu s + mu n`
+
+Hmm, so for the measure to decrease, we'd need `(kappa_LHS, mu_LHS) >_lex (kappa_RHS, mu_RHS)`. 
+- kappa_LHS = `max(max(kb, ks), kn) + 1`
+- kappa_RHS = `max(ks, kappa(recDelta b s n))`
+
+For n = delta n': kappa_RHS = `max(ks, max(max(kb, ks), kn') + 1) = max(max(kb, ks), kn') + 1` (since the +1 dominates)
+kappa_LHS = `max(max(kb, ks), kn) + 1 = max(max(kb, ks), k(delta n')) + 1 = max(max(kb, ks), kn') + 1`
+So kappa_LHS = kappa_RHS.
+
+mu_LHS = `3 + mb + ms + mn`
+mu_RHS = `4 + mb + 2*ms + mn`
+So mu_RHS > mu_LHS. The measure INCREASES.
+
+This is a problem. The simple lex measure doesn't work for `R_rec_succ`.
+
+For n not delta: kappa_RHS = `max(ks, max(max(kb, ks), kn)) = max(max(kb, ks), kn)`
+kappa_LHS = `max(max(kb, ks), kn) + 1`
+So kappa_LHS > kappa_RHS (the +1 makes it larger). The measure DECREASES (LHS > RHS means RHS < LHS in the lex order). 
+
+So the issue is specifically when `n = delta n'`, i.e., when the recursion argument has multiple delta wrappings.
+
+Hmm, so the current measure doesn't quite work. The user is asking for a proof skeleton, so maybe I should point out the issue or provide a sketch that would work.
+
+Actually wait - let me re-read the problem. The user says "Three of eight rule cases are proved; the remaining five are marked sorry. Provide a proof skeleton for completing the remaining cases."
+
+So the user wants me to provide skeletons (i.e., proof outlines) for the 5 sorry cases. The user says "Do not modify the file". So I should provide the Lean code for these proofs.
+
+But if the measure doesn't actually decrease, then a correct proof skeleton would note this and suggest a different approach. Let me think about what the right measure should be.
+
+One approach: the measure should be such that for the rec case, we track the "outermost" recursion level. 
+
+Actually, looking at this more carefully, I think the measure might be intended to work differently. Let me think about it as: the measure should decrease for each step.
+
+For `R_rec_succ`: `recDelta b s (delta n) --> app s (recDelta b s n)`. The idea is that the delta wrap is "consumed" - the `+1` in kappa represents one level of recursion, and after the step, the recDelta is no longer wrapped in delta, so its kappa drops by 1. But the `app` wrapper adds the `s` term, which might have arbitrary kappa.
+
+Wait, `kappa (app a b) = max(kappa a, kappa b)`. So `kappa (app s (recDelta b s n)) = max(kappa s, kappa (recDelta b s n))`.
+
+If `n` is not delta, then `kappa (recDelta b s n) = max(max(kappa b, kappa s), kappa n) = max(kappa b, kappa s, kappa n)`. So `kappa (app s (recDelta b s n)) = max(kappa s, max(kappa b, kappa s, kappa n)) = max(kappa b, kappa s, kappa n)`. And `kappa (recDelta b s (delta n)) = max(kappa b, kappa s, kappa n) + 1`. So kappa drops by 1. ✓
+
+If `n` is delta, then `kappa (recDelta b s (delta n')) = max(kappa b, kappa s, kappa n') + 1`. So `kappa (app s (recDelta b s (delta n'))) = max(kappa s, max(kappa b, kappa s, kappa n') + 1) = max(kappa b, kappa s, kappa n') + 1`. And `kappa (recDelta b s (delta (delta n'))) = max(kappa b, kappa s, kappa (delta n')) + 1 = max(kappa b, kappa s, kappa n') + 1`. So kappa ties. And mu: LHS = `3 + mu b + mu s + mu (delta (delta n')) = 3 + mu b + mu s + mu n'`. RHS = `1 + mu s + 3 + mu b + mu s + mu (delta n') = 4 + mu b + 2*mu s + mu n'`. RHS > LHS. ✗
+
+So the measure really doesn't work. This is a fundamental issue with the measure.
+
+Hmm. Let me think about this differently. Maybe the user expects me to provide a proof sketch that would work if the measure were fixed, or maybe the user wants me to identify the issue and suggest a fix.
+
+Given the constraint "Do not modify the file", I think the user wants me to provide Lean code for the proof skeletons. But if the measure is wrong, the proof can't be completed.
+
+Let me re-read the task once more: "Provide a proof skeleton for completing the remaining cases."
+
+I think the right approach is to provide a skeleton for each case, with the understanding that:
+1. For some cases, a direct proof works (the measure decreases).
+2. For the rec cases, a more careful analysis is needed.
+
+Actually, wait. Let me reconsider. The user says "Do not modify the file or run the compiler. Do not read any other files in the workspace or search the web."
+
+So the user wants me to provide proof skeletons (Lean code) for the 5 sorry cases. I should provide code that would work. But if the measure is wrong, I need to either:
+1. Point out the issue and suggest a measure change.
+2. Provide code that works with the given measure (which might not be possible for some cases).
+
+I think the most helpful thing is to:
+1. Provide the proof skeleton for each case.
+2. For cases where the measure works directly, give the direct proof.
+3. For cases where the measure is tricky, explain the approach (e.g., case split).
+
+Let me work through each case systematically.
+
+### Case 1: R_int_delta: integrate (delta t) --> void
+- kappa LHS = `kappa (integrate (delta t)) = kappa (delta t) = kappa t`
+- kappa RHS = `kappa void = 0`
+- mu LHS = `1 + mu (delta t) = 1 + mu t`
+- mu RHS = `0`
+
+For LexOrder:
+- If `kappa t > 0`: kappa RHS < kappa LHS, so use `drop_left`.
+- If `kappa t = 0`: kappa ties (both 0), mu RHS < mu LHS, so use `drop_right`.
+
+Proof:
+```lean
+| _, _, Step.R_int_delta t => by
+    rcases Nat.eq_zero_or_pos (kappa t) with hk | hk
+    · -- kappa t = 0
+      have hmu : mu void < mu (integrate (delta t)) := by simp [mu]; omega
+      have hk' : kappa void = kappa (integrate (delta t)) := by simp [kappa, hk]
+      exact drop_right hmu hk'
+    · -- kappa t > 0
+      have hk' : kappa void < kappa (integrate (delta t)) := by simp [kappa]; omega
+      exact drop_left hk'
+```
+
+### Case 2: R_rec_zero: recDelta b s void --> b
+- kappa LHS = `Nat.max (Nat.max (kappa b) (kappa s)) (kappa void) = Nat.max (kappa b) (kappa s)`
+- kappa RHS = `kappa b`
+- mu LHS = `3 + mu b + mu s + mu void = 3 + mu b + mu s`
+- mu RHS = `mu b`
+
+For LexOrder:
+- If `kappa s <= kappa b`: then `kappa LHS = kappa b = kappa RHS`, and `mu RHS < mu LHS` (since `3 + mu s > 0`). Use `drop_right`.
+- If `kappa s > kappa b`: then `kappa LHS = kappa s > kappa b = kappa RHS`. Use `drop_left`.
+
+Proof:
+```lean
+| _, _, Step.R_rec_zero b s => by
+    rcases Nat.le_or_gt (kappa b) (kappa s) with hk | hk
+    · -- kappa b >= kappa s
+      have hmu : mu b < mu (recDelta b s void) := by simp [mu]; omega
+      have hk' : kappa b = kappa (recDelta b s void) := by simp [kappa]; omega
+      exact drop_right hmu hk'
+    · -- kappa b < kappa s
+      have hk' : kappa b < kappa (recDelta b s void) := by simp [kappa]; omega
+      exact drop_left hk'
+```
+
+### Case 3: R_rec_succ: recDelta b s (delta n) --> app s (recDelta b s n)
+
+This is the tricky one. As I computed, the measure doesn't always decrease.
+
+Let me reconsider. Maybe I made an error. Let me recompute.
+
+LHS = `recDelta b s (delta n)`
+- `kappa LHS = kappa (recDelta b s (delta n))`. The pattern matches `recDelta b s (.delta n)`, so `kappa LHS = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1`.
+- `mu LHS = mu (recDelta b s (delta n))`. This matches `recDelta b s n` (with `n` = `delta n_orig`), so `mu LHS = 3 + mu b + mu s + mu (delta n) = 3 + mu b + mu s + mu n`.
+
+RHS = `app s (recDelta b s n)`
+- `kappa RHS = kappa (app s (recDelta b s n)) = Nat.max (kappa s) (kappa (recDelta b s n))`.
+  - If `n = delta n'`: `kappa (recDelta b s (delta n')) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1`. So `kappa RHS = Nat.max (kappa s) (Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1` (since `+1` makes it larger than `kappa s`).
+  - If `n` is not delta: `kappa (recDelta b s n) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)`. So `kappa RHS = Nat.max (kappa s) (Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)`.
+- `mu RHS = mu (app s (recDelta b s n)) = 1 + mu s + mu (recDelta b s n) = 1 + mu s + 3 + mu b + mu s + mu n = 4 + mu b + 2*mu s + mu n`.
+
+Case A: n is not delta.
+- `kappa LHS = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1`
+- `kappa RHS = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)`
+- So `kappa LHS = kappa RHS + 1 > kappa RHS`. Measure decreases (LHS > RHS). ✓
+
+Case B: n = delta n'.
+- `kappa LHS = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1 = Nat.max (Nat.max (kappa b) (kappa s)) (kappa (delta n')) + 1 = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1`
+- `kappa RHS = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1`
+- So `kappa LHS = kappa RHS`. Measure ties in kappa.
+- `mu LHS = 3 + mu b + mu s + mu n = 3 + mu b + mu s + mu (delta n') = 3 + mu b + mu s + mu n'`
+- `mu RHS = 4 + mu b + 2*mu s + mu n = 4 + mu b + 2*mu s + mu (delta n') = 4 + mu b + 2*mu s + mu n'`
+- `mu RHS - mu LHS = 1 + mu s > 0`. So mu INCREASES. Measure doesn't decrease. ✗
+
+So for Case B, the measure doesn't decrease. This is a real problem.
+
+The fix would be to change the measure. For example, we could weight the `app` constructor differently, or use a different combination.
+
+One approach: use a measure like `kappa t + mu t` or some weighted sum. Let me check:
+
+For Case B: LHS = `recDelta b s (delta (delta n'))`, RHS = `app s (recDelta b s (delta n'))`.
+- LHS kappa = `max(max(kb, ks), k(delta n')) + 1 = max(max(kb, ks), kn') + 1`
+- LHS mu = `3 + mb + ms + m(delta (delta n')) = 3 + mb + ms + mn'`
+- RHS kappa = `max(ks, max(max(kb, ks), k(delta n')) + 1) = max(max(kb, ks), k(delta n')) + 1 = max(max(kb, ks), kn') + 1`
+- RHS mu = `1 + ms + m(recDelta b s (delta n')) = 1 + ms + 3 + mb + ms + m(delta n') = 4 + mb + 2*ms + mn'`
+
+Sum: LHS sum = `max(max(kb, ks), kn') + 1 + 3 + mb + ms + mn' = max(max(kb, ks), kn') + 4 + mb + ms + mn'`
+RHS sum = `max(max(kb, ks), kn') + 1 + 4 + mb + 2*ms + mn' = max(max(kb, ks), kn') + 5 + mb + 2*ms + mn'`
+
+RHS sum > LHS sum. So the sum doesn't work either.
+
+Hmm, this is tricky. The issue is that the `app` constructor adds 1 to mu and the `s` term is duplicated, so mu increases.
+
+Maybe the fix is to make the `app` constructor's mu weight 0 instead of 1. Let me check:
+- `mu (app a b) = 0 + mu a + mu b = mu a + mu b`
+
+Then for R_rec_succ Case B:
+- LHS mu = `3 + mb + ms + mn'`
+- RHS mu = `0 + ms + 3 + mb + ms + mn' = 3 + mb + 2*ms + mn'`
+- RHS mu > LHS mu. Still increases.
+
+Hmm, that doesn't help.
+
+What if `mu (app a b) = mu b` (i.e., `a` is transparent)? That would be a different measure. But the user says don't modify the file.
+
+OK so I think the measure is genuinely broken for `R_rec_succ` in some cases. The user might be asking for a proof skeleton that acknowledges this and suggests a fix.
+
+Actually, let me reconsider. Maybe I'm wrong about the kappa for RHS. Let me re-examine.
+
+`kappa (app s (recDelta b s n))` where `n = delta n'`:
+- `kappa s`
+- `kappa (recDelta b s (delta n')) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1`
+- `kappa (app s (recDelta b s (delta n'))) = Nat.max (kappa s) (Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1)`
+
+Since `Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1 >= kappa s + 1 > kappa s`, this equals `Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1`.
+
+And LHS = `recDelta b s (delta (delta n'))`:
+- `kappa (recDelta b s (delta (delta n'))) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa (delta n')) + 1 = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1`
+
+So yes, kappa ties. And mu increases. The measure doesn't decrease.
+
+So for `R_rec_succ`, the proof skeleton would need to either:
+1. Use a different measure (which requires modifying the file).
+2. Note that the current measure is insufficient and suggest a fix.
+
+I think the most helpful response is to provide the proof skeleton for each case, and for `R_rec_succ`, explain the issue and suggest a fix to the measure.
+
+Actually, wait. Let me reconsider. The user says "Provide a proof skeleton for completing the remaining cases." This could mean providing the Lean code for the proofs, or it could mean providing a high-level outline.
+
+Given the constraint "Do not modify the file", I think the user wants the Lean code. But if the measure is wrong, I should note that.
+
+Let me provide the Lean code for the cases that work, and for `R_rec_succ`, provide a note about the issue.
+
+Actually, let me reconsider the problem once more. The user mentions "the remaining five are marked sorry". Let me count: R_int_delta, R_rec_zero, R_rec_succ, R_eq_refl, R_eq_diff. That's 5 cases. The proved cases are R_merge_void_left, R_merge_void_right, R_merge_cancel. That's 3 cases. Total 8. ✓
+
+For each of the 5 remaining cases, I need to provide a proof skeleton. Let me do that.
+
+### Case 4: R_eq_refl: eqW a a --> void
+- kappa LHS = `Nat.max (kappa a) (kappa a) = kappa a`
+- kappa RHS = `kappa void = 0`
+- mu LHS = `4 + mu a + mu a = 4 + 2*mu a`
+- mu RHS = `0`
+
+For LexOrder:
+- If `kappa a > 0`: kappa RHS < kappa LHS, use `drop_left`.
+- If `kappa a = 0`: kappa ties (both 0), mu RHS < mu LHS, use `drop_right`.
+
+Proof:
+```lean
+| _, _, Step.R_eq_refl a => by
+    rcases Nat.eq_zero_or_pos (kappa a) with hk | hk
+    · -- kappa a = 0
+      have hmu : mu void < mu (eqW a a) := by simp [mu]; omega
+      have hk' : kappa void = kappa (eqW a a) := by simp [kappa, hk]
+      exact drop_right hmu hk'
+    · -- kappa a > 0
+      have hk' : kappa void < kappa (eqW a a) := by simp [kappa]; omega
+      exact drop_left hk'
+```
+
+### Case 5: R_eq_diff: eqW a b --> integrate (merge a b)
+- kappa LHS = `Nat.max (kappa a) (kappa b)`
+- kappa RHS = `kappa (integrate (merge a b)) = kappa (merge a b) = Nat.max (kappa a) (kappa b)`
+- mu LHS = `4 + mu a + mu b`
+- mu RHS = `1 + mu (merge a b) = 1 + 2 + mu a + mu b = 3 + mu a + mu b`
+
+kappa ties, mu RHS < mu LHS (since `3 < 4`). Use `drop_right`.
+
+Proof:
+```lean
+| _, _, Step.R_eq_diff a b => by
+    have hmu : mu (integrate (merge a b)) < mu (eqW a b) := by simp [mu]; omega
+    have hk  : kappa (integrate (merge a b)) = kappa (eqW a b) := by simp [kappa]
+    exact drop_right hmu hk
+```
+
+### Summary
+
+So the cases that work directly with a simple proof:
+- R_int_delta: needs case split on `kappa t`
+- R_rec_zero: needs case split on `kappa b` vs `kappa s`
+- R_rec_succ: doesn't work with the current measure (needs measure fix)
+- R_eq_refl: needs case split on `kappa a`
+- R_eq_diff: works directly
+
+For the proof skeleton, I'll provide the Lean code for each case, and for R_rec_succ, I'll note the issue.
+
+Actually, I realize I should be more careful. The user says "Do not read any other files in the workspace or search the web." So I should work purely from the given file. And "Do not modify the file or run the compiler." So I can't test the code.
+
+Let me also consider: maybe the user wants me to provide a proof skeleton that would work IF the measure were correct, and they're aware of the issue. Or maybe the user wants me to identify the issue.
+
+Given the ambiguity, I'll provide the Lean code for the 4 cases that work with the current measure, and for R_rec_succ, I'll explain the issue and suggest a fix.
+
+Actually, looking at this more carefully, I think the user wants a proof skeleton, which means providing the structure of the proof (the Lean code) for each case. The user can then verify and complete it.
+
+Let me write the skeletons.
+
+For R_int_delta:
+```lean
+| _, _, Step.R_int_delta t => by
+    rcases Nat.eq_zero_or_pos (kappa t) with hk | hk
+    · -- kappa t = 0
+      have hmu : mu void < mu (integrate (delta t)) := by simp [mu]; omega
+      have hk' : kappa void = kappa (integrate (delta t)) := by simp [kappa, hk]
+      exact drop_right hmu hk'
+    · -- kappa t > 0
+      have hk' : kappa void < kappa (integrate (delta t)) := by simp [kappa]; omega
+      exact drop_left hk'
+```
+
+For R_rec_zero:
+```lean
+| _, _, Step.R_rec_zero b s => by
+    rcases Nat.le_or_gt (kappa b) (kappa s) with hk | hk
+    · -- kappa b >= kappa s
+      have hmu : mu b < mu (recDelta b s void) := by simp [mu]; omega
+      have hk' : kappa b = kappa (recDelta b s void) := by simp [kappa]; omega
+      exact drop_right hmu hk'
+    · -- kappa b < kappa s
+      have hk' : kappa b < kappa (recDelta b s void) := by simp [kappa]; omega
+      exact drop_left hk'
+```
+
+For R_rec_succ: This is the problematic case. I'll note the issue and suggest a fix.
+
+For R_eq_refl:
+```lean
+| _, _, Step.R_eq_refl a => by
+    rcases Nat.eq_zero_or_pos (kappa a) with hk | hk
+    · -- kappa a = 0
+      have hmu : mu void < mu (eqW a a) := by simp [mu]; omega
+      have hk' : kappa void = kappa (eqW a a) := by simp [kappa, hk]
+      exact drop_right hmu hk'
+    · -- kappa a > 0
+      have hk' : kappa void < kappa (eqW a a) := by simp [kappa]; omega
+      exact drop_left hk'
+```
+
+For R_eq_diff:
+```lean
+| _, _, Step.R_eq_diff a b => by
+    have hmu : mu (integrate (merge a b)) < mu (eqW a b) := by simp [mu]; omega
+    have hk  : kappa (integrate (merge a b)) = kappa (eqW a b) := by simp [kappa]
+    exact drop_right hmu hk
+```
+
+Now let me think about the R_rec_succ case more carefully. The user might be testing whether I can identify the issue.
+
+Actually, I realize I should double-check my analysis. Let me redo the kappa computation for R_rec_succ when n = delta n'.
+
+LHS = `recDelta b s (delta (delta n'))`. The pattern is `recDelta b s (.delta n)`, so we use the first case of kappa: `Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1`. Here `n` in the pattern is `delta n'`, so `kappa n = kappa (delta n') = kappa n'`. So `kappa LHS = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1`.
+
+RHS = `app s (recDelta b s (delta n'))`. The kappa of `app s X` is `Nat.max (kappa s) (kappa X)`. `kappa (recDelta b s (delta n')) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1`. So `kappa RHS = Nat.max (kappa s) (Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1)`. Since the second arg is `>= kappa s + 1 > kappa s` (wait, `Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1 >= Nat.max (kappa b) (kappa s) + 1 >= kappa s + 1 > kappa s`). So `kappa RHS = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1`.
+
+So `kappa LHS = kappa RHS`. They tie.
+
+mu LHS = `mu (recDelta b s (delta (delta n'))) = 3 + mu b + mu s + mu (delta (delta n')) = 3 + mu b + mu s + mu n'`.
+mu RHS = `mu (app s (recDelta b s (delta n'))) = 1 + mu s + mu (recDelta b s (delta n')) = 1 + mu s + 3 + mu b + mu s + mu (delta n') = 4 + mu b + 2*mu s + mu n'`.
+
+`mu RHS - mu LHS = 1 + mu s > 0`. So mu increases. The measure doesn't decrease.
+
+So the measure is genuinely broken for this case. A fix would be to change the mu of `app` to not include `mu a` (i.e., make the first arg transparent to mu), or use a different weighting.
+
+For example, if `mu (app a b) = mu b` (first arg transparent), then:
+- mu RHS = `mu s + 3 + mu b + mu s + mu (delta n') = 3 + mu b + 2*mu s + mu n'`. Still > LHS.
+
+Or if `mu (app a b) = 0 + mu a + mu b` (current) and we change the measure to be a weighted sum, it might work. But that's modifying the file.
+
+I think the right answer is to point out this issue. The proof skeleton for R_rec_succ cannot be completed with the current measure.
+
+Let me write up the response. I'll provide the proof skeletons for the 4 cases that work, and explain the issue with R_rec_succ.
+
+Actually, I want to be more careful. Let me re-examine whether the kappa for the LHS of R_rec_succ is really `+1`. The pattern is `recDelta b s (.delta n)`. So if the third arg is `delta n`, then `kappa = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1`. Here `n` is the bound variable in the pattern, so it equals the original `n` (the argument after delta). So `kappa (recDelta b s (delta n)) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1` where `n` is the original argument. ✓
+
+And for RHS, `kappa (app s (recDelta b s n))` where `n` is the original argument. The kappa of `recDelta b s n` depends on whether `n` is `delta _`. If `n` is not delta, then `kappa (recDelta b s n) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)`. If `n = delta n'`, then `kappa (recDelta b s (delta n')) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1`.
+
+So for `R_rec_succ` with `n = delta n'`:
+- LHS: `recDelta b s (delta (delta n'))` → kappa = `Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1`
+- RHS: `app s (recDelta b s (delta n'))` → kappa = `Nat.max (kappa s) (Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1`
+
+So kappa ties, and mu increases. The measure doesn't decrease.
+
+OK so I'm confident the measure is broken for R_rec_succ when the argument has a delta wrap.
+
+Let me write the response. I'll provide the skeletons for the 4 working cases and explain the R_rec_succ issue.
+
+Wait, actually, I want to reconsider. Maybe the user is aware of the issue and wants me to provide a proof skeleton that would work with a corrected measure. Or maybe the user wants me to identify the issue. Given the phrasing "Provide a proof skeleton for completing the remaining cases", I think the user wants the Lean code. But since R_rec_succ doesn't work, I should note that.
+
+Let me also double-check the other cases.
+
+For R_rec_zero with `kappa b >= kappa s`:
+- LHS kappa = `Nat.max (Nat.max (kappa b) (kappa s)) (kappa void) = Nat.max (kappa b) (kappa s)`. If `kappa b >= kappa s`, then this equals `kappa b`. ✓
+- RHS kappa = `kappa b`. ✓
+- LHS mu = `3 + mu b + mu s + 0 = 3 + mu b + mu s`. RHS mu = `mu b`. `mu b < 3 + mu b + mu s` ✓.
+
+For R_rec_zero with `kappa b < kappa s`:
+- LHS kappa = `kappa s`. RHS kappa = `kappa b < kappa s`. So kappa RHS < kappa LHS. ✓
+
+OK so R_rec_zero works with a case split.
+
+For R_int_delta with `kappa t = 0`:
+- LHS kappa = `0`. RHS kappa = `0`. Tie.
+- LHS mu = `1 + mu t`. RHS mu = `0`. `0 < 1 + mu t` ✓.
+
+For R_int_delta with `kappa t > 0`:
+- LHS kappa = `kappa t > 0`. RHS kappa = `0`. So kappa RHS < kappa LHS. ✓
+
+OK so R_int_delta works with a case split.
+
+For R_eq_refl with `kappa a = 0`:
+- LHS kappa = `0`. RHS kappa = `0`. Tie.
+- LHS mu = `4 + 2*mu a`. RHS mu = `0`. `0 < 4 + 2*mu a` ✓.
+
+For R_eq_refl with `kappa a > 0`:
+- LHS kappa = `kappa a > 0`. RHS kappa = `0`. So kappa RHS < kappa LHS. ✓
+
+OK so R_eq_refl works with a case split.
+
+For R_eq_diff:
+- LHS kappa = `Nat.max (kappa a) (kappa b)`. RHS kappa = `Nat.max (kappa a) (kappa b)`. Tie.
+- LHS mu = `4 + mu a + mu b`. RHS mu = `1 + 2 + mu a + mu b = 3 + mu a + mu b`. `3 + mu a + mu b < 4 + mu a + mu b` ✓.
+
+OK so R_eq_diff works directly.
+
+So 4 out of 5 cases work. R_rec_succ is broken.
+
+Now, for the proof skeleton, I'll provide the Lean code for the 4 working cases, and for R_rec_succ, I'll explain the issue and suggest a fix (e.g., changing the mu of `app` to be `0 + mu a + mu b` or using a different measure).
+
+Actually, I want to think about whether there's a way to make R_rec_succ work with the current measure. One idea: induction on the structure of `n` to show that the measure decreases. But that doesn't help because the measure is a function of the term, not a relation.
+
+Another idea: use a different lex order, like `(mu, kappa)` instead of `(kappa, mu)`. But that would break the other cases.
+
+Or: use a weighted sum like `2 * kappa + mu`. Let me check:
+- LHS: `2 * (max(max(kb, ks), kn) + 1) + (3 + mb + ms + mn) = 2*max(max(kb, ks), kn) + 2 + 3 + mb + ms + mn = 2*max(max(kb, ks), kn) + 5 + mb + ms + mn`
+- RHS: `2 * max(ks, kappa(recDelta b s n)) + (4 + mb + 2*ms + mn)`
+
+For n = delta n':
+- RHS: `2 * (max(max(kb, ks), kn') + 1) + 4 + mb + 2*ms + mn' = 2*max(max(kb, ks), kn') + 2 + 4 + mb + 2*ms + mn' = 2*max(max(kb, ks), kn') + 6 + mb + 2*ms + mn'`
+- LHS: `2*max(max(kb, ks), kn') + 2 + 3 + mb + ms + mn' = 2*max(max(kb, ks), kn') + 5 + mb + ms + mn'`
+- RHS - LHS = `1 + ms > 0`. So RHS > LHS. The measure still doesn't decrease.
+
+Hmm. What about a more aggressive weighting, like `10 * kappa + mu`? It doesn't matter because the difference is `1 + ms > 0` regardless of the kappa weight (since kappa ties).
+
+So the issue is that mu increases. The only way to fix this is to change the mu of `app` or `recDelta`.
+
+For example, if `mu (app a b) = mu b` (first arg transparent):
+- RHS mu = `mu s + 3 + mu b + mu s + mu (delta n') = 3 + mu b + 2*mu s + mu n'`. Still > LHS mu = `3 + mu b + mu s + mu n'`. Doesn't help.
+
+If `mu (app a b) = 0` (both args transparent, which is weird):
+- RHS mu = `mu (recDelta b s n) = 3 + mu b + mu s + mu n`. For n = delta n': `3 + mu b + mu s + mu n'`. LHS mu = `3 + mu b + mu s + mu n'`. They tie! And kappa ties. So the measure doesn't decrease.
+
+Hmm. What if we use a different measure for the rec cases? For example, track the "delta depth" of the recursion argument.
+
+Actually, I think the correct measure for the rec case is to track the kappa (recursion depth) and have it decrease. Let me re-examine.
+
+For R_rec_succ: `recDelta b s (delta n) --> app s (recDelta b s n)`. The idea is that the delta wrap is consumed. If we define kappa as the "recursion depth" of the outermost recDelta, then:
+- LHS: the recDelta has one level of delta wrapping, so kappa = 1 (plus the kappa of the inner terms).
+- RHS: the recDelta has no delta wrapping (assuming n is not delta), so kappa = 0 (plus the kappa of the inner terms). The app wrapper doesn't add to kappa.
+
+But the current kappa definition has `+1` for the delta-wrapped case and no `+1` for the non-delta case. And the `app` constructor takes the max of its args' kappas.
+
+For n not delta:
+- LHS kappa = `max(max(kb, ks), kn) + 1`
+- RHS kappa = `max(ks, max(max(kb, ks), kn)) = max(max(kb, ks), kn)`
+- LHS kappa = RHS kappa + 1. ✓
+
+For n = delta n':
+- LHS kappa = `max(max(kb, ks), k(delta n')) + 1 = max(max(kb, ks), kn') + 1`
+- RHS kappa = `max(ks, max(max(kb, ks), k(delta n')) + 1) = max(max(kb, ks), kn') + 1`
+- LHS kappa = RHS kappa. ✗
+
+So the issue is that the delta wrapping is "transparent" to kappa (it doesn't add to the inner term's kappa), so when the recDelta is wrapped in another delta, the kappa doesn't increase further.
+
+A fix: make delta add to kappa. But then the delta/integrate/merge cases would need to be re-examined.
+
+Actually, I think the correct measure is: kappa should count the number of delta wrappings around the recDelta. So `kappa (delta (recDelta b s n)) = kappa (recDelta b s n) + 1`. But currently `kappa (delta t) = kappa t`, which is transparent.
+
+Hmm, but then R_int_delta `integrate (delta t) --> void` would have `kappa (integrate (delta t)) = kappa t + 1` and `kappa void = 0`. If `kappa t > 0`, this decreases. If `kappa t = 0`, this ties and mu decreases. So it would still work with a case split.
+
+And for R_rec_succ with n = delta n':
+- LHS = `recDelta b s (delta (delta n'))`. If delta adds to kappa, then `kappa (delta (delta n')) = kappa n' + 2`. Hmm, this gets complicated.
+
+I think the real fix is more subtle. Let me think about it differently.
+
+The key insight is: for R_rec_succ, the measure should track the "delta depth" of the recursion argument. When the delta is consumed (LHS to RHS), the depth decreases. The `app` constructor and the `s` term shouldn't interfere with this.
+
+One way: define a separate measure `deltaDepth : Trace -> Nat` that counts the number of delta wrappings. Then use `(deltaDepth, kappa, mu)` or just `deltaDepth` for the rec cases.
+
+But this is a more complex measure and would require modifying the file.
+
+Given the constraints, I think the best response is to:
+1. Provide the proof skeletons for the 4 cases that work.
+2. For R_rec_succ, explain the issue and suggest that the measure needs to be fixed.
+
+Let me write the response.
+
+Actually, I want to reconsider one more time. Maybe the user is OK with a proof skeleton that assumes the measure works, and they'll figure out the issue themselves. Or maybe the user wants me to be thorough.
+
+I think being thorough is better. Let me provide the skeletons and note the issue.
+
+Let me also think about the proof structure. The current proofs use `drop_left` and `drop_right` from the scaffolding. I'll use the same approach.
+
+For the case splits, I'll use `Nat.eq_zero_or_pos` and `Nat.le_or_gt`.
+
+Let me finalize the skeletons.
+
+For R_int_delta:
+```lean
+| _, _, Step.R_int_delta t => by
+    -- kappa (integrate (delta t)) = kappa t (both delta and integrate are transparent)
+    -- kappa void = 0
+    -- Need: either kappa t > 0 (then kappa drops) or kappa t = 0 (then kappa ties, mu drops)
+    rcases Nat.eq_zero_or_pos (kappa t) with hk | hk
+    · -- kappa t = 0
+      have hmu : mu void < mu (integrate (delta t)) := by simp [mu]; omega
+      have hk' : kappa void = kappa (integrate (delta t)) := by simp [kappa, hk]
+      exact drop_right hmu hk'
+    · -- kappa t > 0
+      have hk' : kappa void < kappa (integrate (delta t)) := by simp [kappa]; omega
+      exact drop_left hk'
+```
+
+For R_rec_zero:
+```lean
+| _, _, Step.R_rec_zero b s => by
+    -- kappa (recDelta b s void) = max(kappa b, kappa s)
+    -- kappa b
+    -- mu (recDelta b s void) = 3 + mu b + mu s
+    -- mu b
+    rcases Nat.le_or_gt (kappa b) (kappa s) with hk | hk
+    · -- kappa b >= kappa s
+      have hmu : mu b < mu (recDelta b s void) := by simp [mu]; omega
+      have hk' : kappa b = kappa (recDelta b s void) := by simp [kappa]; omega
+      exact drop_right hmu hk'
+    · -- kappa b < kappa s
+      have hk' : kappa b < kappa (recDelta b s void) := by simp [kappa]; omega
+      exact drop_left hk'
+```
+
+For R_eq_refl:
+```lean
+| _, _, Step.R_eq_refl a => by
+    -- kappa (eqW a a) = kappa a
+    -- kappa void = 0
+    rcases Nat.eq_zero_or_pos (kappa a) with hk | hk
+    · -- kappa a = 0
+      have hmu : mu void < mu (eqW a a) := by simp [mu]; omega
+      have hk' : kappa void = kappa (eqW a a) := by simp [kappa, hk]
+      exact drop_right hmu hk'
+    · -- kappa a > 0
+      have hk' : kappa void < kappa (eqW a a) := by simp [kappa]; omega
+      exact drop_left hk'
+```
+
+For R_eq_diff:
+```lean
+| _, _, Step.R_eq_diff a b => by
+    -- kappa (eqW a b) = max(kappa a, kappa b)
+    -- kappa (integrate (merge a b)) = max(kappa a, kappa b) (tie)
+    -- mu (eqW a b) = 4 + mu a + mu b
+    -- mu (integrate (merge a b)) = 1 + 2 + mu a + mu b = 3 + mu a + mu b
+    have hmu : mu (integrate (merge a b)) < mu (eqW a b) := by simp [mu]; omega
+    have hk  : kappa (integrate (merge a b)) = kappa (eqW a b) := by simp [kappa]
+    exact drop_right hmu hk
+```
+
+For R_rec_succ, I'll explain the issue.
+
+Actually, I realize I should also check: is there a way to prove R_rec_succ with the current measure by using a different decomposition? For example, by showing that the measure decreases after a bounded number of steps?
+
+No, the theorem `measure_decreases` claims that each individual step decreases the measure. So we need to show it for the single step.
+
+OK, let me write the final response. I'll provide the 4 working skeletons and explain the R_rec_succ issue.
+
+Hmm, but the user asked for a "proof skeleton for completing the remaining cases". If one case can't be completed, I should be upfront about it.
+
+Let me think about whether there's any other interpretation. Maybe the kappa definition is correct and I'm making a mistake.
+
+Let me re-read the kappa definition:
+```lean
+def kappa : Trace -> Nat
+| .void                      => 0
+| .delta t                   => kappa t
+| .integrate t               => kappa t
+| .merge a b                 => Nat.max (kappa a) (kappa b)
+| .app a b                   => Nat.max (kappa a) (kappa b)
+| .recDelta b s (.delta n)   => Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1
+| .recDelta b s n            => Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)
+| .eqW a b                   => Nat.max (kappa a) (kappa b)
+```
+
+For R_rec_succ: `recDelta b s (delta n) --> app s (recDelta b s n)`.
+- LHS = `recDelta b s (delta n)`. Matches `.recDelta b s (.delta n)` with `n` = original `n`. So `kappa LHS = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1`.
+- RHS = `app s (recDelta b s n)`. `kappa RHS = Nat.max (kappa s) (kappa (recDelta b s n))`.
+
+Now, `kappa (recDelta b s n)` depends on whether `n` is `delta _` or not.
+- If `n` is not `delta _`: `kappa (recDelta b s n) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)`. So `kappa RHS = Nat.max (kappa s) (Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)`. And `kappa LHS = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1`. So `kappa LHS > kappa RHS`. ✓
+- If `n = delta n'`: `kappa (recDelta b s (delta n')) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1`. So `kappa RHS = Nat.max (kappa s) (Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1` (since `+1` dominates). And `kappa LHS = Nat.max (Nat.max (kappa b) (kappa s)) (kappa (delta n')) + 1 = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1`. So `kappa LHS = kappa RHS`. Tie.
+
+So yes, when `n` is `delta _`, kappa ties. And mu:
+- `mu LHS = 3 + mu b + mu s + mu (delta n) = 3 + mu b + mu s + mu n` (where `n` is the original arg, so `mu (delta n) = mu n`).
+- `mu RHS = 1 + mu s + mu (recDelta b s n) = 1 + mu s + 3 + mu b + mu s + mu n = 4 + mu b + 2*mu s + mu n`.
+- `mu RHS - mu LHS = 1 + mu s > 0`. So mu increases.
+
+The measure doesn't decrease.
+
+So the measure is broken for R_rec_succ when the recursion argument has a delta wrap.
+
+A fix: make the `app` constructor not add to mu, or make the first arg of `app` transparent to mu. For example:
+- `mu (app a b) = mu b` (first arg transparent)
+
+Then for R_rec_succ with n = delta n':
+- `mu RHS = mu s + 3 + mu b + mu s + mu n' = 3 + mu b + 2*mu s + mu n'`. Still > LHS mu = `3 + mu b + mu s + mu n'`. Doesn't help.
+
+What if `mu (app a b) = 0` (both transparent)?
+- `mu RHS = mu (recDelta b s n) = 3 + mu b + mu s + mu n`. For n = delta n': `3 + mu b + mu s + mu n'`. LHS mu = `3 + mu b + mu s + mu n'`. They tie. And kappa ties. So the measure doesn't decrease. Still broken.
+
+What if we use a different measure for the rec cases? For example, track the delta depth of the recursion argument.
+
+Actually, I think the correct fix is to change the kappa definition to make delta add to kappa (or at least for the recDelta case). For example:
+- `kappa (delta t) = kappa t + 1`
+
+Then for R_rec_succ with n = delta n':
+- LHS = `recDelta b s (delta (delta n'))`. The pattern `.recDelta b s (.delta n)` matches with `n = delta n'`. So `kappa LHS = max(max(kb, ks), kappa (delta n')) + 1 = max(max(kb, ks), kn' + 1) + 1`.
+- RHS = `app s (recDelta b s (delta n'))`. `kappa (recDelta b s (delta n')) = max(max(kb, ks), kn' + 1) + 1`. `kappa RHS = max(ks, max(max(kb, ks), kn' + 1) + 1) = max(max(kb, ks), kn' + 1) + 1` (since `+1` dominates).
+- So kappa ties again. And mu still increases. Doesn't help.
+
+What if we make `kappa (delta t) = kappa t` (current) but change the recDelta case to NOT add 1, and instead use a different mechanism? For example, have a separate "recursion counter" that decreases.
+
+This is getting complicated. I think the right answer is that the measure needs to be redesigned for the rec cases, and that's beyond the scope of "completing the remaining cases" with the current file.
+
+So my response will be:
+1. Provide proof skeletons for the 4 cases that work (R_int_delta, R_rec_zero, R_eq_refl, R_eq_diff).
+2. Explain that R_rec_succ cannot be proved with the current measure and suggest a fix.
+
+Let me write the response.
+
+Actually, I want to reconsider one more time. The user says "Do not modify the file". Maybe they're testing whether I can identify the issue and provide a correct analysis. Or maybe they want me to provide the skeletons assuming the measure works.
+
+I'll go with: provide the 4 working skeletons, and explain the R_rec_succ issue clearly.
+
+Let me also make sure my Lean syntax is correct. I'll use the same style as the existing proofs.
+
+For the case splits, I should use `rcases` with `Nat.eq_zero_or_pos` and `Nat.le_or_gt`. Let me check if these are available in Lean 4 / Mathlib.
+
+`Nat.eq_zero_or_pos : forall n : Nat, n = 0 ∨ n > 0` - yes, this is in core Lean.
+`Nat.le_or_gt : forall a b : Nat, a <= b ∨ a > b` - yes, this is in core Lean.
+
+OK, the syntax should be fine.
+
+Let me also double-check the `simp` calls. The existing proofs use `simp [mu]` and `simp [kappa]`, which should work for unfolding the definitions.
+
+For the `omega` calls, they should be able to solve simple arithmetic goals.
+
+OK, let me write the final response.
+
+One more thought: for the R_rec_zero case, when I write `by simp [kappa]; omega`, the goal is `kappa b = kappa (recDelta b s void)`. After `simp [kappa]`, this becomes `kappa b = Nat.max (Nat.max (kappa b) (kappa s)) (kappa void)`. Then `simp [kappa_void]` or further simplification gives `kappa b = Nat.max (Nat.max (kappa b) (kappa s)) 0 = Nat.max (kappa b) (kappa s)`. So the goal is `kappa b = Nat.max (kappa b) (kappa s)`, which holds iff `kappa b >= kappa s` (which is our hypothesis `hk : kappa b >= kappa s` after `rcases Nat.le_or_gt (kappa b) (kappa s) with hk | hk`).
+
+So `by simp [kappa, kappa_void]; omega` should work, or `by simp [kappa]; rw [kappa_void]; omega`.
+
+Let me use a simpler approach: `by simp [kappa, kappa_void]; omega`.
+
+Similarly for other cases.
+
+OK, let me write the response.
+
+Wait, I realize I should also consider: maybe the user wants me to provide a proof skeleton that uses a different approach for R_rec_succ, like induction on the structure of `n`. Let me think about this.
+
+For R_rec_succ: `recDelta b s (delta n) --> app s (recDelta b s n)`. If we do induction on the structure of `n`, we can consider cases:
+- `n = void`: LHS = `recDelta b s (delta void)`, RHS = `app s (recDelta b s void)`.
+  - LHS kappa = `max(max(kb, ks), k(void)) + 1 = max(max(kb, ks), 0) + 1 = max(kb, ks) + 1`.
+  - RHS kappa = `max(ks, kappa (recDelta b s void)) = max(ks, max(max(kb, ks), 0)) = max(ks, max(kb, ks)) = max(kb, ks)`.
+  - LHS kappa > RHS kappa. ✓
+- `n = delta n'`: LHS = `recDelta b s (delta (delta n'))`, RHS = `app s (recDelta b s (delta n'))`.
+  - As computed, kappa ties and mu increases. ✗
+
+So induction on `n` doesn't help directly.
+
+What if we do induction on the kappa of the recursion argument? Or on the delta depth of the recursion argument?
+
+I think the fundamental issue is that the measure needs to be redesigned. Without that, R_rec_succ can't be proved.
+
+OK, final response: provide the 4 working skeletons, explain the R_rec_succ issue.
+
+Let me write it up.
+
+Hmm, actually, I want to be even more careful. Let me re-examine whether the kappa for LHS of R_rec_succ is really `+1`.
+
+LHS = `recDelta b s (delta n)`. The kappa definition has two cases for recDelta:
+- `.recDelta b s (.delta n)   => Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1`
+- `.recDelta b s n            => Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)`
+
+The first case applies when the third argument is `delta _`. So for `recDelta b s (delta n)`, the first case applies, and the bound variable `n` in the pattern equals the original `n` (the argument after delta). So `kappa (recDelta b s (delta n)) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1`. ✓
+
+And the mu definition has only one case for recDelta:
+- `.recDelta b s n => 3 + mu b + mu s + mu n`
+
+So `mu (recDelta b s (delta n)) = 3 + mu b + mu s + mu (delta n) = 3 + mu b + mu s + mu n` (since `mu (delta t) = mu t`). ✓
+
+RHS = `app s (recDelta b s n)`. The kappa of `app a b` is `Nat.max (kappa a) (kappa b)`. So `kappa (app s (recDelta b s n)) = Nat.max (kappa s) (kappa (recDelta b s n))`.
+
+Now, `kappa (recDelta b s n)`:
+- If `n` matches `.delta n'`: `kappa (recDelta b s (delta n')) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1`.
+- Otherwise: `kappa (recDelta b s n) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)`.
+
+For the case `n = delta n'`:
+- `kappa RHS = Nat.max (kappa s) (Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1)`.
+- Since `Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1 >= Nat.max (kappa b) (kappa s) + 1 >= kappa s + 1 > kappa s`, we have `kappa RHS = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1`.
+- And `kappa LHS = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1 = Nat.max (Nat.max (kappa b) (kappa s)) (kappa (delta n')) + 1 = Nat.max (Nat.max (kappa b) (kappa s)) (kappa n') + 1`.
+- So `kappa LHS = kappa RHS`. Tie.
+
+mu RHS = `1 + mu s + mu (recDelta b s (delta n')) = 1 + mu s + 3 + mu b + mu s + mu (delta n') = 4 + mu b + 2*mu s + mu n'`.
+mu LHS = `3 + mu b + mu s + mu (delta (delta n')) = 3 + mu b + mu s + mu n'`.
+mu RHS - mu LHS = `1 + mu s > 0`. mu increases.
+
+So the measure doesn't decrease. Confirmed.
+
+OK, final response. Let me write it.
+
+I'll structure it as:
+1. Brief analysis of the measure.
+2. Proof skeleton for R_int_delta.
+3. Proof skeleton for R_rec_zero.
+4. Proof skeleton for R_rec_succ (with note about the issue).
+5. Proof skeleton for R_eq_refl.
+6. Proof skeleton for R_eq_diff.
+
+Actually, I want to be more concise. Let me just provide the skeletons and a brief note about R_rec_succ.
+
+Let me also think about whether the user's measure is intentionally designed to fail for R_rec_succ, or if it's a mistake. Given the phrasing of the task, I think the user expects me to identify the issue and provide skeletons for the cases that work.
+
+OK, let me write the final response.

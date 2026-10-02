@@ -1,0 +1,116 @@
+We need to assess whether the lexicographic termination measure `(phase t, cost t)` is sound, i.e., whether every rewrite step `Step a b` implies that the measure strictly decreases lexicographically: either `phase b < phase a`, or `phase b = phase a` and `cost b < cost a`.
+
+Let me go through each step rule:
+
+1. `R_int_delta : Step (integrate (delta t)) void`
+   - a = integrate (delta t)
+   - phase a: not recDelta, so phase a = 0
+   - b = void, phase b = 0
+   - cost a = 1 + cost (delta t) = 1 + (1 + cost t) = 2 + cost t
+   - cost b = 0
+   - phase same (0=0), cost decreases (0 < 2+cost t). ✓
+
+2. `R_merge_void_left : Step (merge void t) t`
+   - a = merge void t, phase a = 0 (not recDelta)
+   - b = t, phase b = 0 (assuming not recDelta, but we need to check)
+   - cost a = 1 + cost void + cost t = 1 + 0 + cost t = 1 + cost t
+   - cost b = cost t
+   - phase same, cost decreases by 1. ✓
+   - Wait, what if t = recDelta? Then phase b = 1, phase a = 0. So phase strictly decreases. Also fine.
+
+3. `R_merge_void_right : Step (merge t void) t` - same as above, ✓.
+
+4. `R_merge_cancel : Step (merge t t) t`
+   - a = merge t t, phase a = 0
+   - b = t
+   - cost a = 1 + 2*cost t
+   - cost b = cost t
+   - cost a ≥ cost t + 1 > cost t (assuming cost t ≥ 0 which it is). ✓
+   - Even if t is recDelta at top, phase decreases.
+
+5. `R_rec_zero : Step (recDelta b s void) b`
+   - a = recDelta b s void, phase a = 1 (because recDelta with delta n gives 1, but here third arg is void... let me re-check)
+   
+   Looking at `phase`:
+   ```
+   def phase : Trace → Nat
+   | .recDelta _ _ (.delta _) => 1
+   | _ => 0
+   ```
+   
+   So phase is 1 only when the term is recDelta with a delta inside as the third argument. For `recDelta b s void`, the third arg is `void`, not `delta _`. So phase a = 0.
+   
+   - b = b (the Trace), phase b could be 0 or 1.
+   - cost a = 1 + cost b + cost s + cost void = 1 + cost b + cost s
+   - cost b = cost b (variable named b, not the constructor)
+   
+   phase: a = 0. b: phase could be 0 or 1. If phase b = 0, then we need cost b < cost a = 1 + cost b + cost s, which is true since cost s ≥ 0. If phase b = 1, then we need 1 < 0, which is false! That would be a problem.
+   
+   Hmm, can `b` (the second argument) be of the form `recDelta _ _ (delta _)`? Yes, nothing prevents it. So if we let `b = recDelta b' s' (delta n)`, then:
+   - a = recDelta (recDelta b' s' (delta n)) s void, phase a = 0
+   - b = recDelta b' s' (delta n), phase b = 1
+   - This is an INCREASE in phase! The measure increases.
+   
+   So the measure is NOT sound.
+
+Wait, let me double-check the phase definition carefully:
+
+```
+def phase : Trace → Nat
+| .recDelta _ _ (.delta _) => 1
+| _ => 0
+```
+
+Yes, this is checking the outermost constructor. So `phase (recDelta b s n) = 1` iff `n = delta _`, otherwise 0.
+
+So `R_rec_zero`: `Step (recDelta b s void) b`. 
+- `recDelta b s void` has phase 0 (because the third arg is `void`, not `delta _`).
+- `b` could have phase 1 if it itself is `recDelta _ _ (delta _)`.
+
+Counterexample: let b = `recDelta void void (delta void)` and s = `void`. Then:
+- a = recDelta (recDelta void void (delta void)) void void
+- phase a = 0
+- b = recDelta void void (delta void)
+- phase b = 1
+- Measure a = (0, ...) vs measure b = (1, ...)
+- The measure increases! ✗
+
+So the measure is unsound.
+
+Let me also double check `R_rec_succ`:
+- `Step (recDelta b s (delta n)) (app s (recDelta b s n))`
+- a = recDelta b s (delta n), phase a = 1
+- b = app s (recDelta b s n), phase b = 0
+- Phase strictly decreases. ✓
+
+And the other rules don't involve recDelta at the top, so they all go from phase 0 to phase 0 (or less), with cost decreasing. They're fine.
+
+The issue is specifically with `R_rec_zero`. The rule unrolls a recursion at the base case, exposing `b` (which could itself be a `recDelta ... (delta ...)` at the top). The measure was designed assuming that unrolling a recDelta reduces phase from 1 to 0, but only `R_rec_succ` does that — `R_rec_zero` fires when n = void, which has phase 0, and the result `b` might have phase 1.
+
+So the answer: the measure is NOT sound due to `R_rec_zero`.
+
+Let me also think about whether the structure of the measure is recoverable. One could fix it by making phase depend on more, e.g., computing a count of how many recDelta-...-delta patterns appear, or by making cost strictly dominate. The current measure fails.
+
+Let me also verify by considering concrete numbers. Let s = void, b' = void.
+- a = recDelta void void void
+- cost a = 1 + 0 + 0 + 0 = 1
+- phase a = 0
+- measure a = (0, 1)
+- b = void
+- cost b = 0, phase b = 0
+- measure b = (0, 0)
+- Decreases. ✓
+
+Now try with b = recDelta void void (delta void), s = void, n = void.
+- a = recDelta (recDelta void void (delta void)) void void
+- cost a = 1 + (1 + 0 + 0 + (1 + 0)) + 0 + 0 = 1 + 2 = 3
+  Wait: cost (recDelta b s n) = 1 + cost b + cost s + cost n. b = recDelta void void (delta void). cost b = 1 + 0 + 0 + (1+0) = 2. So cost a = 1 + 2 + 0 + 0 = 3.
+- phase a = 0 (because n = void)
+- b' (the second arg of the outer recDelta) = recDelta void void (delta void), which is the resulting term. phase b' = 1.
+- cost b' = 2
+- measure a = (0, 3), measure b' = (1, 2)
+- (0, 3) <lex (1, 2)? No! (1, 2) is greater. So measure INCREASES.
+
+Confirmed: the measure is unsound.
+
+Let me write up a clear answer.

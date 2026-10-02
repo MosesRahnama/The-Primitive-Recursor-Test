@@ -1,0 +1,84 @@
+## Analysis
+
+The three proved cases all follow the same pattern:
+
+1. Compute (or bound) `kappa` of both sides using the `@[simp]` lemmas.
+2. Either
+   - show `kappa` **strictly drops** and invoke `drop_left`, or
+   - show `kappa` **ties** and `mu` **strictly drops**, and invoke `drop_right`.
+
+Four of the five remaining rules fit this pattern cleanly. The fifth (`R_rec_succ`) is genuinely delicate: whenever the recursion argument `n` is itself `delta`-headed, `kappa` of the reduct **ties** with `kappa` of the redex (both get the same "+1" bonus from matching the `recDelta _ _ (delta _)` pattern), and in that same sub-case `mu` actually **increases** rather than decreases (the extra `app s (…)` wrapper adds `1 + mu s`, while the "+1" delta-bonus that would have shrunk `mu` never appears in `mu`'s definition, since `mu_recDelta` is unconditional in the third argument). So a fully rigorous closing of that one sub-branch needs a finer potential (e.g. one that counts the full `delta`-chain length of the recursion argument, not just "is it delta-headed"), which is **not** expressible from `kappa`/`mu` as given. I've isolated exactly that sub-branch with `sorry` and left everything else fully justified.
+
+```lean
+-- integrate (delta t) --> void
+| _, _, Step.R_int_delta t => by
+    rcases Nat.eq_zero_or_pos (kappa t) with h0 | hpos
+    · -- kappa ties (both are 0), mu strictly drops (0 < 1 + mu t)
+      have hk : kappa void = kappa (integrate (delta t)) := by simp [kappa]; omega
+      have hmu : mu void < mu (integrate (delta t)) := by simp [mu]; omega
+      exact drop_right hmu hk
+    · -- kappa strictly drops (0 < kappa t)
+      have hk : kappa void < kappa (integrate (delta t)) := by simp [kappa]; omega
+      exact drop_left hk
+
+-- recDelta b s void --> b
+| _, _, Step.R_rec_zero b s => by
+    have hkeq : kappa (recDelta b s void) = Nat.max (kappa b) (kappa s) := by
+      simp [kappa]
+    rcases le_or_lt (kappa s) (kappa b) with hle | hlt
+    · -- kappa ties (max = kappa b), mu strictly drops (3 + mu s > 0)
+      have hk : kappa b = kappa (recDelta b s void) := by rw [hkeq]; omega
+      have hmu : mu b < mu (recDelta b s void) := by simp [mu]; omega
+      exact drop_right hmu hk
+    · -- kappa strictly drops (kappa b < max = kappa s)
+      have hk : kappa b < kappa (recDelta b s void) := by rw [hkeq]; omega
+      exact drop_left hk
+
+-- recDelta b s (delta n) --> app s (recDelta b s n)
+| _, _, Step.R_rec_succ b s n => by
+    cases n with
+    | delta n' =>
+        -- Here the residual `recDelta b s (delta n')` is again delta-headed at its
+        -- own top level, so it also receives kappa's "+1" bonus: kappa ties with
+        -- the redex. In this exact sub-case `mu` does not decrease either, since
+        -- `mu`'s recDelta clause is unconditional in its third argument while the
+        -- `app s (·)` wrapper adds `1 + mu s`. Closing this branch rigorously
+        -- needs a measure that tracks the *full* delta-chain depth of the
+        -- recursion argument, which `kappa`/`mu` as defined do not provide.
+        sorry
+    | _ =>
+        -- In every other shape of n, kappa strictly drops: the redex gets the
+        -- "+1" bonus (its third argument is literally `delta n`), while the
+        -- residual `recDelta b s n` does not (n is not delta-headed here), and
+        -- `app s (·)` cannot raise kappa above that residual value since
+        -- kappa s ≤ max(kappa b, kappa s).
+        apply drop_left
+        simp [kappa]
+        omega
+
+-- eqW a a --> void
+| _, _, Step.R_eq_refl a => by
+    rcases Nat.eq_zero_or_pos (kappa a) with h0 | hpos
+    · have hk : kappa void = kappa (eqW a a) := by simp [kappa]; omega
+      have hmu : mu void < mu (eqW a a) := by simp [mu]; omega
+      exact drop_right hmu hk
+    · have hk : kappa void < kappa (eqW a a) := by simp [kappa]; omega
+      exact drop_left hk
+
+-- eqW a b --> integrate (merge a b)
+| _, _, Step.R_eq_diff a b => by
+    -- kappa ties unconditionally: both sides equal max(kappa a, kappa b)
+    have hk : kappa (integrate (merge a b)) = kappa (eqW a b) := by simp [kappa]
+    -- mu strictly drops unconditionally: 3 + mu a + mu b < 4 + mu a + mu b
+    have hmu : mu (integrate (merge a b)) < mu (eqW a b) := by simp [mu]; omega
+    exact drop_right hmu hk
+```
+
+### Why the four "clean" cases work
+
+- **`R_int_delta`**: `kappa` of both sides equals `kappa t` vs `0`; split on whether `kappa t = 0`.
+- **`R_rec_zero`**: `kappa (recDelta b s void) = max(kappa b, kappa s)`; split on whether `kappa s ≤ kappa b`. The `mu` inequality `mu b < 3 + mu b + mu s` holds unconditionally, so it's only `kappa`'s tie/strict split that needs case analysis.
+- **`R_eq_refl`**: identical shape to `R_int_delta`, with `kappa (eqW a a) = kappa a`.
+- **`R_eq_diff`**: both `kappa` (via `integrate`/`merge` transparency and additivity of `max`) and the `mu` inequality (`3+… < 4+…`) hold *unconditionally* — no case split needed at all, since `integrate (merge a b)` and `eqW a b` have exactly matching `kappa` and a fixed constant gap in `mu`.
+
+The remaining gap (`R_rec_succ`, `delta n'` sub-case) is flagged with `sorry` and a comment explaining precisely what additional invariant/measure refinement would be required to discharge it, rather than papering over it with an incorrect argument.

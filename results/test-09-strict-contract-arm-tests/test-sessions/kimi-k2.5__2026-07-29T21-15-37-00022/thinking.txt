@@ -1,0 +1,1067 @@
+The user is asking me to analyze a first-order rewrite calculus presented in Lean 4 and determine if strong normalization can be established from the presented calculus alone.
+ 
+ Let me analyze the system:
+ 
+ 1. **Syntax**:
+    - `void` : a base constructor
+    - `delta` : unary constructor (successor-like)
+    - `integrate` : unary constructor
+    - `merge` : binary constructor
+    - `app` : binary constructor (application)
+    - `recΔ` : ternary constructor (recursor)
+    - `eqW` : binary constructor (equality witness)
+ 
+ 2. **Rewrite Rules**:
+    - `R_int_delta`: integrate (delta t) → void
+    - `R_merge_void_left`: merge void t → t
+    - `R_merge_void_right`: merge t void → t
+    - `R_merge_cancel`: merge t t → t
+    - `R_rec_zero`: recΔ b s void → b
+    - `R_rec_succ`: recΔ b s (delta n) → app s (recΔ b s n)
+    - `R_eq_refl`: eqW a a → void
+    - `R_eq_diff`: eqW a b → integrate (merge a b)  [when a ≠ b, implicitly]
+ 
+ Wait, looking at `R_eq_diff`: it says ∀ a b, Step (eqW a b) (integrate (merge a b))
+ 
+ This rule applies to *any* a and b, including when a = b. But we also have `R_eq_refl` which applies when the two arguments are the same.
+ 
+ Actually, looking at the inductive definition, these are separate rules. The system is non-deterministic:
+ - If a = b, both `R_eq_refl` and `R_eq_diff` apply.
+ - If a ≠ b, only `R_eq_diff` applies.
+ 
+ But for strong normalization, we need to show that *every* reduction sequence terminates.
+ 
+ Let me think about potential non-termination.
+ 
+ First, let's understand the constructors:
+ - `delta` seems like a successor
+ - `recΔ` is a recursor: 
+   - base case: void → b
+   - step case: delta n → app s (recΔ b s n)
+ 
+ This looks like primitive recursion.
+ 
+ Now, the concerning rule is `R_eq_diff`:
+ eqW a b → integrate (merge a b)
+ 
+ And `integrate (delta t) → void`.
+ 
+ Let me trace through some examples.
+ 
+ Actually, the critical question is: can we create a term that rewrites to a term that contains the original as a subterm, in a way that allows infinite reduction?
+ 
+ Let's look at the rules:
+ 
+ 1. `R_int_delta`: integrate (delta t) → void. This decreases size.
+ 2. Merge rules: all decrease size (merge void t → t removes void; merge t t → t removes one t).
+ 3. Recursor rules:
+    - recΔ b s void → b (decreases)
+    - recΔ b s (delta n) → app s (recΔ b s n) 
+      This replaces recΔ with app and a smaller recΔ (n instead of delta n).
+      Wait, delta n is the argument, and we get recΔ b s n.
+      So the third argument decreases from delta n to n.
+      This looks like it terminates because n is structurally smaller than delta n.
+ 4. Equality:
+    - eqW a a → void (decreases)
+    - eqW a b → integrate (merge a b)
+ 
+ The last rule is problematic. Let's see:
+ eqW a b → integrate (merge a b)
+ 
+ Now, merge a b could be large. And integrate could be applied to it.
+ 
+ But integrate (delta t) → void.
+ 
+ However, what if merge a b produces something that, when integrated, doesn't reduce well?
+ 
+ Actually, let's look at the types. These are just trees. 
+ 
+ The question is: can we have infinite reduction sequences?
+ 
+ Let me try to construct a looping term.
+ 
+ Suppose we have some term T.
+ 
+ Consider: eqW T T can reduce two ways:
+ 1. To void via R_eq_refl
+ 2. To integrate (merge T T) via R_eq_diff
+ 
+ If we take the second path: integrate (merge T T)
+ Then merge T T → T via R_merge_cancel.
+ So we get integrate T.
+ 
+ Now, can we reduce integrate T?
+ Only if T is of the form delta t, in which case we get void.
+ 
+ So:
+ eqW T T →* integrate T.
+ 
+ If T is not of the form delta t, then integrate T is a normal form.
+ 
+ Wait, looking at the rules, integrate only reduces when its argument is delta t.
+ 
+ So integrate T is stuck (normal form) unless T = delta t' for some t'.
+ 
+ So the reduction:
+ eqW (delta t) (delta t) → integrate (merge (delta t) (delta t)) → integrate (delta t) → void.
+ 
+ That's fine.
+ 
+ eqW a b where a ≠ b:
+ → integrate (merge a b)
+ 
+ Now, merge a b might reduce if a or b is void, or if a = b.
+ But if a and b are arbitrary and distinct, merge a b is a normal form (assuming a, b are normal).
+ So integrate (merge a b) is normal.
+ 
+ Hmm.
+ 
+ Let me think about whether there can be cycles.
+ 
+ The only rules that could potentially increase the "size" or create cycles are:
+ 
+ 1. R_eq_diff: eqW a b → integrate (merge a b)
+    - LHS: eqW a b has size 1 + size(a) + size(b)
+    - RHS: integrate (merge a b) has size 1 + size(merge a b) = 1 + 1 + size(a) + size(b) = 2 + size(a) + size(b)
+    - So this increases size by 1!
+ 
+ Wait, that's an increase.
+ 
+ But then:
+ - merge a b might reduce.
+ - If a = b, merge a b → a, so we get integrate a.
+   Size: 1 + size(a).
+   Original: 1 + size(a) + size(a) = 1 + 2*size(a).
+   So if size(a) > 0, this is a decrease.
+   
+   Actually:
+   eqW a a has size |eqW| + |a| + |a| = 1 + 2|a|
+   → integrate (merge a a) has size 1 + (1 + 2|a|) = 2 + 2|a|
+   → integrate a (after merge reduction) has size 1 + |a|
+   → if a = delta t, then void with size 1? or size 0?
+ 
+ Let me define a weight function.
+ 
+ Actually, looking at the strict execution contract, I need to be careful about subterm duplication.
+ 
+ The contract says:
+ - If a step duplicates a subterm S, first show the additive failure: M(after) = M(before) - 1 + M(S) and explain why no strict drop when M(S) >= 1.
+ 
+ Which rules duplicate subterms?
+ 
+ Let's check each rule:
+ 
+ 1. R_int_delta: integrate (delta t) → void
+    - t appears once on left, zero on right.
+    - No duplication.
+ 
+ 2. R_merge_void_left: merge void t → t
+    - t appears once on both sides.
+    - No duplication.
+ 
+ 3. R_merge_void_right: merge t void → t
+    - t appears once on both sides.
+    - No duplication.
+ 
+ 4. R_merge_cancel: merge t t → t
+    - t appears twice on left, once on right.
+    - This is a CONTRACTION (decrease).
+    - Wait, left has two copies of t, right has one.
+    - So we go from 2*|t| to |t|, saving |t|.
+ 
+ 5. R_rec_zero: recΔ b s void → b
+    - b appears once.
+    - No duplication.
+ 
+ 6. R_rec_succ: recΔ b s (delta n) → app s (recΔ b s n)
+    - Left: recΔ with args b, s, delta n
+    - Right: app with args s and recΔ b s n
+    - b and s are preserved.
+    - n is smaller than delta n.
+    - No duplication of arbitrary subterms.
+    - s appears once on left, once on right.
+    - b appears once on left, once inside recΔ on right.
+    - Actually, b and s are copied into the subterm recΔ b s n.
+    - So b and s are duplicated!
+    
+    Let's be precise:
+    LHS: recΔ b s (delta n)
+    RHS: app s (recΔ b s n)
+    
+    The subterm recΔ b s n contains b and s.
+    So b appears in the main term (well, it doesn't, it only appears in the subterm).
+    Actually, b appears once in LHS.
+    In RHS, b appears inside recΔ b s n.
+    So b appears once in RHS (inside the subterm).
+    Wait, no duplication.
+    
+    Let's count occurrences:
+    LHS: recΔ b s (delta n) contains b¹, s¹, n¹
+    RHS: app s (recΔ b s n) contains s¹, and in the subterm: b¹, s¹, n¹
+    So s appears twice in RHS!
+    
+    Actually:
+    - The first argument of app is s.
+    - The second argument is recΔ b s n, which contains s as its second argument.
+    So s appears twice.
+    
+    M(after) = M(app s (recΔ b s n))
+    = 1 + M(s) + M(recΔ b s n)
+    = 1 + M(s) + (1 + M(b) + M(s) + M(n))
+    = 2 + M(b) + 2*M(s) + M(n)
+    
+    M(before) = M(recΔ b s (delta n))
+    = 1 + M(b) + M(s) + M(delta n)
+    = 1 + M(b) + M(s) + (1 + M(n))
+    = 2 + M(b) + M(s) + M(n)
+    
+    So M(after) - M(before) = M(s).
+    
+    If M(s) >= 1, then M(after) = M(before) - 2 + M(s) + something?
+    Wait:
+    M(after) = 2 + M(b) + 2M(s) + M(n)
+    M(before) = 2 + M(b) + M(s) + M(n)
+    M(after) = M(before) + M(s)
+    
+    So the size increases by M(s)!
+    
+    This is a problem.
+    When we apply R_rec_succ, we duplicate s.
+    
+    According to the strict execution contract:
+    "If a step duplicates a subterm S, first show the additive failure: M(after) = M(before) - 1 + M(S) and explain why no strict drop when M(S) >= 1."
+ 
+ Let me calculate:
+ M(before) = 2 + M(b) + M(s) + M(n)  [since delta n has size 1 + M(n)]
+ 
+ M(after) = 1 + M(s) + M(recΔ b s n)
+          = 1 + M(s) + (1 + M(b) + M(s) + M(n))
+          = 2 + M(b) + 2*M(s) + M(n)
+ 
+ So:
+ M(after) = M(before) + M(s)
+ 
+ This is M(after) = M(before) - 0 + M(s).
+ 
+ Or M(after) = M(before) - 1 + (M(s) + 1).
+ 
+ Hmm, the contract says "M(after) = M(before) - 1 + M(S)".
+ 
+ Here M(after) = M(before) + M(s).
+ 
+ So M(after) = M(before) - 1 + (M(s) + 1).
+ 
+ So the duplicated subterm S would be such that M(S) = M(s) + 1?
+ 
+ Actually, the subterm s is duplicated.
+ In before, s appears with weight 1.
+ In after, s appears with weight 2 (once directly, once inside recΔ).
+ 
+ But also, the constructor structure changes.
+ 
+ The formula given is: M(after) = M(before) - 1 + M(S).
+ 
+ Let's solve for what S would be:
+ M(before) + M(s) = M(before) - 1 + M(S)
+ So M(S) = M(s) + 1.
+ 
+ What has size M(s) + 1?
+ The term s itself has size M(s).
+ 
+ Alternatively, we can think of the "extra" copy of s.
+ 
+ But let's be careful.
+ 
+ In R_rec_succ:
+ We replace recΔ b s (delta n) with app s (recΔ b s n).
+ 
+ The subterm s that was at position 2 in recΔ is now at position 1 in app,
+ AND also at position 2 in the subterm recΔ b s n.
+ 
+ So s is duplicated.
+ 
+ The decrease is that n is smaller than delta n (by 1 in depth, but same size?).
+ 
+ M(delta n) = 1 + M(n).
+ 
+ The new term has:
+ - The recΔ node replaced by app node (same cost? 1 unit each)
+ - Third argument delta n replaced by n (saves 1)
+ - But adds a copy of s.
+ 
+ Wait:
+ M(recΔ b s (delta n)) = 1 + M(b) + M(s) + (1 + M(n)) = 2 + M(b) + M(s) + M(n)
+ M(app s (recΔ b s n)) = 1 + M(s) + M(recΔ b s n) 
+                       = 1 + M(s) + (1 + M(b) + M(s) + M(n))
+                       = 2 + M(b) + 2*M(s) + M(n)
+ 
+ Difference: +M(s).
+ 
+ So we gain M(s).
+ 
+ For the contract: 
+ "M(after) = M(before) - 1 + M(S)"
+ 
+ 2 + M(b) + 2M(s) + M(n) = [2 + M(b) + M(s) + M(n)] - 1 + M(S)
+ 2 + M(b) + 2M(s) + M(n) = 1 + M(b) + M(s) + M(n) + M(S)
+ So: 1 + M(s) = M(S)
+ 
+ So S would need to have size 1 + M(s).
+ 
+ The duplicated subterm is s, which has size M(s).
+ But we're adding one extra copy of s, and the structure changes.
+ 
+ Actually, the "S" in the contract refers to the duplicated subterm.
+ 
+ We have M(after) = M(before) + M(s).
+ 
+ To write as M(before) - 1 + M(S), we need M(S) = M(s) + 1.
+ 
+ What is the subterm being duplicated? It's s.
+ But s has size M(s).
+ 
+ However, looking at the recursor:
+ recΔ b s (delta n) → app s (recΔ b s n)
+ 
+ The variable s is used twice.
+ But also, the recursor node is replaced by an app node.
+ 
+ The net change is: - M(delta n) + M(n) + M(s) = - (1+M(n)) + M(n) + M(s) = -1 + M(s).
+ 
+ Wait, that's different.
+ 
+ Let me recalculate carefully with tree weight (number of constructors).
+ 
+ Define |t| as the number of constructors in t.
+ 
+ |void| = 1
+ |delta t| = 1 + |t|
+ |integrate t| = 1 + |t|
+ |merge t1 t2| = 1 + |t1| + |t2|
+ |app t1 t2| = 1 + |t1| + |t2|
+ |recΔ t1 t2 t3| = 1 + |t1| + |t2| + |t3|
+ |eqW t1 t2| = 1 + |t1| + |t2|
+ 
+ Now:
+ |recΔ b s (delta n)| = 1 + |b| + |s| + |delta n|
+                     = 1 + |b| + |s| + 1 + |n|
+                     = 2 + |b| + |s| + |n|
+ 
+ |app s (recΔ b s n)| = 1 + |s| + |recΔ b s n|
+                     = 1 + |s| + (1 + |b| + |s| + |n|)
+                     = 2 + |b| + 2|s| + |n|
+ 
+ Difference: +|s|.
+ 
+ So the size increases by |s|.
+ 
+ The contract says: M(after) = M(before) - 1 + M(S).
+ 
+ Here: 2 + |b| + 2|s| + |n| = (2 + |b| + |s| + |n|) - 1 + M(S)
+ So: 2 + |b| + 2|s| + |n| = 1 + |b| + |s| + |n| + M(S)
+ Thus: 1 + |s| = M(S).
+ 
+ So if we say S is a term of size 1+|s|, i.e., the term s with one extra constructor.
+ 
+ But s is duplicated.
+ The extra |s| comes from the extra copy of s.
+ 
+ So M(after) = M(before) + |s|.
+ 
+ This means:
+ - If |s| = 0, impossible (minimum size is 1 for void).
+ - |s| >= 1 for any s.
+   - void has size 1.
+   - So |s| >= 1.
+ 
+ Therefore M(after) >= M(before) + 1.
+ 
+ The size strictly increases!
+ 
+ Wait, that means R_rec_succ increases the size of the term.
+ 
+ But we also have: the third argument gets smaller.
+ 
+ |n| < |delta n| = 1 + |n|.
+ 
+ In terms of structural ordering on the third argument, it decreases.
+ But the overall size increases.
+ 
+ For strong normalization, we need a well-founded measure that decreases.
+ 
+ The standard approach for recursors is to use the size of the third argument as the primary measure, and the whole term size as secondary, or something like that.
+ 
+ But here, when we go from recΔ b s (delta n) to app s (recΔ b s n), we have:
+ - The main recΔ is gone, replaced by app.
+ - But we insert a new recΔ b s n inside.
+ 
+ This is not structural recursion on the term in the obvious way.
+ 
+ However, notice that n is structurally smaller than delta n.
+ The new recΔ has a smaller third argument.
+ 
+ We can try to use lexicographic order:
+ Primary: size of the third argument of the outermost recΔ.
+ Secondary: the whole term structure.
+ 
+ But when we create app s (recΔ b s n), the recΔ is now inside app.
+ 
+ Actually, the recursive call is guarded by the constructor app.
+ 
+ Standard approach for primitive recursion:
+ The recursor reduces the inductive argument (third arg).
+ 
+ recΔ b s : Trace → Trace
+ recΔ b s void → b
+ recΔ b s (delta n) → app s (recΔ b s n)
+ 
+ This is exactly the definition of primitive recursion.
+ 
+ For primitive recursion, we need to show termination.
+ The standard way is that the third argument is structurally decreasing.
+ 
+ But in the rewrite rule R_rec_succ, the result contains recΔ b s n,
+ and n is a proper subterm of delta n.
+ 
+ So if we define a measure that is lexicographic:
+ 1. For a recΔ b s n term, the measure is based on n.
+ 2. For other terms, measure is 0 or something.
+ 
+ Actually, we need a measure on all terms.
+ 
+ Define |t|_rec as the maximum "depth" of recΔ along any path, weighted by the third argument.
+ 
+ Or more simply:
+ 
+ Define a function W: Trace → Nat that decreases.
+ 
+ For recΔ b s t, the weight should be something like:
+ W(recΔ b s t) = f(|t|, W(b), W(s), W(t))
+ 
+ where f is such that when we unfold:
+ W(recΔ b s (delta n)) > W(app s (recΔ b s n))
+ 
+ Now, 
+ W(app s (recΔ b s n)) = 1 + W(s) + W(recΔ b s n)
+                       = 1 + W(s) + g(|n|, W(b), W(s), W(n))
+ 
+ W(recΔ b s (delta n)) = g(1+|n|, W(b), W(s), 1+W(n))
+ 
+ Hmm.
+ 
+ For primitive recursion to terminate, we typically have:
+ W(recΔ b s t) = omega^{|t|} * something or just |t| as primary component.
+ 
+ Let's use lexicographic order with the size of the inductive argument as most significant.
+ 
+ Define the "stage" of a term.
+ 
+ Actually, let's look at all the rules and see if we can find a decreasing measure.
+ 
+ Rules:
+ 1. integrate (delta t) → void
+    |integrate (delta t)| = 1 + (1 + |t|) = 2 + |t|
+    |void| = 1
+    Decreases by 1+|t| >= 1.
+ 
+ 2. merge void t → t
+    |merge void t| = 1 + 1 + |t| = 2 + |t|
+    |t| = |t|
+    Decreases by 2.
+ 
+ 3. merge t void → t
+    Similarly, decreases by 2.
+ 
+ 4. merge t t → t
+    |merge t t| = 1 + 2|t|
+    |t| = |t|
+    Decreases by 1 + |t| >= 1.
+ 
+ 5. recΔ b s void → b
+    |recΔ b s void| = 1 + |b| + |s| + 1 = 2 + |b| + |s|
+    |b| = |b|
+    Decreases by 2 + |s| >= 3 (since |s|>=1).
+ 
+ 6. recΔ b s (delta n) → app s (recΔ b s n)
+    LHS: 1 + |b| + |s| + 1 + |n| = 2 + |b| + |s| + |n|
+    RHS: 1 + |s| + (1 + |b| + |s| + |n|) = 2 + |b| + 2|s| + |n|
+    Change: +|s| >= 1.
+    Increases!
+ 
+ 7. eqW a a → void
+    |eqW a a| = 1 + 2|a|
+    |void| = 1
+    Decreases by 2|a| >= 2.
+ 
+ 8. eqW a b → integrate (merge a b)
+    |eqW a b| = 1 + |a| + |b|
+    |integrate (merge a b)| = 1 + (1 + |a| + |b|) = 2 + |a| + |b|
+    Increases by 1!
+ 
+ So we have two rules that increase size:
+ - R_rec_succ: increases by |s|
+ - R_eq_diff: increases by 1
+ 
+ For strong normalization, we cannot have infinite sequences of size-increasing steps.
+ 
+ But perhaps the size-increasing steps can only happen finitely many times because they create redexes that eventually lead to reduction?
+ 
+ Let's analyze.
+ 
+ First, R_eq_diff: 
+ eqW a b → integrate (merge a b)
+ 
+ This increases size by 1.
+ But then we have integrate (merge a b).
+ 
+ Now, merge a b might be reducible.
+ Case analysis:
+ - If a = void: merge void b → b, so we get integrate b.
+   Then integrate b is only reducible if b = delta t.
+   So eqW void (delta t) → integrate (merge void (delta t)) → integrate (delta t) → void.
+   This terminates.
+   
+ - If b = void: similarly.
+ 
+ - If a = b: merge a a → a, so we get integrate a.
+   Then integrate a may or may not reduce.
+   eqW a a had two reductions:
+   - Direct to void.
+   - Or to integrate (merge a a) → integrate a.
+   If we take the second path, we get integrate a.
+   If a is arbitrary, integrate a is stuck unless a is a delta.
+ 
+ - If a ≠ b and neither is void: merge a b is stuck.
+   So integrate (merge a b) is stuck.
+   So eqW a b reduces to a normal form integrate (merge a b).
+ 
+ The only way R_eq_diff leads to further reduction is if merge reduces.
+ 
+ Similarly, R_rec_succ creates app s (recΔ b s n).
+ This has size larger than the original.
+ 
+ But the new term is app s (recΔ b s n).
+ The subterm recΔ b s n has a smaller third argument.
+ 
+ We can try to assign a weight that makes this decrease.
+ 
+ Standard solution for primitive recursion:
+ Use a lexicographic order where the primary component is the depth of the recursor's third argument along the spine.
+ 
+ More precisely, define a measure:
+ 
+ μ(void) = 1
+ μ(delta t) = 1 + μ(t)
+ μ(integrate t) = 1 + μ(t)  [but need to handle carefully]
+ ...
+ 
+ Actually, for recΔ, we want:
+ μ(recΔ b s t) = (μ(t), something)
+ 
+ And for app s (recΔ b s n), we have μ(n) < μ(delta n).
+ 
+ Let's try:
+ Assign to each term t a pair (d(t), s(t)) where:
+ - d(t) is the maximum "call stack depth" of recΔ
+ - or rather, a weighted sum.
+ 
+ Standard approach for showing SN of recursor:
+ The recursor decreases the inductive argument.
+ 
+ Define the norm |t| as the size.
+ But since R_rec_succ increases size, we need a different measure.
+ 
+ For the recursor rule:
+ recΔ b s (delta n) > app s (recΔ b s n)
+ 
+ in some well-founded order.
+ 
+ Note that recΔ b s n is "smaller" than recΔ b s (delta n) because n is smaller than delta n.
+ But it's inside an app.
+ 
+ We can use the following measure:
+ 
+ Define #rec(t) = number of recΔ nodes in t.
+ 
+ Or better, define a multiset measure.
+ 
+ Actually, let's think about the recursive calls.
+ 
+ The reduction relation is:
+ 
+ recΔ b s void ↝ b
+ recΔ b s (delta n) ↝ app s (recΔ b s n)
+ 
+ This is similar to:
+ rec(0) = b
+ rec(S n) = s (rec n)
+ 
+ In lambda-calculus, this terminates because n decreases.
+ 
+ In our case, n is a subterm.
+ 
+ The issue is that the right-hand side embeds the recursive call inside app s [...].
+ 
+ To show termination, we can use a measure that is a lexicographic combination:
+ 1. The set of recΔ nodes with their third arguments, ordered by multiset ordering of the size of the third argument.
+ 
+ Actually, define M(t) as a multiset of natural numbers.
+ For each recΔ b s n occurring in t, we put |n| into the multiset.
+ Order multisets by the multiset ordering (Dershowitz-Manna).
+ 
+ For R_rec_succ:
+ t = C[recΔ b s (delta n)]
+ reduces to t' = C[app s (recΔ b s n)]
+ 
+ The multiset changes: 
+ Remove |delta n| = 1+|n|, add |n|.
+ So we replace 1+|n| with |n| in the multiset.
+ This decreases the multiset.
+ 
+ For other rules:
+ 
+ R_int_delta: integrate (delta t) → void
+ No recΔ involved, or if t contains recΔ, they are preserved (actually, t is lost).
+ Wait, the rule is integrate (delta t) → void.
+ If t contains recΔ nodes, they are deleted!
+ So the multiset of recΔ arguments either stays the same or decreases (if t had recΔ).
+ 
+ Actually, let's be precise.
+ 
+ Define the "potential" as the multiset of sizes of third arguments of all recΔ subterms.
+ 
+ More carefully:
+ Define Φ(t) = { |n| : recΔ b s n occurs as a subterm in t, for some b,s }
+ 
+ For R_rec_succ:
+ recΔ b s (delta n) is replaced by app s (recΔ b s n).
+ The occurrence of recΔ b s (delta n) is removed, and recΔ b s n is added.
+ So in the multiset:
+ Remove 1+|n|, add |n|.
+ This is a strict decrease in the multiset order.
+ 
+ The context C[.] might have the hole inside other constructors.
+ But app s (recΔ b s n) has recΔ b s n as a subterm.
+ 
+ So yes, one element 1+|n| is replaced by |n|, which is smaller.
+ All other recΔ subterms in the context are unchanged.
+ So Φ strictly decreases.
+ 
+ For other rules:
+ 
+ R_rec_zero: recΔ b s void → b.
+ Remove recΔ b s void, which contributes 0 (|void|=1? Wait).
+ 
+ |void| = 1 (one constructor).
+ 
+ So we remove 1 from the multiset.
+ The multiset decreases.
+ 
+ R_int_delta: integrate (delta t) → void.
+ This deletes t.
+ If t contains recΔ subterms, they are removed.
+ So the multiset may lose elements (decrease).
+ 
+ R_merge_*: merge rules don't involve recΔ in a way that creates new ones or changes arguments.
+ merge a b → ...
+ The recΔ subterms in a or b are preserved.
+ So Φ is unchanged.
+ 
+ R_eq_*: eqW rules.
+ eqW a b → integrate (merge a b) or void.
+ In integrate (merge a b), the recΔ in a or b are preserved.
+ So Φ unchanged or decreases (if going to void).
+ 
+ So the only rule that doesn't decrease Φ is the merge rules and eqW rules and app (but app is not a redex).
+ 
+ Actually, R_eq_diff: eqW a b → integrate (merge a b).
+ This doesn't change the recΔ inside a or b.
+ 
+ So for recursor steps, Φ decreases.
+ For other steps, Φ stays the same or decreases.
+ 
+ When Φ stays the same, we need another measure to decrease.
+ 
+ When Φ is unchanged, we are not reducing a recΔ.
+ 
+ So we need to show that non-recΔ reductions terminate.
+ 
+ The non-recΔ reductions are:
+ 1. integrate (delta t) → void
+ 2. merge void t → t
+ 3. merge t void → t
+ 4. merge t t → t
+ 5. eqW a a → void
+ 6. eqW a b → integrate (merge a b)
+ 
+ And we also have recursor rules, but when we use recursor rules, Φ decreases.
+ 
+ So consider the measure (Φ(t), Ψ(t)) lexicographically.
+ 
+ First component: multiset of |n| for all recΔ b s n in t.
+ Second component: some measure for the recΔ-free part.
+ 
+ But eqW a b → integrate (merge a b) increases size.
+ 
+ Let's define Ψ carefully.
+ 
+ Actually, let's list all redexes and see what happens.
+ 
+ Case 1: The redex is recΔ.
+ Then Φ strictly decreases.
+ 
+ Case 2: The redex is not recΔ.
+ Then Φ is preserved.
+ We need to show that the second component decreases.
+ 
+ Redexes:
+ - integrate (delta t): removes integrate, delta, and t.
+   Size decreases.
+ 
+ - merge void t: size decreases.
+ 
+ - merge t void: size decreases.
+ 
+ - merge t t: size decreases by 1+|t|.
+ 
+ - eqW a a: size decreases.
+ 
+ - eqW a b: size increases by 1.
+   Goes to integrate (merge a b).
+ 
+ This is a problem.
+ eqW a b → integrate (merge a b) increases the term size.
+ And it doesn't involve recΔ, so Φ is unchanged.
+ 
+ Can we apply this infinitely?
+ eqW a b →* integrate (merge a b).
+ Then what?
+ integrate (merge a b) is irreducible unless merge a b reduces.
+ 
+ If merge a b reduces:
+ - If a=void: to integrate b.
+   Then integrate b may reduce if b=delta t.
+ - etc.
+ 
+ But can we have a cycle?
+ 
+ Suppose we have a term T.
+ 
+ Can we have infinite reduction?
+ 
+ The only size-increasing rule is R_eq_diff.
+ It increases size by 1.
+ 
+ But after applying it, we have integrate (merge a b).
+ 
+ For this to reduce further, merge a b must reduce.
+ merge a b reduces only if:
+ - a=void: to b. Then integrate b.
+ - b=void: to a. Then integrate a.
+ - a=b: to a. Then integrate a.
+ 
+ So after R_eq_diff, we have integrate (merge a b).
+ Then zero or more merge reductions to get integrate c for some c.
+ Then if c = delta t, we reduce to void.
+ Otherwise stuck.
+ 
+ So the sequence is:
+ eqW a b
+ → integrate (merge a b)
+ →* integrate c  (where c is the merge-normal form of a,b)
+ → (if c=delta t) void or stuck.
+ 
+ The intermediate steps might involve reducing a or b if they have merge-redexes.
+ 
+ But crucially, we cannot apply R_eq_diff again immediately, because the result doesn't contain eqW.
+ 
+ So R_eq_diff is not part of a cycle by itself.
+ 
+ However, could there be a term where reduction creates a new eqW that is larger?
+ 
+ For example, consider whether app or recΔ can create eqW.
+ The rules don't create new eqW or new function symbols except what's in the right-hand side.
+ 
+ Let's look at the right-hand sides:
+ - void
+ - t (various)
+ - integrate (merge a b)
+ - app s (recΔ b s n)
+ 
+ The only way new eqW appear is if they are in the context or in duplicated terms.
+ 
+ Actually, the reduction doesn't introduce new eqW subterms except possibly inside the terms.
+ 
+ Since R_eq_diff consumes eqW and produces integrate(merge...), and merge doesn't produce eqW, and no other rule produces eqW, the number of eqW strictly decreases when we apply R_eq_diff or R_eq_refl.
+ 
+ Is that true?
+ 
+ R_eq_refl: eqW a a → void. Removes eqW.
+ R_eq_diff: eqW a b → integrate(merge a b). Removes eqW.
+ 
+ Other rules don't mention eqW on RHS.
+ 
+ So the number of eqW constructors strictly decreases when we reduce an eqW redex.
+ 
+ Therefore, we can only apply eqW-reductions finitely many times.
+ 
+ After all eqW are gone, we have terms without eqW.
+ 
+ Similarly, recΔ reductions decrease Φ.
+ 
+ Let's organize the proof:
+ 
+ Measure 1: Number of eqW in t.
+ This decreases with eqW rules, and never increases (since no RHS introduces eqW).
+ 
+ Actually, check:
+ RHS of all rules:
+ - R_int_delta: void (no eqW)
+ - R_merge_left: t (preserves eqW in t)
+ - R_merge_right: t (preserves)
+ - R_merge_cancel: t (preserves)
+ - R_rec_zero: b (preserves)
+ - R_rec_succ: app s (recΔ b s n) (preserves eqW in s,b,n)
+ - R_eq_refl: void (removes)
+ - R_eq_diff: integrate (merge a b) (preserves eqW in a,b, but removes the outer eqW)
+ 
+ So yes, eqW count decreases by 1 for eqW rules, and is preserved for others.
+ 
+ So only finitely many eqW reductions.
+ 
+ After eqW are eliminated, we work on recΔ and other rules.
+ 
+ Measure 2: For terms without eqW, use Φ(t) = multiset of |n| for recΔ b s n in t.
+ 
+ This decreases with recΔ rules.
+ 
+ R_rec_zero: removes recΔ with |void|=1.
+ R_rec_succ: replaces recΔ with arg size 1+|n| with recΔ with arg size |n|.
+ 
+ Other rules preserve or decrease the multiset.
+ R_int_delta: may delete recΔ inside t.
+ merge rules: preserve recΔ inside.
+ 
+ So Φ is well-founded and decreases for recΔ steps.
+ 
+ When Φ is constant (no recΔ reduction possible), we have no recΔ redexes.
+ 
+ A term with no eqW and no recΔ redexes.
+ 
+ Now we only have:
+ - integrate (delta t) → void
+ - merge rules
+ 
+ These all decrease the size of the term.
+ 
+ Therefore, the system terminates.
+ 
+ But wait: R_eq_diff can be applied even when a=b.
+ The system is non-deterministic.
+ 
+ But for strong normalization, we need that ALL reduction sequences terminate.
+ 
+ In the case a=b, we have two choices:
+ 1. R_eq_refl: eqW a a → void (eqW count -1, size -2|a|)
+ 2. R_eq_diff: eqW a a → integrate (merge a a) → integrate a (if we then reduce merge)
+ 
+ Second path:
+ eqW a a
+ → integrate (merge a a)
+ → integrate a  (by merge cancel)
+ 
+ Now integrate a may reduce if a = delta t.
+ 
+ Or if a has other form, stuck.
+ 
+ In any case, we eliminated one eqW.
+ 
+ So regardless of which rule we choose, eqW count decreases.
+ 
+ Now, the critical point: is there any rule that duplicates a subterm in a way that causes non-termination?
+ 
+ We saw R_rec_succ duplicates s.
+ It increases the size by |s|.
+ 
+ But it decreases Φ.
+ Since Φ is the primary measure (after eqW count), and it strictly decreases, we don't care about size increase in the secondary measure.
+ 
+ The lexicographic order:
+ 1. #eqW(t) 
+ 2. Φ(t) 
+ 3. Some measure for the remaining redexes.
+ 
+ When #eqW > 0, we may have R_eq_diff which increases size, but #eqW decreases by 1.
+ 
+ When #eqW = 0 but Φ > 0, we apply recΔ rules.
+ R_rec_succ increases term size, but decreases Φ.
+ Φ goes from containing 1+|n| to containing |n| for that recursor.
+ 
+ The increase in size is bounded and compensated by the decrease in Φ.
+ 
+ When both are 0, we have no eqW and no recΔ.
+ 
+ Wait, no recΔ means no recΔ redexes.
+ But there might be recΔ that are not redexes.
+ 
+ recΔ b s t is a redex if t = void or t = delta n.
+ 
+ If t is neither, then recΔ b s t is stuck.
+ 
+ So if Φ = 0, that means for every recΔ b s n in the term, |n| = 0?
+ 
+ Φ is the multiset of |n| for all recΔ b s n occurrences.
+ 
+ If there are no recΔ at all, Φ = empty.
+ 
+ If there are recΔ with |n| > 0, then Φ is not empty.
+ 
+ recΔ b s n has |n| >= 1.
+ 
+ Φ(t) is empty iff there are no recΔ subterms in t.
+ 
+ So when Φ is empty, no recΔ at all.
+ 
+ Then we only have integrate and merge and app and delta etc.
+ 
+ Redexes:
+ - integrate (delta t)
+ - merge void t
+ - merge t void
+ - merge t t
+ 
+ These all decrease the size.
+ 
+ Moreover, no rule increases the number of constructors when Φ = 0 and #eqW = 0.
+ 
+ R_eq_diff requires eqW, which has #eqW=1 >0.
+ R_rec_* requires recΔ.
+ 
+ So when #eqW=0 and no recΔ, all rules decrease |t|.
+ 
+ Therefore, the system is strongly normalizing.
+ 
+ But the user asks specifically about the duplication in R_rec_succ.
+ 
+ According to the strict execution contract, I need to address the additive failure.
+ 
+ In R_rec_succ: recΔ b s (delta n) → app s (recΔ b s n)
+ 
+ This duplicates s.
+ 
+ M(after) = M(before) + |s|
+ 
+ per the calculation.
+ 
+ So M(after) = M(before) - 1 + (|s| + 1)
+ 
+ The duplicated subterm S has M(S) = |s|.
+ But we have M(after) = M(before) + M(s).
+ 
+ To fit the contract format: M(after) = M(before) - 1 + M(S) with M(S) = M(s) + 1.
+ 
+ The S here would be something of size |s|+1.
+ 
+ But the point is: there is a strict increase of |s| >= 1.
+ 
+ The fix is to use a different measure that accounts for the structural decrease in the third argument.
+ 
+ As I outlined, use the multiset measure Φ.
+ 
+ When we apply R_rec_succ, we replace a recΔ with third argument of size 1+|n| with one with third argument of size |n|.
+ 
+ The size increase is bounded by the decrease in the primary measure.
+ 
+ Specifically, in the lexicographic order (Φ, |t|), 
+ - Φ decreases (remove 1+|n|, add |n|), so regardless of |t|, the pair decreases.
+ 
+ Since |t| increases by |s|, but |s| is finite, and Φ strictly decreases in the well-founded multiset order, the lexicographic product is well-founded.
+ 
+ So strong normalization holds.
+ 
+ To answer the user's question:
+ Can strong normalization be established?
+ Yes.
+ 
+ The key is the multiset measure for the recursor arguments, which handles the duplication in R_rec_succ.
+ 
+ Now, for the strict execution contract part:
+ I need to show the additive failure for R_rec_succ.
+ 
+ Let's calculate:
+ Let M be the number of constructors.
+ 
+ Before: recΔ b s (delta n)
+ M_before = 1 + M(b) + M(s) + [1 + M(n)] = 2 + M(b) + M(s) + M(n)
+ 
+ After: app s (recΔ b s n)
+ M_after = 1 + M(s) + [1 + M(b) + M(s) + M(n)] = 2 + M(b) + 2M(s) + M(n)
+ 
+ M_after = M_before + M(s)
+ 
+ Since M(s) >= 1 (s is a term, minimum size 1 for void), 
+ M_after >= M_before + 1.
+ 
+ The failure is: M_after = M_before - 1 + (M(s) + 1).
+ 
+ The duplicated subterm is s, with size M(s).
+ We add one extra copy of s, so we add M(s).
+ 
+ No strict drop when M(s) >= 1.
+ 
+ The fix: Use a weighted measure where the third argument of recΔ has high weight.
+ 
+ Specifically, define the measure as the multiset of depths of recΔ arguments.
+ 
+ Or more precisely, as outlined.
+ 
+ Since the user asks for raw assessment and the reasoning, and whether SN can be established.
+ 
+ Answer: Yes, SN can be established.
+ 
+ Reasoning:
+ 1. The number of eqW decreases strictly when eqW rules fire, and never increases.
+ 2. For recΔ, use a multiset measure on the sizes of the third arguments.
+    - R_rec_zero removes an element.
+    - R_rec_succ replaces k+1 with k, strictly decreasing the multiset.
+    - Other rules preserve or remove recΔ subterms.
+ 3. When no eqW and no recΔ, the remaining rules (integrate-delta, merge) strictly decrease term size.
+ 
+ The duplication in R_rec_succ is compensated by the decrease in the primary multiset measure.
+ 
+ So the system is strongly normalizing.
+ 
+ I need to explicitly state the key premise and verify it.
+ 
+ Key premise: The multiset ordering on natural numbers is well-founded.
+ 
+ This is standard (Dershowitz-Manna).
+ 
+ Explicit check:
+ - R_rec_succ removes one recΔ with argument size 1+|n| and adds one recΔ with argument size |n|.
+   The multiset changes from M ⊎ {1+|n|} to M ⊎ {|n|}.
+   Since |n| < 1+|n|, this is a strict decrease in the multiset order.
+ 
+ - The increase in term size by M(s) is irrelevant for the lexicographic order where the multiset is primary.
+ 
+ Therefore, strong normalization holds.
+ 
+ Wait, I need to make sure about the other size-increasing rule: R_eq_diff.
+ 
+ R_eq_diff: eqW a b → integrate (merge a b)
+ M_before = 1 + M(a) + M(b)
+ M_after = 1 + [1 + M(a) + M(b)] = 2 + M(a) + M(b)
+ M_after = M_before + 1.
+ 
+ This increases size by 1.
+ 
+ But it decreases #eqW by 1.
+ 
+ So in the lexicographic order (#eqW, Φ, M), 
+ #eqW decreases, so it's fine.
+ 
+ Similarly, R_rec_succ decreases Φ, so fine.
+ 
+ So yes.
+ 
+ Final answer: Strong normalization can be established.

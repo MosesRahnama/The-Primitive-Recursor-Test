@@ -1,0 +1,503 @@
+Let me analyze this rewrite system for strong normalization.
+
+The system has:
+- A type `Trace` with constructors: `void`, `delta`, `integrate`, `merge`, `app`, `recΔ`, `eqW`
+- Rewrite rules defined by `Step`:
+
+1. `R_int_delta`: `integrate (delta t) → void`
+2. `R_merge_void_left`: `merge void t → t`
+3. `R_merge_void_right`: `merge t void → t`
+4. `R_merge_cancel`: `merge t t → t`
+5. `R_rec_zero`: `recΔ b s void → b`
+6. `R_rec_succ`: `recΔ b s (delta n) → app s (recΔ b s n)`
+7. `R_eq_refl`: `eqW a a → void`
+8. `R_eq_diff`: `eqW a b → integrate (merge a b)`
+
+Let me check for potential non-termination:
+
+First, let me look at `R_eq_diff`: `eqW a b → integrate (merge a b)`. This creates an `integrate` and a `merge`. Can the result of this rule trigger further rewrites that loop?
+
+The `integrate` can only reduce if its argument is `delta t` (rule 1). The `merge` can reduce if one argument is `void` (rules 2, 3) or if both arguments are equal (rule 4).
+
+Let me check `R_rec_succ`: `recΔ b s (delta n) → app s (recΔ b s n)`. This creates `app s (...)`. But there are NO rules for reducing `app`. So `app` is a normal form constructor (no rule has `app` on the left-hand side of a reduction at the pattern level, except... let me check).
+
+Wait, looking at the rules again:
+- No rule matches `app` at the root. So `app` terms don't reduce at the root.
+- No rule matches `delta` at the root.
+- No rule matches `integrate` at the root unless the argument is `delta t`.
+- No rule matches `merge` at the root unless arguments are `void` or identical.
+- No rule matches `recΔ` at the root unless the third argument is `void` or `delta n`.
+- No rule matches `eqW` at the root.
+
+Wait, but these are one-step reductions. We need to think about whether there's a compatible closure (context closure) - i.e., can we reduce subterms? The `Step` relation as defined is just the one-step relation at the root. For strong normalization of the full rewrite system, we'd need to consider the compatible closure (reduction under contexts).
+
+Actually, looking at the Lean definition, `Step` is just defined as an inductive proposition with those specific constructors. There's no context closure defined. So `Step` only applies at the root of the term.
+
+But typically when we ask about strong normalization of a rewrite system, we mean the compatible closure of these rules. Let me consider both interpretations.
+
+**Interpretation 1: Step as defined (root-only reductions)**
+
+If we only consider root reductions, then every term reduces in at most one step (since the left-hand sides are all distinct patterns, and each rule applies at most once at the root). So there are no infinite reduction sequences. Strong normalization is trivially true.
+
+Wait, actually, can multiple rules apply? Let's check:
+- `merge void t` matches `R_merge_void_left`. If `t = void`, it also matches `R_merge_void_right` and `R_merge_cancel`. But each gives a result in one step, and the results (`void`, `void`, `void`) are in normal form.
+- `eqW a a` matches both `R_eq_refl` and `R_eq_diff`. `R_eq_refl` gives `void`. `R_eq_diff` gives `integrate (merge a a)`. The latter can then reduce: `merge a a → a` (by `R_merge_cancel`), giving `integrate a`. If `a` is `delta t`, then `integrate (delta t) → void`. Otherwise `integrate a` is in normal form.
+
+So even with non-determinism, root-only reductions terminate quickly.
+
+**Interpretation 2: Compatible closure (reductions under contexts)**
+
+This is the standard interpretation. Let me think about whether the compatible closure is strongly normalizing.
+
+Let me try to find a potential infinite reduction sequence.
+
+Consider `eqW a b → integrate (merge a b)`. If `a` and `b` are different, we get `integrate (merge a b)`. This doesn't reduce further at the root unless `merge a b` is of the form `delta t`, which it's not (it's `merge a b`). So at the root, this is stuck. But subterms `a` and `b` might reduce.
+
+Consider `recΔ b s (delta n) → app s (recΔ b s n)`. If `n` is `delta m`, then `recΔ b s n` can further reduce: `recΔ b s (delta m) → app s (recΔ b s m)`. But this requires `n` to be of the form `delta m`, and each step peels off one `delta`. Since the term is finite, this process terminates.
+
+What about `eqW a b` where `a` and `b` are the same syntactically? Then we can apply either `R_eq_refl` or `R_eq_diff`. If we always choose `R_eq_diff`, we get `integrate (merge a a)`, which reduces to `integrate a` (by `R_merge_cancel`). This is a finite reduction.
+
+Let me think more carefully. Is there any way to create a loop?
+
+Can any rule produce a term that contains a redex that reduces to something containing the original redex?
+
+Let me trace the sizes or use a termination measure.
+
+Let me try to assign a measure to each term. I'll use a simple approach: try to find a well-founded ordering.
+
+Let me define a measure based on the structure of terms.
+
+For each constructor, let me assign a "weight" or think about how rules change the term.
+
+Rule 1: `integrate (delta t) → void`. The LHS has `integrate` and `delta` nodes. The RHS is just `void`. This decreases the size.
+
+Rule 2: `merge void t → t`. Removes `merge` and `void`. Decreases size.
+
+Rule 3: `merge t void → t`. Removes `merge` and `void`. Decreases size.
+
+Rule 4: `merge t t → t`. Removes `merge` and one copy of `t`. Decreases size.
+
+Rule 5: `recΔ b s void → b`. Removes `recΔ`, `s`, and `void`. Decreases size (well, `s` is discarded).
+
+Rule 6: `recΔ b s (delta n) → app s (recΔ b s n)`. 
+LHS size: 1 (recΔ) + size(b) + size(s) + 1 (delta) + size(n) = size(b) + size(s) + size(n) + 2
+RHS size: 1 (app) + size(s) + 1 (recΔ) + size(b) + size(s) + size(n) = size(b) + 2*size(s) + size(n) + 2
+
+So the RHS is larger by `size(s)`. This rule COPIES `s`. This is potentially dangerous for termination!
+
+If `s` contains redexes, those redexes are duplicated. But does this lead to non-termination?
+
+The key question is: can `recΔ` keep generating more and more copies?
+
+For `recΔ b s (delta n)` to apply, the third argument must be `delta n`. After one step, we get `app s (recΔ b s n)`. Now, for `recΔ b s n` to reduce again, `n` must be of the form `delta m`. So the number of `recΔ` reductions is bounded by the number of nested `delta`s in the original third argument.
+
+Wait, but what if `n` itself reduces to something with a `delta`? In the compatible closure, we could reduce `n` first.
+
+Let me think about this more carefully. Consider:
+
+`recΔ b s (delta n)` where `n` is a term that can reduce to `delta m`.
+
+For example, can `n` reduce to something with more `delta`s than it started with?
+
+Let me check: which rules produce `delta`?
+- None of the rules have `delta` on the RHS!
+
+Rule 1: RHS is `void`
+Rule 2: RHS is `t`
+Rule 3: RHS is `t`
+Rule 4: RHS is `t`
+Rule 5: RHS is `b`
+Rule 6: RHS is `app s (recΔ b s n)` - contains `app`, `recΔ`, `s`, `b`, `n` but no new `delta`
+Rule 7: RHS is `void`
+Rule 8: RHS is `integrate (merge a b)` - no `delta`
+
+So NO rule introduces a new `delta` constructor! This means the number of `delta` constructors in any term can only decrease or stay the same during reduction.
+
+Similarly, let me check which rules introduce `recΔ`:
+- Rule 6: `recΔ b s (delta n) → app s (recΔ b s n)`. The RHS contains `recΔ b s n`, which has one `recΔ`. The LHS also has one `recΔ`. So the number of `recΔ` constructors doesn't increase.
+
+Wait, but what about the compatible closure? If we reduce inside a subterm, could a `recΔ` appear? No, because no rule produces a `recΔ` on the RHS except rule 6, which just preserves the existing one.
+
+Actually wait - rule 6 produces `recΔ b s n` where the LHS had `recΔ b s (delta n)`. So the `recΔ` is preserved but its third argument changes from `delta n` to `n`. The third argument loses a `delta`.
+
+So the number of `delta` constructors in the third argument of `recΔ` strictly decreases with each application of rule 6. And since no rule creates new `delta` constructors, the total number of rule 6 applications in any reduction sequence is bounded.
+
+Let me think about whether we can formalize this into a termination proof.
+
+Let me try a lexicographic measure:
+- Count of `delta` constructors in the term
+- Size of the term (total number of constructors)
+
+For each rule:
+1. `integrate (delta t) → void`: delta count decreases by 1 (or more if t has deltas, but at least 1 is removed from `delta t`). Wait, `delta t` contains one `delta` plus whatever is in `t`. The RHS `void` has 0 deltas. So delta count decreases by at least 1. ✓
+2. `merge void t → t`: delta count stays the same or decreases (void has no deltas, t is preserved). Size decreases. ✓
+3. `merge t void → t`: Same as above. ✓
+4. `merge t t → t`: delta count could decrease (if t has deltas, we go from 2*count(t) to count(t)). Size decreases. ✓
+5. `recΔ b s void → b`: delta count could decrease (we lose deltas in s). Size decreases. ✓
+6. `recΔ b s (delta n) → app s (recΔ b s n)`: 
+   - Delta count: LHS has deltas in b, s, and (delta n) = 1 + deltas(n). RHS has deltas in s (twice), b, and n.
+   Wait: LHS deltas = deltas(b) + deltas(s) + 1 + deltas(n)
+   RHS deltas = deltas(s) + deltas(b) + deltas(s) + deltas(n) = deltas(b) + 2*deltas(s) + deltas(n)
+   
+   So delta change = RHS - LHS = deltas(s) - 1.
+   
+   If deltas(s) ≥ 1, the delta count INCREASES! This is a problem for this measure.
+
+Hmm, so the delta count can increase if `s` contains deltas. Let me reconsider.
+
+But wait - even though deltas can increase, the `delta` that was in the third argument of `recΔ` is consumed. And no new `delta` is created in the third argument. Let me think about a more refined measure.
+
+Actually, let me reconsider. The issue is that `s` is duplicated, and if `s` contains `delta`s, the total count of `delta`s increases. But the `delta`s in `s` are not in the third argument of `recΔ`, so they can't trigger rule 6 directly.
+
+Let me think about what can trigger rule 6: `recΔ b s (delta n)`. The third argument must be `delta n`. 
+
+Can the duplication of `s` lead to more rule 6 applications? Only if `s` contains `recΔ` with a `delta` in the third argument. But even then, those `recΔ`s were already present in the original term (just one copy instead of two).
+
+Let me try a different approach. Let me think about the maximum length of a reduction sequence.
+
+Actually, let me try to use a more sophisticated measure. Let me interpret terms in a well-founded algebra.
+
+Let me assign to each term a value in some well-founded domain.
+
+Let me try natural numbers with a polynomial interpretation.
+
+Let:
+- `⟦void⟧ = 1`
+- `⟦delta(t)⟧ = ⟦t⟧ + 1`
+- `⟦integrate(t)⟧ = ⟦t⟧ + 1`
+- `⟦merge(a, b)⟧ = ⟦a⟧ + ⟦b⟧ + 1`
+- `⟦app(a, b)⟧ = ⟦a⟧ + ⟦b⟧ + 1`
+- `⟦recΔ(b, s, n)⟧ = ⟦b⟧ + ⟦s⟧ + ⟦n⟧ + 1` (or something more complex)
+- `⟦eqW(a, b)⟧ = ⟦a⟧ + ⟦b⟧ + 1`
+
+Let me check the rules:
+
+1. `integrate (delta t) → void`:
+   LHS = ⟦delta(t)⟧ + 1 = ⟦t⟧ + 2
+   RHS = 1
+   Need: ⟦t⟧ + 2 > 1, which is true since ⟦t⟧ ≥ 1. ✓
+
+2. `merge void t → t`:
+   LHS = 1 + ⟦t⟧ + 1 = ⟦t⟧ + 2
+   RHS = ⟦t⟧
+   Need: ⟦t⟧ + 2 > ⟦t⟧. ✓
+
+3. `merge t void → t`: Same as 2. ✓
+
+4. `merge t t → t`:
+   LHS = ⟦t⟧ + ⟦t⟧ + 1 = 2⟦t⟧ + 1
+   RHS = ⟦t⟧
+   Need: 2⟦t⟧ + 1 > ⟦t⟧, i.e., ⟦t⟧ + 1 > 0. ✓
+
+5. `recΔ b s void → b`:
+   LHS = ⟦b⟧ + ⟦s⟧ + 1 + 1 = ⟦b⟧ + ⟦s⟧ + 2
+   RHS = ⟦b⟧
+   Need: ⟦s⟧ + 2 > 0. ✓
+
+6. `recΔ b s (delta n) → app s (recΔ b s n)`:
+   LHS = ⟦b⟧ + ⟦s⟧ + ⟦delta(n)⟧ + 1 = ⟦b⟧ + ⟦s⟧ + ⟦n⟧ + 2
+   RHS = ⟦s⟧ + ⟦recΔ(b, s, n)⟧ + 1 = ⟦s⟧ + ⟦b⟧ + ⟦s⟧ + ⟦n⟧ + 1 + 1 = ⟦b⟧ + 2⟦s⟧ + ⟦n⟧ + 2
+   
+   Need: ⟦b⟧ + ⟦s⟧ + ⟦n⟧ + 2 > ⟦b⟧ + 2⟦s⟧ + ⟦n⟧ + 2
+   i.e., 0 > ⟦s⟧
+   
+   But ⟦s⟧ ≥ 1, so this FAILS! ✗
+
+So the simple polynomial interpretation doesn't work for rule 6 because `s` is duplicated.
+
+Let me try to make the interpretation of `recΔ` depend more heavily on the third argument.
+
+Let `⟦recΔ(b, s, n)⟧ = (⟦n⟧ + 1) * (⟦b⟧ + ⟦s⟧ + 1)` or something multiplicative.
+
+Actually, let me try:
+`⟦recΔ(b, s, n)⟧ = ⟦n⟧ * (⟦s⟧ + 1) + ⟦b⟧ + 1`
+
+Check rule 6:
+LHS = (⟦n⟧ + 1) * (⟦s⟧ + 1) + ⟦b⟧ + 1
+    = ⟦n⟧ * ⟦s⟧ + ⟦n⟧ + ⟦s⟧ + 1 + ⟦b⟧ + 1
+    = ⟦n⟧ * ⟦s⟧ + ⟦n⟧ + ⟦s⟧ + ⟦b⟧ + 2
+
+RHS = ⟦app(s, recΔ(b, s, n))⟧ = ⟦s⟧ + ⟦recΔ(b, s, n)⟧ + 1
+    = ⟦s⟧ + ⟦n⟧ * (⟦s⟧ + 1) + ⟦b⟧ + 1 + 1
+    = ⟦s⟧ + ⟦n⟧ * ⟦s⟧ + ⟦n⟧ + ⟦b⟧ + 2
+
+LHS - RHS = (⟦n⟧ * ⟦s⟧ + ⟦n⟧ + ⟦s⟧ + ⟦b⟧ + 2) - (⟦s⟧ + ⟦n⟧ * ⟦s⟧ + ⟦n⟧ + ⟦b⟧ + 2)
+          = 0
+
+That gives equality, not strict decrease. Let me adjust.
+
+Let me try `⟦recΔ(b, s, n)⟧ = (⟦n⟧ + 1) * (⟦s⟧ + 1) + ⟦b⟧`
+
+Rule 6:
+LHS = (⟦n⟧ + 2) * (⟦s⟧ + 1) + ⟦b⟧
+    = ⟦n⟧*⟦s⟧ + ⟦n⟧ + 2⟦s⟧ + 2 + ⟦b⟧
+
+RHS = ⟦s⟧ + (⟦n⟧ + 1) * (⟦s⟧ + 1) + ⟦b⟧ + 1
+    = ⟦s⟧ + ⟦n⟧*⟦s⟧ + ⟦n⟧ + ⟦s⟧ + 1 + ⟦b⟧ + 1
+    = ⟦n⟧*⟦s⟧ + ⟦n⟧ + 2⟦s⟧ + 2 + ⟦b⟧
+
+LHS - RHS = 0. Still equality!
+
+The issue is that `recΔ b s (delta n) → app s (recΔ b s n)` essentially replaces `delta n` with `n` in the third argument and adds one copy of `s`. So the "cost" of the third argument decreasing by 1 delta should compensate for the added `s`.
+
+Let me try `⟦recΔ(b, s, n)⟧ = ⟦n⟧ * ⟦s⟧ + ⟦b⟧ + ⟦n⟧ + 1`
+
+Actually, let me think about this differently. 
+
+Rule 6 says: `recΔ b s (delta n) → app s (recΔ b s n)`.
+
+If I want a measure `f(b, s, n)` for `recΔ b s n` such that:
+`f(b, s, delta n) > f(s, f(b, s, n))` where the outer function represents `app`.
+
+Wait, let me use an interpretation where:
+- `⟦app(x, y)⟧ = ⟦x⟧ + ⟦y⟧`
+- `⟦delta(t)⟧ = ⟦t⟧ + c` for some constant c ≥ 1
+
+Then rule 6 requires:
+`f(b, s, n + c) > s + f(b, s, n)`
+i.e., `f(b, s, n + c) - f(b, s, n) > s`
+
+If `f(b, s, n) = n * s + b` (using the interpretations), then:
+`f(b, s, n + c) - f(b, s, n) = (n + c) * s + b - (n * s + b) = c * s`
+
+We need `c * s > s`, which means `c > 1`, i.e., `c ≥ 2`.
+
+Let me try this interpretation:
+- `⟦void⟧ = 1`
+- `⟦delta(t)⟧ = ⟦t⟧ + 2`
+- `⟦integrate(t)⟧ = ⟦t⟧ + 1`
+- `⟦merge(a, b)⟧ = ⟦a⟧ + ⟦b⟧`
+- `⟦app(a, b)⟧ = ⟦a⟧ + ⟦b⟧`
+- `⟦recΔ(b, s, n)⟧ = ⟦n⟧ * ⟦s⟧ + ⟦b⟧ + ⟦n⟧`
+- `⟦eqW(a, b)⟧ = ⟦a⟧ + ⟦b⟧ + 1`
+
+Let me check all rules:
+
+First, let me establish that all interpretations are ≥ 1:
+- `⟦void⟧ = 1 ≥ 1` ✓
+- `⟦delta(t)⟧ = ⟦t⟧ + 2 ≥ 3` ✓
+- `⟦integrate(t)⟧ = ⟦t⟧ + 1 ≥ 2` ✓
+- `⟦merge(a, b)⟧ = ⟦a⟧ + ⟦b⟧ ≥ 2` ✓
+- `⟦app(a, b)⟧ = ⟦a⟧ + ⟦b⟧ ≥ 2` ✓
+- `⟦recΔ(b, s, n)⟧ = ⟦n⟧ * ⟦s⟧ + ⟦b⟧ + ⟦n⟧ ≥ 1*1 + 1 + 1 = 3` ✓
+- `⟦eqW(a, b)⟧ = ⟦a⟧ + ⟦b⟧ + 1 ≥ 3` ✓
+
+Good, all ≥ 1.
+
+Now check rules:
+
+1. `integrate (delta t) → void`:
+   LHS = ⟦delta(t)⟧ + 1 = ⟦t⟧ + 3
+   RHS = 1
+   ⟦t⟧ + 3 > 1 since ⟦t⟧ ≥ 1. ✓
+
+2. `merge void t → t`:
+   LHS = 1 + ⟦t⟧
+   RHS = ⟦t⟧
+   1 + ⟦t⟧ > ⟦t⟧. ✓
+
+3. `merge t void → t`:
+   Same as 2. ✓
+
+4. `merge t t → t`:
+   LHS = ⟦t⟧ + ⟦t⟧ = 2⟦t⟧
+   RHS = ⟦t⟧
+   2⟦t⟧ > ⟦t⟧ since ⟦t⟧ ≥ 1. ✓
+
+5. `recΔ b s void → b`:
+   LHS = ⟦void⟧ * ⟦s⟧ + ⟦b⟧ + ⟦void⟧ = 1 * ⟦s⟧ + ⟦b⟧ + 1 = ⟦s⟧ + ⟦b⟧ + 1
+   RHS = ⟦b⟧
+   ⟦s⟧ + ⟦b⟧ + 1 > ⟦b⟧ since ⟦s⟧ ≥ 1. ✓
+
+6. `recΔ b s (delta n) → app s (recΔ b s n)`:
+   LHS = ⟦delta(n)⟧ * ⟦s⟧ + ⟦b⟧ + ⟦delta(n)⟧
+       = (⟦n⟧ + 2) * ⟦s⟧ + ⟦b⟧ + ⟦n⟧ + 2
+       = ⟦n⟧*⟦s⟧ + 2⟦s⟧ + ⟦b⟧ + ⟦n⟧ + 2
+   
+   RHS = ⟦s⟧ + ⟦recΔ(b, s, n)⟧
+       = ⟦s⟧ + ⟦n⟧*⟦s⟧ + ⟦b⟧ + ⟦n⟧
+       = ⟦n⟧*⟦s⟧ + ⟦s⟧ + ⟦b⟧ + ⟦n⟧
+   
+   LHS - RHS = 2⟦s⟧ + 2 - ⟦s⟧ = ⟦s⟧ + 2 ≥ 3 > 0. ✓
+
+7. `eqW a a → void`:
+   LHS = ⟦a⟧ + ⟦a⟧ + 1 = 2⟦a⟧ + 1
+   RHS = 1
+   2⟦a⟧ + 1 > 1 since ⟦a⟧ ≥ 1. ✓
+
+8. `eqW a b → integrate (merge a b)`:
+   LHS = ⟦a⟧ + ⟦b⟧ + 1
+   RHS = ⟦merge(a, b)⟧ + 1 = ⟦a⟧ + ⟦b⟧ + 1
+   
+   LHS - RHS = 0. NOT STRICTLY DECREASING! ✗
+
+Hmm, rule 8 fails. Let me adjust.
+
+Let me change `⟦eqW(a, b)⟧ = ⟦a⟧ + ⟦b⟧ + 2`:
+
+8. `eqW a b → integrate (merge a b)`:
+   LHS = ⟦a⟧ + ⟦b⟧ + 2
+   RHS = ⟦a⟧ + ⟦b⟧ + 1
+   LHS - RHS = 1 > 0. ✓
+
+But let me re-check rule 7 with this change:
+
+7. `eqW a a → void`:
+   LHS = 2⟦a⟧ + 2
+   RHS = 1
+   Still fine. ✓
+
+Now I need to make sure the interpretation is monotonic in each argument (which is required for the compatible closure to be compatible with the ordering).
+
+Let me check monotonicity:
+- `⟦delta(t)⟧ = ⟦t⟧ + 2`: monotone in t ✓
+- `⟦integrate(t)⟧ = ⟦t⟧ + 1`: monotone in t ✓
+- `⟦merge(a, b)⟧ = ⟦a⟧ + ⟦b⟧`: monotone in a, b ✓
+- `⟦app(a, b)⟧ = ⟦a⟧ + ⟦b⟧`: monotone in a, b ✓
+- `⟦recΔ(b, s, n)⟧ = ⟦n⟧ * ⟦s⟧ + ⟦b⟧ + ⟦n⟧`: 
+  - monotone in b ✓ (additive)
+  - monotone in s ✓ (multiplied by ⟦n⟧ ≥ 1)
+  - monotone in n ✓ (multiplied by ⟦s⟧ ≥ 1, plus additive)
+- `⟦eqW(a, b)⟧ = ⟦a⟧ + ⟦b⟧ + 2`: monotone in a, b ✓
+
+All monotone! And all interpretations give values ≥ 1.
+
+Wait, I need to double-check that the interpretation maps into natural numbers (or some well-founded set). Since all base cases give natural numbers and all operations are addition and multiplication, yes, the interpretations are natural numbers.
+
+And I need the ordering to be `>` on natural numbers, which is well-founded.
+
+Let me re-verify all rules one more time carefully:
+
+Definitions:
+- `⟦void⟧ = 1`
+- `⟦delta(t)⟧ = ⟦t⟧ + 2`
+- `⟦integrate(t)⟧ = ⟦t⟧ + 1`
+- `⟦merge(a, b)⟧ = ⟦a⟧ + ⟦b⟧`
+- `⟦app(a, b)⟧ = ⟦a⟧ + ⟦b⟧`
+- `⟦recΔ(b, s, n)⟧ = ⟦n⟧ * ⟦s⟧ + ⟦b⟧ + ⟦n⟧`
+- `⟦eqW(a, b)⟧ = ⟦a⟧ + ⟦b⟧ + 2`
+
+All values are ≥ 1 (since the minimum is `⟦void⟧ = 1`, and all operations preserve ≥ 1).
+
+Rule 1: `integrate (delta t) → void`
+LHS = ⟦delta(t)⟧ + 1 = (⟦t⟧ + 2) + 1 = ⟦t⟧ + 3 ≥ 4
+RHS = 1
+LHS > RHS ✓
+
+Rule 2: `merge void t → t`
+LHS = ⟦void⟧ + ⟦t⟧ = 1 + ⟦t⟧
+RHS = ⟦t⟧
+LHS - RHS = 1 > 0 ✓
+
+Rule 3: `merge t void → t`
+Same as Rule 2. ✓
+
+Rule 4: `merge t t → t`
+LHS = ⟦t⟧ + ⟦t⟧ = 2⟦t⟧ ≥ 2
+RHS = ⟦t⟧ ≥ 1
+LHS - RHS = ⟦t⟧ ≥ 1 > 0 ✓
+
+Rule 5: `recΔ b s void → b`
+LHS = ⟦void⟧ * ⟦s⟧ + ⟦b⟧ + ⟦void⟧ = 1 * ⟦s⟧ + ⟦b⟧ + 1 = ⟦s⟧ + ⟦b⟧ + 1
+RHS = ⟦b⟧
+LHS - RHS = ⟦s⟧ + 1 ≥ 2 > 0 ✓
+
+Rule 6: `recΔ b s (delta n) → app s (recΔ b s n)`
+LHS = ⟦delta(n)⟧ * ⟦s⟧ + ⟦b⟧ + ⟦delta(n)⟧
+    = (⟦n⟧ + 2) * ⟦s⟧ + ⟦b⟧ + (⟦n⟧ + 2)
+    = ⟦n⟧*⟦s⟧ + 2⟦s⟧ + ⟦b⟧ + ⟦n⟧ + 2
+
+RHS = ⟦app(s, recΔ(b, s, n))⟧
+    = ⟦s⟧ + ⟦recΔ(b, s, n)⟧
+    = ⟦s⟧ + (⟦n⟧ * ⟦s⟧ + ⟦b⟧ + ⟦n⟧)
+    = ⟦n⟧*⟦s⟧ + ⟦s⟧ + ⟦b⟧ + ⟦n⟧
+
+LHS - RHS = (⟦n⟧*⟦s⟧ + 2⟦s⟧ + ⟦b⟧ + ⟦n⟧ + 2) - (⟦n⟧*⟦s⟧ + ⟦s⟧ + ⟦b⟧ + ⟦n⟧)
+          = 2⟦s⟧ + 2 - ⟦s⟧
+          = ⟦s⟧ + 2 ≥ 3 > 0 ✓
+
+Rule 7: `eqW a a → void`
+LHS = ⟦a⟧ + ⟦a⟧ + 2 = 2⟦a⟧ + 2 ≥ 4
+RHS = 1
+LHS > RHS ✓
+
+Rule 8: `eqW a b → integrate (merge a b)`
+LHS = ⟦a⟧ + ⟦b⟧ + 2
+RHS = ⟦integrate(merge(a, b))⟧ = ⟦merge(a, b)⟧ + 1 = ⟦a⟧ + ⟦b⟧ + 1
+LHS - RHS = 1 > 0 ✓
+
+All rules strictly decrease the interpretation!
+
+And the interpretation is monotone in all arguments, which means if a subterm decreases, the whole term decreases. This means the compatible closure of the rewrite relation is also strongly normalizing.
+
+Wait, I need to double check that `eqW a a` is handled correctly. Rule 7 says `eqW a a → void` where both arguments are the same term `a`. This is not a standard pattern matching rule since it requires the two arguments to be syntactically equal. In a term rewriting system, this is typically handled as: `eqW a b → void` with the side condition that `a = b`. But the way it's written in Lean, `∀ a, Step (eqW a a) void`, it's a valid rule.
+
+For the termination proof, the side condition doesn't matter - we just need to show that WHENEVER a rule applies, the measure decreases. And we showed that for rule 7, whenever it applies (i.e., when both arguments are equal), the measure decreases.
+
+Actually, wait. There's a subtlety with rule 7 and rule 8. If `a = b`, both rules could apply:
+- Rule 7: `eqW a a → void` (decreases measure)
+- Rule 8: `eqW a a → integrate (merge a a)` (decreases measure)
+
+Both decrease the measure, so regardless of which rule is chosen, the measure decreases.
+
+Actually, I need to think about whether rule 7 (`eqW a a → void`) is a proper rewrite rule. In standard term rewriting, a rule like `eqW a a → void` is not a standard rule because `a` appears twice on the LHS (it's not a linear rule). This makes it a "non-left-linear" rule. Non-left-linear rules can cause issues with some termination techniques, but polynomial interpretations handle them fine because we just evaluate the interpretation and check the inequality, which we did.
+
+Wait, actually, non-left-linear rules don't cause problems for polynomial interpretations. The interpretation is well-defined regardless of linearity. The key property is that the interpretation strictly decreases for every application of the rule, which we verified.
+
+So the conclusion is: YES, strong normalization CAN be established from the presented calculus alone, using a polynomial interpretation.
+
+Let me also verify that the interpretation gives values in a well-founded set. The values are all natural numbers (positive integers), and the strict order `>` on natural numbers is well-founded. So there can be no infinite descending chain of interpretations, which means there can be no infinite reduction sequence.
+
+Let me also make sure I haven't missed any subtlety about the compatible closure. In the compatible closure, we can reduce any subterm. The polynomial interpretation method guarantees that:
+1. Each rule application strictly decreases the interpretation of the redex.
+2. Monotonicity ensures that decreasing a subterm decreases the whole term.
+3. Therefore, any reduction step (at any position) strictly decreases the interpretation of the whole term.
+4. Since the interpretation maps to natural numbers, which are well-founded under `>`, there can be no infinite reduction sequence.
+
+This is a complete proof of strong normalization.
+
+Let me also reconsider: is there any hidden issue?
+
+One thing to check: does the `Step` relation as defined in Lean include context closure? Looking at the inductive definition:
+
+```
+inductive Step : Trace → Trace → Prop
+| R_int_delta : ∀ t, Step (integrate (delta t)) void
+| R_merge_void_left : ∀ t, Step (merge void t) t
+...
+```
+
+This defines `Step` as a direct one-step relation without context closure. So `Step` only applies at the root. But the question asks about "strong normalization of this system", which typically means the rewrite system including context closure (i.e., reducing subterms).
+
+If we consider just `Step` as defined (root-only), then strong normalization is trivial since every term reduces in at most one step to a normal form.
+
+If we consider the compatible closure (which is the standard meaning of "rewrite system"), then the polynomial interpretation proof above shows strong normalization.
+
+Either way, the answer is YES.
+
+Actually, wait. Let me re-read the Lean file more carefully. The `Step` relation only has those 8 constructors. There's no `cong` or context closure rule. So `Step` is literally just root-step.
+
+But even so, when we talk about "strong normalization of this system", we typically mean the rewrite system defined by these rules, which includes reduction under contexts. The polynomial interpretation proof handles this.
+
+Let me also think about whether there are any implicit assumptions. The question says "no variable binding, no external memory, and no imported object-level axioms beyond the rules shown there." So we're just working with the raw term rewriting system.
+
+My conclusion: YES, strong normalization can be established. The polynomial interpretation I found provides a proof.
+
+Let me write up a clean summary.
+
+Actually, let me reconsider rule 4 once more: `merge t t → t`. This requires both arguments to be syntactically identical. This is another non-left-linear rule. But as I discussed, polynomial interpretations handle this fine.
+
+Also, I want to make sure rule 8 doesn't have issues. `eqW a b → integrate (merge a b)`. Here `a` and `b` are arbitrary. This is a standard left-linear rule.
+
+Let me also check: is there any interaction between rules that could cause issues? For example, could rule 8 produce a term that triggers rule 1, which produces something that triggers rule 8 again?
+
+`eqW a b → integrate (merge a b)`
+If `merge a b` happens to be `delta t` (which it can't be, since `merge a b` has `merge` at the root, not `delta`), then `integrate (merge a b)` could reduce to `void`. But `merge a b` is never `delta t` since the root constructor is `merge`, not `delta`. So `integrate (merge a b)` is in normal form at the root (though subterms might reduce).
+
+Could subterm reductions change `merge a b` to `delta t`? Only if `a` or `b` reduces to something, but `merge a b` will always have `merge` at the root. So `integrate (merge a b)` will never reduce at the root via rule 1.
+
+So there's no loop through rules 8 and 1.
+
+Everything checks out. The system is strongly normalizing.
+
+Let me write my final answer.

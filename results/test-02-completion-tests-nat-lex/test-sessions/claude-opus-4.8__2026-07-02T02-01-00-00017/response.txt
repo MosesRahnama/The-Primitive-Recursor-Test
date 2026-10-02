@@ -1,0 +1,111 @@
+# Proof Skeleton for the Remaining Five Cases
+
+Below is a skeleton for each `sorry`, with the key observations about which measure component decreases and the recommended tactic structure. I analyze each case by first determining whether `kappa` strictly drops (use `drop_left`) or ties while `mu` drops (use `drop_right`).
+
+## Case 1: `R_int_delta` — `integrate (delta t) --> void`
+
+**Analysis:** `kappa (integrate (delta t)) = kappa t` and `kappa void = 0`. This does *not* generally drop kappa (e.g. `t = void`). But `mu void = 0 < 1 + mu t = mu (integrate (delta t))`. So `mu` strictly drops. For kappa, we need `kappa void = kappa (integrate (delta t))`, i.e. `0 = kappa t` — which is **false** in general. So kappa may drop or tie depending on `t`.
+
+**Skeleton (case split on whether kappa ties):**
+```lean
+| _, _, Step.R_int_delta t => by
+    -- kappa (integrate (delta t)) = kappa t ; kappa void = 0
+    by_cases hk : kappa t = 0
+    · -- kappa ties at 0, mu drops
+      have hkeq : kappa void = kappa (integrate (delta t)) := by simp [kappa, hk]
+      have hmu  : mu void < mu (integrate (delta t)) := by simp [mu]; omega
+      exact drop_right hmu hkeq
+    · -- kappa strictly drops: 0 < kappa t
+      have hkl : kappa void < kappa (integrate (delta t)) := by
+        simp [kappa]; omega
+      exact drop_left hkl
+```
+
+## Case 2: `R_rec_zero` — `recDelta b s void --> b`
+
+**Analysis:** Since third argument is `void` (not `delta _`), use the fallthrough `kappa` clause: `kappa (recDelta b s void) = max (max (kappa b) (kappa s)) (kappa void) = max (max (kappa b)(kappa s)) 0`. And `kappa b ≤` that. So kappa may tie or drop. `mu b < 3 + mu b + mu s + mu void`, so `mu` strictly drops.
+
+```lean
+| _, _, Step.R_rec_zero b s => by
+    -- kappa (recDelta b s void) = max (max (kappa b)(kappa s)) 0
+    by_cases hk : kappa b = kappa (recDelta b s void)
+    · have hmu : mu b < mu (recDelta b s void) := by simp [mu]; omega
+      exact drop_right hmu hk
+    · have hkl : kappa b < kappa (recDelta b s void) := by
+        -- kappa b ≤ max(max(kappa b)(kappa s)) 0, and ≠, so <
+        simp [kappa] at hk ⊢; omega
+      exact drop_left hkl
+```
+
+## Case 3: `R_rec_succ` — `recDelta b s (delta n) --> app s (recDelta b s n)`
+
+**Analysis:** This is the critical case where `kappa` must strictly drop.
+- LHS: `kappa (recDelta b s (delta n)) = max (max (kappa b)(kappa s)) (kappa n) + 1`.
+- RHS: `kappa (app s (recDelta b s n)) = max (kappa s) (kappa (recDelta b s n))`. Since third arg `n` is *not* `delta`-wrapped here (in the fallthrough clause), `kappa (recDelta b s n) = max (max (kappa b)(kappa s)) (kappa n)`.
+- Thus RHS `= max (kappa s) (max (max (kappa b)(kappa s)) (kappa n)) = max (max (kappa b)(kappa s)) (kappa n)`, which is exactly LHS `- 1`. So kappa strictly drops by exactly 1.
+
+**Note:** you must beware that `recDelta b s n`'s kappa uses the fallthrough clause only if `n` is not `delta _`. The `+1` on RHS could reappear if `n = delta m`. Handle with `cases n` or reason with a helper. Simplest robust route: case split on `n`.
+
+```lean
+| _, _, Step.R_rec_succ b s n => by
+    -- Goal: kappa strictly drops. LHS has the +1 from delta-wrapping.
+    have hkl : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+      rw [kappa_rec_delta, kappa_app]
+      -- Need: max (kappa s) (kappa (recDelta b s n)) < max (max (kappa b)(kappa s))(kappa n) + 1
+      -- Case on n to unfold kappa (recDelta b s n) correctly.
+      cases n with
+      | void        => simp [kappa]; omega
+      | delta m     => simp [kappa]; omega   -- here recDelta b s (delta m) gets its own +1
+      | integrate m => simp [kappa]; omega
+      | merge x y   => simp [kappa]; omega
+      | app x y     => simp [kappa]; omega
+      | recDelta x y z => simp [kappa]; omega
+      | eqW x y     => simp [kappa]; omega
+    exact drop_left hkl
+```
+If the uniform `simp [kappa]; omega` fails for the `delta m` subcase (where RHS regains a `+1`), verify that even then LHS `+1` still dominates: LHS = `max(...(kappa (delta m)=kappa m))+1`, RHS inner = `...+1`; the outer max keeps the bound `<`. Add explicit `Nat.max` rewriting (`Nat.max_le`, `Nat.le_max_left/right`, `Nat.max_comm/assoc`) if `omega` cannot see through `Nat.max`. A helper lemma may be cleaner:
+```lean
+    -- helper if needed:
+    have hmax : ∀ x y z : Nat, max y (max (max x y) z) = max (max x y) z := by
+      intro x y z; omega
+```
+
+## Case 4: `R_eq_refl` — `eqW a a --> void`
+
+**Analysis:** `kappa (eqW a a) = max (kappa a)(kappa a) = kappa a`, `kappa void = 0`. May tie or drop. `mu void = 0 < 4 + 2*mu a`, so mu drops.
+
+```lean
+| _, _, Step.R_eq_refl a => by
+    by_cases hk : kappa a = 0
+    · have hkeq : kappa void = kappa (eqW a a) := by simp [kappa, hk]
+      have hmu  : mu void < mu (eqW a a) := by simp [mu]; omega
+      exact drop_right hmu hkeq
+    · have hkl : kappa void < kappa (eqW a a) := by simp [kappa]; omega
+      exact drop_left hkl
+```
+
+## Case 5: `R_eq_diff` — `eqW a b --> integrate (merge a b)`
+
+**Analysis:** 
+- LHS: `kappa (eqW a b) = max (kappa a)(kappa b)`.
+- RHS: `kappa (integrate (merge a b)) = kappa (merge a b) = max (kappa a)(kappa b)`. **Kappa ties exactly.**
+- `mu`: RHS `= 1 + (2 + mu a + mu b) = 3 + mu a + mu b`; LHS `= 4 + mu a + mu b`. So `mu` drops by 1. Use `drop_right`.
+
+```lean
+| _, _, Step.R_eq_diff a b => by
+    have hk  : kappa (integrate (merge a b)) = kappa (eqW a b) := by
+      simp [kappa]
+    have hmu : mu (integrate (merge a b)) < mu (eqW a b) := by
+      simp [mu]; omega
+    exact drop_right hmu hk
+```
+
+## General Notes
+
+1. **`drop_left` vs `drop_right`:** Use `drop_left` only when kappa *strictly* decreases (Case 3 always; Cases 1,2,4 in the non-tie branch). Use `drop_right` when kappa is *equal* and mu decreases.
+
+2. **The `by_cases` splits** in Cases 1, 2, 4 are the safe uniform strategy since kappa's behavior depends on subterm values. If you prefer to avoid the split, you cannot — kappa genuinely does not tie in general there.
+
+3. **Case 3 is the load-bearing case:** it is the only rule that *increases* mu (RHS `app` adds structure) while relying entirely on the `+1` kappa drop from unwrapping `delta`. Ensure the `cases n` fully discharges the `Nat.max` reasoning; add `Nat.max_*` lemmas or the `hmax` helper if `omega` stalls.
+
+4. **After `simp [kappa]`/`simp [mu]`**, finish arithmetic goals with `omega`. If `simp` closes the goal fully, drop the trailing `; omega`.

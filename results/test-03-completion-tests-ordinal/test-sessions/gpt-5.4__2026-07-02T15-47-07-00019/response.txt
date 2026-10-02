@@ -1,0 +1,274 @@
+Below is a proof skeleton for the three `sorry` cases, keeping your file unchanged and not assuming access to the compiler. I’ll give Lean-shaped arguments and indicate the key lemmas you’d likely use or need to search for in `Ordinal` arithmetic.
+
+The main idea in all three remaining cases is:
+
+- reduce the goal with `simp [mu]`
+- establish positivity / nonzeroness where needed
+- for the two “large exponent dominates” cases, first prove a comparison of exponents, then lift it via strict monotonicity of `fun x => omega0 ^ x`, then finish by bounding the smaller expression by the larger principal term plus `1`.
+
+---
+
+## 1. `R_eq_refl`
+
+Current goal after `simp [mu]` is essentially:
+
+```lean
+⊢ 0 < omega0 ^ (mu a + mu a + 9) + 1
+```
+
+This should be proved exactly like `R_int_delta`: show the RHS is nonzero or directly positive via `add_pos_right`.
+
+### Skeleton
+
+```lean
+| _, _, Step.R_eq_refl a => by
+    simp [mu]
+    exact Ordinal.pos_iff_ne_zero.mpr (by
+      apply ne_of_gt
+      exact add_pos_right _ one_pos)
+```
+
+### Possible alternative
+If `simp` leaves the goal already as `0 < _ + 1`, you may also be able to do:
+
+```lean
+| _, _, Step.R_eq_refl a => by
+    simp [mu]
+    exact add_pos_right _ one_pos
+```
+
+But the first version matches your existing style and is safer.
+
+---
+
+## 2. `R_rec_succ`
+
+This is the hardest one. After `simp [mu]`, the goal should be of the shape
+
+```lean
+⊢ omega0 ^ (mu n + mu s + 6) + omega0 * (mu b + 1) + 1
+   |> plugged into `app`
+   < omega0 ^ (mu (delta n) + mu s + 6) + omega0 * (mu b + 1) + 1
+```
+
+More concretely, after expanding `mu`, the target is morally:
+
+```lean
+omega0 ^ 3 * (mu s + 1)
+  + omega0 ^ 2 * (omega0 ^ (mu n + mu s + 6) + omega0 * (mu b + 1) + 1 + 1)
+  + 1
+<
+omega0 ^ (omega0 ^ 5 * (mu n + 1) + 1 + mu s + 6)
+  + omega0 * (mu b + 1) + 1
+```
+
+The intended strategy is:
+
+1. Let
+   ```lean
+   α := mu n + mu s + 6
+   β := omega0 ^ 5 * (mu n + 1) + 1 + mu s + 6
+   ```
+2. Prove `α < β`.
+   - Since `mu n < mu n + 1`
+   - and `mu n + 1 ≤ omega0 ^ 5 * (mu n + 1)` by `le_mul_right _ (opow_pos 5 omega0_pos)`
+   - hence `mu n < omega0 ^ 5 * (mu n + 1)`
+   - then `mu n + mu s + 6 < omega0 ^ 5 * (mu n + 1) + 1 + mu s + 6`
+     by monotonicity of addition.
+3. Lift to
+   ```lean
+   omega0 ^ α < omega0 ^ β
+   ```
+   using strict monotonicity of `opow` in the exponent for base `omega0` (`Ordinal.opow_lt_opow_iff_right` or a monotonicity lemma such as `opow_lt_opow_right` / `StrictMono` form, depending on mathlib names).
+4. Bound each summand on the LHS by `omega0 ^ β`:
+   - `omega0 ^ 3 * (mu s + 1) < omega0 ^ β`
+   - `omega0 ^ 2 * (omega0 ^ α + omega0 * (mu b + 1) + 1 + 1) < omega0 ^ β`
+   
+   The easiest proof skeleton is not to fully normalize those products, but to use a “principal term dominates lower-rank finite tower” lemma if available. If not, the proof will likely need helper inequalities such as:
+   - `3 < β`
+   - `α + 2 < β`
+   - therefore `omega0 ^ 3 * (mu s + 1) < omega0 ^ β`
+   - and `omega0 ^ 2 * (...) ≤ omega0 ^ (α + 2) < omega0 ^ β`
+   
+   This uses standard ordinal facts:
+   - `omega^p * c < omega^(p+1)` for positive `c`
+   - `omega^2 * omega^α = omega^(2 + α)` / `omega^(α+2)` depending on convention/order
+   - and then exponent comparison.
+
+Because exact lemma names are uncertain, the best completion is to insert a local `have hdom : ...` for the principal domination and then finish by transitivity.
+
+### Skeleton version
+
+```lean
+| _, _, Step.R_rec_succ b s n => by
+    simp [mu]
+    let α : Ordinal := mu n + mu s + (6 : Ordinal)
+    let β : Ordinal := omega0 ^ (5 : Ordinal) * (mu n + 1) + 1 + mu s + (6 : Ordinal)
+
+    have hn1 : mu n < mu n + 1 := lt_add_one (mu n)
+    have hn2 : mu n + 1 ≤ omega0 ^ (5 : Ordinal) * (mu n + 1) :=
+      le_mul_right _ (opow_pos 5 omega0_pos)
+    have hn3 : mu n < omega0 ^ (5 : Ordinal) * (mu n + 1) :=
+      lt_of_lt_of_le hn1 hn2
+
+    have hαβ : α < β := by
+      dsimp [α, β]
+      -- strengthen hn3 by adding `mu s + 6` on the right
+      -- any monotonicity lemma for ordinal addition should work here
+      exact add_lt_add_right (add_lt_add_right hn3 (mu s)) (6 : Ordinal)
+      -- or equivalently a small calc with repeated `add_lt_add_right`
+
+    have hpow : omega0 ^ α < omega0 ^ β := by
+      -- use strict monotonicity of exponentiation base omega0
+      simpa [α, β] using opow_lt_opow_right omega0 hαβ
+      -- if this lemma name is wrong, replace by the appropriate
+      -- monotonicity lemma for `fun x => omega0 ^ x`
+
+    -- Main domination step:
+    have hleft :
+      omega0 ^ (3 : Ordinal) * (mu s + 1)
+        + omega0 ^ (2 : Ordinal) * (omega0 ^ α + omega0 * (mu b + 1) + 1 + 1) + 1
+      < omega0 ^ β := by
+      -- This is the substantive ordinal-arithmetic estimate.
+      -- Typical route:
+      -- 1. show first summand < omega0 ^ β using `3 < β`
+      -- 2. show second summand < omega0 ^ β using `α + 2 < β`
+      -- 3. conclude the sum + 1 is still < omega0 ^ β because `omega0 ^ β`
+      --    is additively principal.
+      --
+      -- In a real proof you would use lemmas about:
+      --   * additive principal ordinals `omega0 ^ β`
+      --   * multiplication by smaller powers staying below a larger power
+      --   * closure of `< omega0^β` under addition
+      sorry
+
+    calc
+      omega0 ^ (3 : Ordinal) * (mu s + 1)
+          + omega0 ^ (2 : Ordinal) * (omega0 ^ α + omega0 * (mu b + 1) + 1 + 1) + 1
+        < omega0 ^ β := hleft
+      _ ≤ omega0 ^ β + (omega0 * (mu b + 1) + 1) := by
+            exact le_add_right _ _
+```
+
+### Practical note
+If you want a more compiler-friendly approach, I’d recommend breaking out one or two helper lemmas outside this theorem in a real development, e.g.:
+
+```lean
+lemma app_part_lt_rec_head ...
+lemma lower_terms_lt_big_opow ...
+```
+
+But since you asked not to modify the file, the above inline skeleton is the right shape.
+
+---
+
+## 3. `R_eq_diff`
+
+After `simp [mu]`, the goal is essentially
+
+```lean
+omega0 ^ 4 * (omega0 ^ 3 * (mu a + 1) + omega0 ^ 2 * (mu b + 1) + 1 + 1) + 1
+<
+omega0 ^ (mu a + mu b + 9) + 1
+```
+
+Strategy:
+
+1. Let `γ := mu a + mu b + 9`.
+2. Show the entire left side before `+1` is `< omega0 ^ γ`.
+   This should follow because:
+   - `omega0 ^ 3 * (mu a + 1) + omega0 ^ 2 * (mu b + 1) + 2 < omega0 ^ (mu a + mu b + 5)` (or some smaller exponent)
+   - multiplying by `omega0 ^ 4` puts it below `omega0 ^ (mu a + mu b + 9)`
+3. Then conclude
+   ```lean
+   X + 1 < omega0 ^ γ + 1
+   ```
+   using `add_lt_add_right`.
+
+A very standard route is to first prove the inner merge measure is below `omega0 ^ (mu a + mu b + 5)` (or just any exponent strictly below `γ - 4`), then multiply by `omega0 ^ 4`.
+
+### Skeleton
+
+```lean
+| _, _, Step.R_eq_diff a b => by
+    simp [mu]
+    let γ : Ordinal := mu a + mu b + (9 : Ordinal)
+
+    have hinner :
+      omega0 ^ (3 : Ordinal) * (mu a + 1)
+        + omega0 ^ (2 : Ordinal) * (mu b + 1) + 1 + 1
+      < omega0 ^ (mu a + mu b + (5 : Ordinal)) := by
+      -- Key estimate:
+      -- the merge payload sits below an omega-power whose exponent is
+      -- much smaller than `mu a + mu b + 9`.
+      --
+      -- Typical ingredients:
+      --   `mu a < mu a + 1 ≤ omega0^? * (mu a + 1)`
+      --   `mu b < mu b + 1 ≤ omega0^? * (mu b + 1)`
+      -- and then additive-principal closure below `omega0 ^ (...)`.
+      sorry
+
+    have hmul :
+      omega0 ^ (4 : Ordinal) *
+          (omega0 ^ (3 : Ordinal) * (mu a + 1)
+            + omega0 ^ (2 : Ordinal) * (mu b + 1) + 1 + 1)
+      < omega0 ^ γ := by
+      -- Multiply the previous bound by `omega0^4`, then combine exponents:
+      --   omega^4 * omega^(mu a + mu b + 5) = omega^(4 + (mu a + mu b + 5))
+      -- which is < omega^(mu a + mu b + 9)
+      --
+      -- Depending on available lemmas, you may:
+      --   * first derive ≤ omega0^(4 + (mu a + mu b + 5))
+      --   * then simplify `4 + (...) < mu a + mu b + 9`
+      --   * then use monotonicity of `opow`
+      sorry
+
+    exact add_lt_add_right hmul 1
+```
+
+### Alternative shape
+Sometimes the final step may need to be:
+
+```lean
+calc
+  omega0 ^ (4 : Ordinal) *
+      (omega0 ^ (3 : Ordinal) * (mu a + 1)
+        + omega0 ^ (2 : Ordinal) * (mu b + 1) + 1 + 1) + 1
+    < omega0 ^ γ + 1 := add_lt_add_right hmul 1
+```
+
+depending on how `simp` presents the goal.
+
+---
+
+# Summary of what to fill in
+
+## Fully fillable immediately
+Use this for `R_eq_refl`:
+
+```lean
+| _, _, Step.R_eq_refl a => by
+    simp [mu]
+    exact Ordinal.pos_iff_ne_zero.mpr (by
+      apply ne_of_gt
+      exact add_pos_right _ one_pos)
+```
+
+## For `R_rec_succ` and `R_eq_diff`
+The proof skeleton should be:
+
+- define the relevant exponents (`α`, `β`, `γ`)
+- prove the exponent inequality
+- lift via monotonicity of `omega0 ^ ·`
+- prove a domination lemma that the lower-complexity sum is `< omega0 ^ bigExponent`
+- finish by adding the tail terms (`+ omega0 * (...) + 1` or `+1`)
+
+The missing technical pieces are exactly the ordinal-arithmetic facts about:
+- monotonicity of ordinal addition in the right argument
+- strict monotonicity of `omega0 ^ ·`
+- additive-principal closure of `omega0 ^ ξ`
+- comparison of products like `omega0 ^ k * α` with larger powers of `omega0`
+
+Those are the right facts to invoke; your measure design is set up so these inequalities should be routine once the proper library lemmas are identified.
+
+If you want, I can also rewrite the two hard cases into a more “helper-lemma oriented” skeleton with explicit placeholder lemma statements, which may be easier to finish inside Lean.

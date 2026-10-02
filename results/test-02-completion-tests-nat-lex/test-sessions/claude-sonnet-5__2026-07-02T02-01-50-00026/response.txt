@@ -1,0 +1,96 @@
+## Overall strategy
+
+For every rule we must show `LexOrder (measure b) (measure a)` for `Step a b`, i.e. either
+
+* `kappa b < kappa a` (use `drop_left`), or
+* `kappa b = kappa a` and `mu b < mu a` (use `drop_right`).
+
+For the rules whose LHS/RHS shapes force a *fixed* relationship between `kappa` of the two sides (`int_delta`, `eq_refl`) we need a case split on whether the “inner” subterm's `kappa` is `0` or positive. For rules where `kappa` involves a `Nat.max` of several branches (`rec_zero`) we split on which branch of the `max` is attained. `eq_diff` is actually unconditional (`kappa` ties exactly, `mu` drops by exactly `1`). `rec_succ` is genuinely the hard case: it splits into a case where `kappa` strictly drops (`n` not `delta`-headed) and a case where it does not (`n = delta n'`), which is where the residual work lies.
+
+```lean
+/-! ### Auxiliary case split for the recursor -/
+
+/-- Either `n` is not `delta`-headed, and `kappa (recDelta b s n)` reduces to the
+    "flat" formula, or `n = delta n'` and we pick up the extra `+1`. -/
+lemma kappa_rec_general_or_delta (b s t : Trace) :
+    kappa (recDelta b s t) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa t) ∨
+    ∃ t', t = delta t' ∧
+      kappa (recDelta b s t) = Nat.max (Nat.max (kappa b) (kappa s)) (kappa t) + 1 := by
+  cases t with
+  | delta t' => exact Or.inr ⟨t', rfl, by simp [kappa]⟩
+  | _        => exact Or.inl (by simp [kappa])
+```
+
+## The five cases
+
+```lean
+-- integrate (delta t) --> void
+| _, _, Step.R_int_delta t => by
+    rcases Nat.eq_zero_or_pos (kappa t) with h0 | hpos
+    · have hmu : mu void < mu (integrate (delta t)) := by
+        simp only [mu_void, mu_integrate, mu_delta]; omega
+      have hk : kappa void = kappa (integrate (delta t)) := by
+        simp only [kappa_void, kappa_integrate, kappa_delta]; omega
+      exact drop_right hmu hk
+    · have hk : kappa void < kappa (integrate (delta t)) := by
+        simp only [kappa_void, kappa_integrate, kappa_delta]; omega
+      exact drop_left hk
+
+-- recDelta b s void --> b
+| _, _, Step.R_rec_zero b s => by
+    rcases le_or_lt (kappa s) (kappa b) with h | h
+    · have hk : kappa b = kappa (recDelta b s void) := by
+        simp [kappa]; omega
+      have hmu : mu b < mu (recDelta b s void) := by
+        simp only [mu_recDelta, mu_void]; omega
+      exact drop_right hmu hk
+    · have hk : kappa b < kappa (recDelta b s void) := by
+        simp [kappa]; omega
+      exact drop_left hk
+
+-- recDelta b s (delta n) --> app s (recDelta b s n)
+| _, _, Step.R_rec_succ b s n => by
+    rcases kappa_rec_general_or_delta b s n with heq | ⟨n', rfl, heq⟩
+    · -- `n` is not `delta`-headed: kappa strictly decreases
+      have hk : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+        simp only [kappa_app, kappa_rec_delta, heq]
+        omega
+      exact drop_left hk
+    · -- `n = delta n'`: kappa *ties* here.
+      -- kappa (recDelta b s (delta n')) also picks up its own "+1", so both
+      -- sides equal `max (max (kappa b) (kappa s)) (kappa n') + 1`; the
+      -- `(kappa, mu)` pair as given cannot separate this case, since
+      -- `mu (app s (recDelta b s (delta n')))
+      --   = mu (recDelta b s (delta (delta n'))) + 1 + mu s`
+      -- i.e. `mu` *increases* by `1 + mu s` rather than decreasing.
+      -- Closing this branch honestly requires strengthening `kappa` to
+      -- count the number of leading `delta`s on the recursor's third
+      -- argument (rather than just detecting their presence); with the
+      -- measure exactly as given this subgoal cannot be discharged.
+      sorry
+
+-- eqW a a --> void
+| _, _, Step.R_eq_refl a => by
+    rcases Nat.eq_zero_or_pos (kappa a) with h0 | hpos
+    · have hmu : mu void < mu (eqW a a) := by
+        simp only [mu_void, mu_eqW]; omega
+      have hk : kappa void = kappa (eqW a a) := by
+        simp only [kappa_void, kappa_eqW]; omega
+      exact drop_right hmu hk
+    · have hk : kappa void < kappa (eqW a a) := by
+        simp only [kappa_void, kappa_eqW]; omega
+      exact drop_left hk
+
+-- eqW a b --> integrate (merge a b)
+| _, _, Step.R_eq_diff a b => by
+    have hk : kappa (integrate (merge a b)) = kappa (eqW a b) := by
+      simp only [kappa_integrate, kappa_merge, kappa_eqW]
+    have hmu : mu (integrate (merge a b)) < mu (eqW a b) := by
+      simp only [mu_integrate, mu_merge, mu_eqW]; omega
+    exact drop_right hmu hk
+```
+
+## Notes on completeness
+
+* `R_int_delta`, `R_rec_zero`, `R_eq_refl`, `R_eq_diff` are fully closed by the case‑splitting pattern already used in the three proved cases (`omega` discharges the resulting `Nat.max`/linear‑arithmetic goals).
+* `R_rec_succ` splits cleanly via `kappa_rec_general_or_delta`; the “not `delta`‑headed” branch closes exactly as the other rules do (`kappa` strict decrease via `drop_left`). The `n = delta n'` branch is left as an explicit, documented `sorry`: with the `(kappa, mu)` measure exactly as specified in the file, this instance is a genuine gap (`kappa` ties while `mu` provably increases by `1 + mu s`), and finishing it requires either a stronger `kappa` (e.g. counting the full run of leading `delta`s instead of a single flag) or an additional lexicographic component — a change to `kappa`/`mu` that is out of scope here since the file's definitions are fixed.

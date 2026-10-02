@@ -1,0 +1,62 @@
+I'll analyze whether these helper theorems are sound, meaning whether they can actually be proven as stated.
+
+## Analyzing `kappa_rec_delta_step`
+
+The claim is:
+```
+kappa (recDelta b s (delta n)) = kappa (recDelta b s n) + 1
+```
+
+**Left side:** By `kappa_rec_delta`, `kappa (recDelta b s (delta n)) = max (max (kappa b) (kappa s)) (kappa n) + 1`.
+
+**Right side:** We need `kappa (recDelta b s n)`. This depends on the *shape* of `n`, because the definition of `kappa` pattern-matches on the third argument:
+- If `n` matches `.delta m`, the `recDelta b s (.delta n)` branch applies, giving `max (max (kappa b) (kappa s)) (kappa m) + 1`.
+- Otherwise, the catch-all `recDelta b s n` branch applies, giving `max (max (kappa b) (kappa s)) (kappa n)`.
+
+**Case split on `n`:**
+
+- **Case `n` is not of the form `delta m`** (i.e., `void`, `integrate _`, `merge _ _`, etc.): Then `kappa (recDelta b s n) = max (max (kappa b) (kappa s)) (kappa n)`. The right side becomes `max (max (kappa b) (kappa s)) (kappa n) + 1`, which **matches** the left side. ✓
+
+- **Case `n = delta m`:** Then the left side is `kappa (recDelta b s (delta (delta m)))`. Here the third argument is `delta (delta m)`, which matches `.delta _` with the inner term being `delta m`, so:
+  - LHS = `max (max (kappa b) (kappa s)) (kappa (delta m)) + 1 = max (max (kappa b) (kappa s)) (kappa m) + 1` (since `kappa (delta m) = kappa m`).
+  - RHS = `kappa (recDelta b s (delta m)) + 1 = (max (max (kappa b) (kappa s)) (kappa m) + 1) + 1`.
+  
+  So LHS = `X + 1` while RHS = `X + 2` where `X = max (max (kappa b) (kappa s)) (kappa m)`. These are **not equal**. ✗
+
+**Conclusion:** `kappa_rec_delta_step` is **false** when `n` itself is a `delta`. The `+1` bump from `kappa` fires on any outermost `delta`, so it appears both in `kappa (recDelta b s (delta n))` and in `kappa (recDelta b s n)` when `n = delta m`, causing a double-count mismatch.
+
+So the first helper is **unsound** and cannot be proven (the remaining `sorry` cannot be closed).
+
+## Analyzing `kappa_rec_succ_drop`
+
+The claim is:
+```
+kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n))
+```
+
+The proof starts with `rw [kappa_rec_delta_step]`, rewriting the RHS to `kappa (recDelta b s n) + 1`. So the remaining goal is:
+```
+kappa (app s (recDelta b s n)) < kappa (recDelta b s n) + 1
+```
+i.e. `max (kappa s) (kappa (recDelta b s n)) < kappa (recDelta b s n) + 1`.
+
+This inequality is only true if `kappa s ≤ kappa (recDelta b s n)`. Let's check whether that holds.
+
+- If `n` is **not** a `delta`: `kappa (recDelta b s n) = max (max (kappa b) (kappa s)) (kappa n) ≥ kappa s`. Then `max (kappa s) (that) = that`, and `that < that + 1`. ✓
+- If `n` **is** a `delta m`: `kappa (recDelta b s (delta m)) = max (max (kappa b) (kappa s)) (kappa m) + 1 ≥ kappa s + 1 > kappa s`. Still `≥ kappa s`. ✓
+
+So the *goal after the rewrite* is actually **true** in all cases. The `max` term equals `kappa (recDelta b s n)` (since it dominates `kappa s`), and `x < x + 1` holds.
+
+**However**, this second theorem's proof *depends on `kappa_rec_delta_step`* via the `rw`. Since `kappa_rec_delta_step` is proven only by `sorry` (an unproven false statement), the derivation is not legitimate.
+
+Interestingly, the *statement* of `kappa_rec_succ_drop` is itself **true** (it can be proven independently by case-splitting on `n` and using the `kappa` definitions directly), but the **chosen strategy** routing through `kappa_rec_delta_step` is flawed because it relies on a false lemma.
+
+## Overall Assessment
+
+**The helper strategy is not sound as written.**
+
+1. `kappa_rec_delta_step` is a **false statement**: it fails whenever `n` is itself a `delta` (e.g., `n = delta m`), because `kappa`'s `+1` bonus is triggered by the outermost `delta` in both terms, so removing one `delta` does not cleanly remove exactly one from the measure. It cannot be completed; the `sorry` is irreparable.
+
+2. `kappa_rec_succ_drop` has a **true statement**, and its post-`rw` goal is also true, but its *proof strategy* is unsound because it invokes the false `kappa_rec_delta_step`. As written, it "works" only because `sorry` lets an unprovable lemma masquerade as proven.
+
+**Root cause:** The `kappa` definition attaches the `+1` weight to the pattern `recDelta b s (delta n)` based on syntactic shape rather than counting `delta`-nesting uniformly. To fix the termination argument, either (a) prove `kappa_rec_succ_drop` directly by case analysis on `n` without the intermediate lemma, or (b) redefine `kappa` so the recursion weight is stable under the rewrite (e.g., count `delta` depth in the recursion argument via a helper, so that peeling one `delta` reduces the measure by exactly one regardless of what lies beneath).

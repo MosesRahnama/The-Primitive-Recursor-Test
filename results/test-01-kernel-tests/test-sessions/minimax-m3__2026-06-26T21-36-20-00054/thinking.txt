@@ -1,0 +1,2890 @@
+The user is asking about a Lean 4 file defining a first-order rewrite calculus. Let me analyze it carefully.
+
+The calculus has:
+- No variable binding
+- No external memory
+- Only the given rewrite rules
+
+The question: Can strong normalization (every reduction sequence terminates) be established from this system alone, without extra structural axioms or assumptions?
+
+Let me look at the rules:
+
+1. `R_int_delta : integrate (delta t) → void` — every `integrate (delta _)` reduces in one step
+2. `R_merge_void_left : merge void t → t`
+3. `R_merge_void_right : merge t void → t`
+4. `R_merge_cancel : merge t t → t`
+5. `R_rec_zero : recΔ b s void → b`
+6. `R_rec_succ : recΔ b s (delta n) → app s (recΔ b s n)`
+7. `R_eq_refl : eqW a a → void`
+8. `R_eq_diff : eqW a b → integrate (merge a b)`
+
+The key question is whether this system is strongly normalizing.
+
+Let me think about each constructor and whether they always terminate:
+
+- `void` is a normal form (no rules apply)
+- `delta t` — only `delta` is a head constructor, but it's a function on traces. `delta t` itself doesn't reduce by any rule (no rule has `delta` on the LHS as the head). So `delta t` is a normal form.
+- `integrate t` — can reduce if `t = delta t'`, producing `void`. Otherwise, it doesn't reduce directly.
+- `merge t1 t2` — can reduce via void rules or cancel rule.
+- `app t1 t2` — no rule has `app` on the LHS! So `app` is always a normal form.
+- `recΔ b s n` — reduces if n is `void` or `delta _`.
+- `eqW a b` — reduces to `void` if equal, or to `integrate (merge a b)` if not.
+
+The interesting question: is there any non-terminating reduction?
+
+Let me think carefully. Note that `app` and `delta` are never rewritten — they are just inert constructors. So no reduction can happen "inside" `app` or `delta` because they're not on the LHS of any rule with a reducible subterm.
+
+Wait, let me re-examine. The rules are head-reductions only:
+- `integrate (delta t) → void` — only when integrate has delta as immediate subterm
+- `merge void t → t` — void as left
+- `merge t void → t` — void as right
+- `merge t t → t` — equal terms
+- `recΔ b s void → b`
+- `recΔ b s (delta n) → app s (recΔ b s n)`
+- `eqW a a → void`
+- `eqW a b → integrate (merge a b)`
+
+All reductions are at the root or one level deep. There's no "inside" reduction.
+
+Now, the critical question: can we have infinite reductions?
+
+Consider: terms are built from void, delta, integrate, merge, app, recΔ, eqW.
+
+Strategy: let's try to find a measure that decreases.
+
+The structural size of terms: 
+- `integrate (delta t) → void` — size decreases (size of `integrate (delta t)` is bigger than `void`)
+- `merge void t → t` — decreases
+- `merge t void → t` — decreases
+- `merge t t → t` — decreases
+- `recΔ b s void → b` — decreases
+- `recΔ b s (delta n) → app s (recΔ b s n)` — does this decrease? Size of `recΔ b s (delta n)` is roughly 1 + |b| + |s| + 1 + |n|. Size of `app s (recΔ b s n)` is 1 + |s| + 1 + |b| + |s| + |n| = 2 + 2|s| + |b| + |n|. This is BIGGER than the LHS! So size doesn't decrease monotonically.
+
+Hmm, so `recΔ` recurses on `n`, producing a bigger term. The recursion is on `n` which decreases (from `delta n` to `n`), but the wrapper gets bigger due to `app s (...)`.
+
+However! `app` is a normal form. So once we have `app s (recΔ b s n)`, it stops reducing. The `recΔ b s n` inside it is "trapped" inside `app` and cannot reduce further.
+
+So actually, `R_rec_succ` decreases in a well-founded measure if we consider that the term on the RHS has `app` as head constructor which never reduces. The inner `recΔ b s n` could still reduce, but the `app` wrapper is "dead code" — it can never fire.
+
+But wait, could the inner `recΔ b s n` produce more `app` nodes? Yes, but the recursion is on `n` which is decreasing. So eventually, we reach `recΔ b s void` which reduces to `b`.
+
+So if we measure by, say, the `n` in `recΔ b s n` as a "fuel" indicator... but `n` could be a complex term. However, every `delta` constructor "uses up" one step of recursion.
+
+Let me think of a measure. Define a "potential" measure where `app s t` has the same potential as `t` (since app is dead). 
+
+Actually, here's a cleaner way. Define the measure of a term as follows: it's a pair, or a function that ignores the inner `recΔ` inside `app`.
+
+Hmm, let me think more carefully.
+
+Consider a multiset or path-based measure. 
+
+Actually, the standard technique: let's define a measure μ such that:
+- μ(void) = 1
+- μ(delta t) = 1 (delta is inert)
+- μ(integrate t) = 1 + μ(t) -- no wait, integrate (delta t) → void, so μ(integrate (delta t)) = 1 + 1 + μ(t) should be > μ(void) = 1
+- μ(merge t1 t2) = μ(t1) + μ(t2)
+- μ(app t1 t2) = μ(t2) -- since app is inert, only the second argument matters
+- μ(recΔ b s n) = μ(b) + μ(s) + μ(n) + something? Hmm
+- μ(eqW a b) = μ(a) + μ(b)
+
+Wait, we need μ to decrease. For `R_rec_succ`:
+LHS: recΔ b s (delta n) — measure needs to be greater than
+RHS: app s (recΔ b s n)
+
+If μ(app s t) = μ(t), and μ(recΔ b s n) ≥ μ(b) + μ(s) + μ(n) (or similar), and μ(delta n) = μ(n) (since delta is inert, just a marker), then:
+
+μ(LHS) = μ(b) + μ(s) + μ(delta n) = μ(b) + μ(s) + μ(n)
+μ(RHS) = μ(recΔ b s n) ≥ μ(b) + μ(s) + μ(n)
+
+This works if μ(recΔ b s n) = μ(b) + μ(s) + μ(n) and μ(app s t) = μ(t).
+
+OK so let's set:
+- μ(void) = 1
+- μ(delta t) = μ(t)
+- μ(integrate t) = 1 + μ(t) ... wait, R_int_delta requires this to be > μ(void) = 1, so 1 + μ(delta t) = 1 + μ(t). Need this > 1, which it is if μ(t) > 0. But what if μ(t) = 0? Well, void has μ = 1, so all terms have μ ≥ 1.
+
+Hmm, but with the above:
+- μ(integrate t) = 1 + μ(t) ≥ 2 > 1 = μ(void). ✓ for R_int_delta.
+- μ(merge t1 t2) = μ(t1) + μ(t2) ≥ μ(t1) ≥ ... well, μ(merge void t) = μ(void) + μ(t) = 1 + μ(t) > μ(t) (since μ(t) ≥ 1). ✓
+- μ(merge t void) > μ(t) ✓
+- μ(merge t t) = 2μ(t) > μ(t) ✓
+- μ(app t1 t2) = μ(t2) (app is inert, t1 is also irrelevant)
+- μ(recΔ b s n) = μ(b) + μ(s) + μ(n)
+  - For R_rec_zero: μ(recΔ b s void) = μ(b) + μ(s) + 1 > μ(b). ✓
+  - For R_rec_succ: μ(recΔ b s (delta n)) = μ(b) + μ(s) + μ(n). μ(app s (recΔ b s n)) = μ(recΔ b s n) = μ(b) + μ(s) + μ(n). So they're EQUAL. Hmm, not strictly decreasing.
+- μ(eqW a b) = μ(a) + μ(b)
+  - R_eq_refl: μ(eqW a a) = 2μ(a) > 1 = μ(void). ✓
+  - R_eq_diff: μ(eqW a b) = μ(a) + μ(b). μ(integrate (merge a b)) = 1 + μ(merge a b) = 1 + μ(a) + μ(b). So RHS is BIGGER! Not decreasing!
+
+So size alone doesn't work.
+
+OK so the question is whether the system is SN. Let me think about whether we can find a non-terminating reduction.
+
+Consider eqW:
+- eqW a a → void (stops)
+- eqW a b → integrate (merge a b) → ... if merge a b reduces, we can get more reduction.
+
+merge a b →:
+- if a = void, → b
+- if b = void, → a
+- if a = b, → a
+- otherwise, stuck (no rule applies)
+
+So eqW a b → integrate (merge a b) → integrate b (if a=void) → ... nothing more happens unless b is delta of something, then we can use R_int_delta.
+
+integrate b → void only if b = delta t for some t.
+
+So eqW void void → void (using R_eq_refl or R_eq_diff: integrate (merge void void) → integrate void → stuck at integrate void since integrate is not void. Wait, integrate void doesn't reduce because R_int_delta needs integrate (delta _). integrate void is stuck.)
+
+So actually for eqW void void: 
+- via R_eq_refl: → void ✓
+- via R_eq_diff: → integrate (merge void void) → integrate void → stuck. ✗
+
+For eqW a b with a ≠ b:
+- R_eq_diff: → integrate (merge a b)
+  - if a = void: integrate b — stuck unless b = delta _
+  - if b = void: integrate a — stuck unless a = delta _
+  - if a = b: R_eq_refl could also have fired, but R_eq_diff gives integrate (merge a a) = integrate a — stuck unless a = delta _
+  - else: stuck
+
+So the only way integrate reduces is if it contains delta directly.
+
+Now, can we get a non-terminating reduction?
+
+The critical case is R_rec_succ. The recursion is on n, with n → delta n' → recurse. But the wrapper grows. However, the wrapper is `app s (...)` and app is inert.
+
+So, structurally:
+recΔ b s (delta n) → app s (recΔ b s n)
+
+If n is complex (say n = delta m for some m), then:
+- recΔ b s (delta (delta m)) → app s (recΔ b s (delta m))
+- the inner recΔ b s (delta m) can still reduce to app s (recΔ b s m)
+- so we get app s (app s (recΔ b s m))
+- eventually: recΔ b s void → b
+- so recΔ b s (delta^k void) reduces to app s (app s (... (app s b)...)) (k times), then this is a normal form.
+
+The recursion is bounded by the "delta depth" of n, where delta depth counts the number of delta constructors on the spine. But n could be arbitrarily complex.
+
+Hmm but the question is: does every reduction sequence terminate? The recursion in recΔ is well-founded because the third argument strictly loses one delta constructor with each R_rec_succ step.
+
+So I claim this system is SN. Let me try to construct a proof.
+
+Define:
+- spine(t): the "delta-chain" measure. Number of leading `delta` constructors... no wait, recΔ only reduces when n is `void` or `delta n'`, with the recΔ having `delta` as head, and recurses on the inner n'.
+
+Let me define a more clever measure. Let's use the size of the term but treat `app` as "absorbing" its first argument.
+
+Or: I'll define a "lexicographic" measure based on the spine of the term.
+
+Actually here's a cleaner approach. Define a "weight" function:
+
+For each term t, let weight(t) be defined by:
+- weight(void) = (0, 1) — first component is the recΔ count, second is size
+- weight(delta t) = weight(t) shifted
+- ...
+
+Hmm, let me try yet another approach. Let's use the observation that `app` and `delta` are inert (never fire a rule). So we can define:
+
+A "skeleton" of a term, by removing the `app _` and `delta _` wrappers... no, that's not quite right because delta is meaningful for recΔ.
+
+Let's think structurally. The inert constructors are: delta, app. Wait, app is inert only at the head — i.e., no rule has `app t1 t2` as LHS. So app is always a normal form.
+
+Let me define μ as follows:
+- μ(void) = (0, 0, 0) — triple for lex order
+- μ(delta t) = μ(t) (delta is transparent, doesn't add weight but doesn't reduce)
+- μ(integrate t) = (0, 0, 1 + μ_proj3(t)) — but this needs to be a well-ordered tuple
+
+Hmm, let me try a different approach. Just use a single natural number with a clever definition.
+
+Definition: For a term t, let the "potential" be defined as:
+P(void) = 0
+P(delta t) = P(t) — delta is transparent
+P(integrate t) = 1 + P(t)
+P(merge t1 t2) = 1 + P(t1) + P(t2)
+P(app t1 t2) = P(t2) — app is transparent (its left arg doesn't matter, only right can reduce)
+P(recΔ b s n) = P(b) + P(s) + P(n) + 1
+P(eqW a b) = P(a) + P(b) + 1
+
+Check reductions:
+- R_int_delta: integrate (delta t) → void. LHS: 1 + P(delta t) = 1 + P(t). RHS: 0. ✓
+- R_merge_void_left: merge void t → t. LHS: 1 + 0 + P(t) = 1 + P(t). RHS: P(t). ✓
+- R_merge_void_right: merge t void → t. LHS: 1 + P(t) + 0 = 1 + P(t). RHS: P(t). ✓
+- R_merge_cancel: merge t t → t. LHS: 1 + 2P(t). RHS: P(t). ✓ (since P(t) ≥ 0)
+- R_rec_zero: recΔ b s void → b. LHS: P(b) + P(s) + 0 + 1 = P(b) + P(s) + 1. RHS: P(b). ✓ (since P(s) ≥ 0)
+- R_rec_succ: recΔ b s (delta n) → app s (recΔ b s n). LHS: P(b) + P(s) + P(n) + 1. RHS: P(recΔ b s n) = P(b) + P(s) + P(n) + 1. EQUAL, not strictly less. ✗
+- R_eq_refl: eqW a a → void. LHS: 2P(a) + 1. RHS: 0. ✓
+- R_eq_diff: eqW a b → integrate (merge a b). LHS: P(a) + P(b) + 1. RHS: 1 + P(merge a b) = 1 + (1 + P(a) + P(b)) = 2 + P(a) + P(b). BIGGER. ✗
+
+So R_eq_diff increases the potential. Hmm.
+
+But wait, after R_eq_diff, we get `integrate (merge a b)`. Then `merge a b` can reduce (if applicable), and then `integrate` can reduce (if the result is `delta _`).
+
+So the "potential" might oscillate. Let's see if there's a better measure.
+
+Alternative: For R_eq_diff, the result is integrate (merge a b). The merge can reduce, but only to void, t, or t. So the size of merge decreases. After that, integrate either reduces (if delta) or is stuck.
+
+Let me try a multiset measure or a different potential.
+
+Define ν(t) as the multiset of "active" recursions or something. Hmm.
+
+Alternative approach: since R_eq_diff only fires when a ≠ b (otherwise R_eq_refl could fire), and after firing it gives integrate (merge a b), which then can reduce merge. The "merge" reduction eventually gives a term (void is removed, equal terms collapse). So the merge can do a bounded number of reductions.
+
+Let me try yet another potential that uses multisets.
+
+Actually, I think the answer is YES, the system is SN, and we can prove it. Let me look for a measure.
+
+Let me think about this more carefully. The R_eq_diff case is tricky because it can introduce an `integrate` constructor. But the resulting term is `integrate (merge a b)`, where merge a b can reduce.
+
+Hmm, let me try a different measure that puts `eqW` and `integrate (merge _ _)` at the same level.
+
+Define a "size" measure where:
+- sz(void) = 0
+- sz(delta t) = sz(t)
+- sz(integrate t) = sz(t) + 1
+- sz(merge t1 t2) = sz(t1) + sz(t2) + 1
+- sz(app t1 t2) = sz(t2)
+- sz(recΔ b s n) = sz(b) + sz(s) + sz(n) + 1
+- sz(eqW a b) = sz(a) + sz(b) + 1
+
+Wait, this is the same as P. And we had issues with R_eq_diff.
+
+Hmm let me think about R_eq_diff again. 
+LHS = eqW a b, sz = sz(a) + sz(b) + 1
+RHS = integrate (merge a b), sz = sz(merge a b) + 1 = sz(a) + sz(b) + 1 + 1 = sz(a) + sz(b) + 2
+
+So size increases by 1 in R_eq_diff. But after that, we get integrate (merge a b), and merge a b can reduce. Let's say merge a b →* t' (some normal form of merge). Then we have integrate t', which can reduce if t' = delta t'', giving void.
+
+The reduction sequence eqW a b → integrate (merge a b) →* integrate t' →? If t' = delta t'', then → void. Else stuck.
+
+So the total reduction: R_eq_diff fires once, then merge reduces some number of times, then maybe integrate reduces. The total work is bounded.
+
+But this is informal. For a formal proof, we need a measure.
+
+Let me try a different approach: define a measure that decreases lexicographically.
+
+Define ν(t) as follows: ν is a triple (α, β, γ) with lex order.
+
+Actually, let me try: just use a sum of measures.
+
+What if we use a different measure for different cases, but use the fact that `integrate (merge a b)` after R_eq_diff is essentially equivalent to `eqW a b` in some sense?
+
+Wait! Note: 
+- eqW a a → void (via R_eq_refl)
+- eqW a b → integrate (merge a b) → integrate (merge b a) [merge is symmetric? No, it's not declared symmetric. The rule is `merge t t → t` which is symmetric. merge t1 t2 and merge t2 t1 both reduce to t1 = t2 = t.]
+
+So eqW is symmetric: eqW a b and eqW b a both go to integrate (merge a b) and integrate (merge b a) respectively, both of which can reduce similarly.
+
+Hmm, let me try yet another approach. Let me use a "weighted size" where we treat the "core" of a recΔ computation.
+
+Alternative: I think the right approach is to use a "potential" that's more sophisticated. Let me think...
+
+OK here's an idea. Consider the term structure and find the "active" subterms. For each subterm, the measure is some function.
+
+Or, define a measure using the "context" of reductions. After a reduction, the "depth" of recursions can only decrease, etc.
+
+Actually, let me revisit R_rec_succ. The reduction is:
+recΔ b s (delta n) → app s (recΔ b s n)
+
+The recursion is on n (loses one delta). But we get a bigger term. The "growth" is in `app s (...)` which is dead. So if we measure only the "active" parts of the term, we can show decrease.
+
+Let me define the measure based on a structural recursion with cases:
+
+Hmm, I wonder if there's a simple proof by induction on a natural measure.
+
+OK let me try: define μ(t) as the number of "active" constructors in t.
+
+For each term, an "active" subterm is one that could potentially participate in a reduction. The constructors delta and app don't actively reduce (they're inert at the top level). So a term like `app s t` has the same active measure as `t` (since s is irrelevant for reducing app s t).
+
+Hmm but the recΔ b s n term has recΔ as the active part. The recΔ reduces based on n. If n is `delta n'`, recΔ reduces and the result has more `app` nodes but the recΔ is "deeper" in an app.
+
+Let me try to define μ inductively:
+- μ(void) = 0
+- μ(delta t) = μ(t)
+- μ(integrate t) = 1 + μ(t)
+- μ(merge t1 t2) = 1 + μ(t1) + μ(t2)
+- μ(app t1 t2) = μ(t2)  -- app is inert, ignore t1
+- μ(recΔ b s n) = 1 + μ(b) + μ(s) + μ(n)
+- μ(eqW a b) = 1 + μ(a) + μ(b)
+
+Now check:
+- R_int_delta: integrate (delta t) → void. μ(LHS) = 1 + μ(t). μ(RHS) = 0. ✓ since μ(t) ≥ 0.
+- R_merge_void_left: merge void t → t. μ(LHS) = 1 + 0 + μ(t) = 1 + μ(t). μ(RHS) = μ(t). ✓
+- R_merge_void_right: same. ✓
+- R_merge_cancel: merge t t → t. μ(LHS) = 1 + 2μ(t). μ(RHS) = μ(t). ✓
+- R_rec_zero: recΔ b s void → b. μ(LHS) = 1 + μ(b) + μ(s) + 0 = 1 + μ(b) + μ(s). μ(RHS) = μ(b). ✓ since μ(s) ≥ 0.
+- R_rec_succ: recΔ b s (delta n) → app s (recΔ b s n). μ(LHS) = 1 + μ(b) + μ(s) + μ(n). μ(RHS) = μ(recΔ b s n) = 1 + μ(b) + μ(s) + μ(n). EQUAL. ✗
+- R_eq_refl: eqW a a → void. μ(LHS) = 1 + 2μ(a). μ(RHS) = 0. ✓
+- R_eq_diff: eqW a b → integrate (merge a b). μ(LHS) = 1 + μ(a) + μ(b). μ(RHS) = 1 + μ(merge a b) = 1 + 1 + μ(a) + μ(b) = 2 + μ(a) + μ(b). ✗
+
+So R_rec_succ and R_eq_diff both fail with this measure.
+
+The issue with R_eq_diff: the RHS is bigger. But! After R_eq_diff, we have `integrate (merge a b)`. The next reduction will be on `merge a b` (or it stays as is if merge is stuck). The `merge` can reduce, decreasing the size. So eventually, after the merge reductions, we have `integrate t'` for some t', and either it reduces (if t' = delta _) or is stuck.
+
+So the issue is that R_eq_diff takes us "up" in size, but the subsequent merge reductions take us back "down". We need a measure that captures this.
+
+Idea: use a measure that counts "eqW" reductions and "recΔ" reductions separately.
+
+Define μ as a pair: (number of recΔ recursions available, total size or similar).
+
+Hmm, let me think more carefully.
+
+Let me consider an explicit reduction sequence. Suppose we have:
+eqW a b where a ≠ b, neither is void, a ≠ b (so merge is stuck after applying R_eq_diff).
+
+eqW a b → integrate (merge a b) → integrate (stuck merge a b) [stuck]
+
+Total reductions: 1. Fine.
+
+Suppose a = b (same term). Then:
+eqW a a → void (R_eq_refl). Done.
+
+Suppose a = void:
+eqW void b → integrate (merge void b) → integrate b [via R_merge_void_left] → stuck unless b = delta t.
+
+OK so far no infinite reductions from eqW.
+
+Now consider: eqW a b with a, b chosen to make a long sequence. What if a and b are very nested terms?
+
+The only way to get multiple reductions from eqW a b is if a = void or b = void or a = b.
+
+If a = void: eqW void b → integrate (merge void b) → integrate b → stuck.
+If b = void: same by symmetry.
+If a = b: eqW a a → void.
+
+So the longest sequence from eqW is 2 steps (R_eq_diff then R_merge_void_X).
+
+Now for recΔ: recΔ b s n. The reductions depend on n.
+- n = void: → b
+- n = delta n': → app s (recΔ b s n'), and the inner recΔ b s n' can reduce further.
+- n = integrate t: stuck (no rule matches recΔ with integrate as 3rd arg)
+- n = merge t1 t2: stuck
+- n = app t1 t2: stuck
+- n = recΔ b' s' n': stuck
+- n = eqW a b: stuck
+
+So recΔ reduces only when n is void or delta.
+
+If n = delta^k (void), then we have k applications of R_rec_succ, then R_rec_zero. Total: k+1 reductions, terminating in app s (... (app s b)...) with k apps.
+
+If n = delta^k (something stuck like merge), then we have k applications, then stuck. Total: k reductions.
+
+What about recΔ b s (delta^k (recΔ b' s' n'))? 
+→ app s (recΔ b s (delta^{k-1} (recΔ b' s' n')))
+→ app s (app s (recΔ b s (delta^{k-2} (recΔ b' s' n'))))
+→ ...
+→ app s (... (app s (recΔ b s (recΔ b' s' n')))...)
+But the innermost is recΔ b s (recΔ b' s' n'). This is stuck (3rd arg is recΔ, not void or delta).
+
+So after k reductions, we have app s (... (app s (recΔ b s (recΔ b' s' n')))...) — k apps wrapping a stuck term. Terminated.
+
+What if n is delta^k (eqW a b)?
+After k reductions: app^k (recΔ b s (eqW a b)). Stuck (3rd arg is eqW).
+
+OK so recΔ seems to terminate.
+
+Now, can we build a non-terminating term by combining things?
+
+The only "unbounded" recursion is recΔ. But the recursion in recΔ is bounded by the structure of the 3rd argument: we recurse on `n` of `delta n`, and `n` could itself be a recΔ or other thing, but we only fire R_rec_succ on the outer delta, and the inner term (after removing one delta) is what we recurse on.
+
+Wait, but the recΔ b s n is replaced by app s (recΔ b s n'). The inner recΔ can still reduce! It's just wrapped in app. So:
+
+recΔ b s (delta (delta n')) 
+→ app s (recΔ b s (delta n')) 
+→ app s (app s (recΔ b s n')) 
+[if n' is void, the inner recΔ reduces: 
+→ app s (app s b)]
+
+So far so good. Now if n' is recΔ b' s' n'':
+recΔ b s (delta (recΔ b' s' n'')) 
+→ app s (recΔ b s (recΔ b' s' n''))
+[inner recΔ b s (recΔ b' s' n'') is stuck because 3rd arg is recΔ, not void or delta]
+
+OK so the inner recΔ doesn't recurse. Terminated.
+
+What if we have nested recΔ where the inner one's 3rd arg is delta? Like recΔ b s (delta (recΔ b' s' (delta n'')))?
+→ app s (recΔ b s (recΔ b' s' (delta n'')))
+The inner is recΔ b s (recΔ b' s' (delta n'')). Its 3rd arg is recΔ, not void/delta. So inner is stuck. The outer recΔ is gone. Terminated.
+
+So the recursion in recΔ is bounded by the chain of deltas in the 3rd argument (and inside, the 3rd argument is the "fuel"). Each R_rec_succ consumes one delta.
+
+But what if the 3rd argument is delta (recΔ ... (delta ...))? After consuming the outer delta, we get to the inner recΔ which has 3rd arg delta. Then we recurse again on the inner recΔ. But this inner recΔ is itself "stuck" at the outer level because its 3rd arg is recΔ.
+
+Wait, I'm confusing myself. Let me re-examine.
+
+recΔ b s (delta (recΔ b' s' (delta n'')))
+
+This is recΔ b s applied to (delta X) where X = (recΔ b' s' (delta n'')).
+
+R_rec_succ: recΔ b s (delta X) → app s (recΔ b s X)
+
+So we get: app s (recΔ b s (recΔ b' s' (delta n'')))
+
+The new term has `app s` at the top, which is inert. The inner is recΔ b s (recΔ b' s' (delta n'')). The 3rd arg of this recΔ is recΔ b' s' (delta n''), which is not void or delta. So this inner recΔ is stuck.
+
+So we have 1 reduction, then stuck. ✓
+
+What about: recΔ b s (delta (delta (recΔ b' s' (delta n''))))?
+→ app s (recΔ b s (delta (recΔ b' s' (delta n''))))
+→ app s (app s (recΔ b s (recΔ b' s' (delta n''))))
+[stuck because 3rd arg is recΔ]
+
+3 reductions. ✓
+
+What about: recΔ b s (delta (eqW a b)) where eqW a b → integrate (merge a b) (if a ≠ b)?
+→ app s (recΔ b s (eqW a b))
+[stuck at recΔ because 3rd arg is eqW]
+
+Or wait, can the inner eqW reduce even though it's the 3rd arg of recΔ? Looking at the rules: R_eq_refl and R_eq_diff both have `eqW a b` as LHS. So yes, if we have recΔ b' s' (eqW a b), the eqW inside might reduce! 
+
+But for the reduction to fire, the eqW must be the top-level constructor, not nested. Let me check the Step rules again:
+
+R_eq_refl: Step (eqW a a) void — top-level eqW
+R_eq_diff: Step (eqW a b) (integrate (merge a b)) — top-level eqW
+
+So Step is only defined when eqW is the top constructor. If eqW is nested inside recΔ, no reduction fires at the recΔ level (since recΔ only matches when 3rd arg is void or delta). And no reduction fires at the eqW level (since eqW is not top-level).
+
+Hmm wait, but `Step` is defined inductively as binary relation. It seems only the head reduction. So if eqW is inside recΔ, the only way to reduce it is to first reduce the recΔ. But recΔ is stuck (3rd arg is eqW, not void/delta). So we're stuck.
+
+So eqW inside recΔ is "dead code" that never reduces.
+
+But! What if we have a more complex setup where the 3rd arg of recΔ is something that becomes a delta or void after reduction?
+
+Like: recΔ b s (delta (eqW a b))?
+→ app s (recΔ b s (eqW a b))
+[stuck]
+
+Or: recΔ b s (delta (delta (eqW a b)))?
+→ app s (recΔ b s (delta (eqW a b)))
+→ app s (app s (recΔ b s (eqW a b)))
+[stuck]
+
+Or: recΔ b s (delta (integrate (delta void)))?
+integrate (delta void) → void.
+So recΔ b s (delta (integrate (delta void))) 
+→ app s (recΔ b s (integrate (delta void)))
+But the inner is stuck (3rd arg of inner recΔ is integrate, not void/delta).
+
+So we have one reduction, then stuck. ✓
+
+What if we have: recΔ b s (delta (delta (integrate (delta void))))?
+→ app s (recΔ b s (delta (integrate (delta void))))
+→ app s (app s (recΔ b s (integrate (delta void))))
+[stuck]
+
+Two reductions. ✓
+
+What if we have: recΔ b s (delta^k (integrate (delta void)))?
+After k reductions: app s (recΔ b s (integrate (delta void))).
+Stuck.
+
+Hmm, so the inner integrate (delta void) never reduces because it's inside recΔ's 3rd arg.
+
+So really, the only reductions that fire are at the top-level. And the recursion in recΔ is bounded by the chain of deltas in the 3rd arg.
+
+But wait, the 3rd arg of recΔ can itself reduce! No wait, it can only reduce if it's void or delta. After R_rec_succ, the 3rd arg is replaced by n (the inner of delta), which is the same as before minus one delta. So if n is something else (not void, not delta), recΔ is stuck. If n is delta, recurse.
+
+OK so the recursion in recΔ is bounded by the number of leading deltas in n.
+
+But! There's a subtle issue. The "n" in recΔ b s n can be a complex term. When we recurse from n = delta n' to n', the n' can be anything. If n' is void, we apply R_rec_zero. If n' is delta n'', we recurse. If n' is anything else, recΔ is stuck.
+
+So the recursion is bounded by the "delta-depth" of n (the number of leading deltas in n).
+
+Wait, n could be deeply nested with deltas in various places. Let me think... The recursion only fires on the leading delta. Once we recurse past it, we're done with that delta and we look at what's inside.
+
+But the inside (n') is the same n minus the outer delta. If n' itself starts with delta, we recurse again. If not, we stop.
+
+So the recursion is bounded by the "leading delta count" of the original n, which is at most sz(n) (if n is all deltas, but the innermost is non-delta).
+
+OK so the recursion is bounded by sz(n). And sz doesn't grow during reductions (we just hide things inside app, which is inert).
+
+Hmm wait, what if we have recΔ b s (delta (recΔ b' s' (delta n'')))? When we recurse:
+recΔ b s (delta X) → app s (recΔ b s X) where X = recΔ b' s' (delta n'')
+
+Now the new term is app s (recΔ b s X). The inner is recΔ b s X, where X is recΔ b' s' (delta n''). The 3rd arg of this inner recΔ is X = recΔ b' s' (delta n''), which is not void or delta. So inner recΔ is stuck.
+
+But the inner recΔ b s X is inside an app, which is inert. So no further reduction.
+
+So this case terminates in 1 step. ✓
+
+What about recΔ b s (delta (recΔ b' s' (delta (recΔ b'' s'' (delta n''')))))? 
+After applying R_rec_succ: app s (recΔ b s (recΔ b' s' (delta (recΔ b'' s'' (delta n''')))))
+Inner is recΔ b s (...) with 3rd arg = recΔ b' s' (...). Stuck.
+
+1 step, then stuck. ✓
+
+What about recΔ b s (delta (delta (recΔ b' s' (delta n''))))?
+→ app s (recΔ b s (delta (recΔ b' s' (delta n''))))
+→ app s (app s (recΔ b s (recΔ b' s' (delta n''))))
+Inner: recΔ b s (...) with 3rd arg recΔ. Stuck.
+
+2 steps. ✓
+
+So the recursion is bounded by the number of leading deltas in the original 3rd arg of the outermost recΔ. 
+
+But wait, can we have a more complex situation where the 3rd arg of recΔ is something like delta^k (recΔ ... (delta^k (...)))? Let me see.
+
+The 3rd arg has structure like delta^k X where X is the "rest". If X = recΔ b' s' (delta^k X'), then recursing once gives recΔ b s (recΔ b' s' (delta^k X')), which is stuck (3rd arg is recΔ).
+
+So the recursion in the outer recΔ is bounded by k (the leading delta count). The inner recΔ never fires (it's inside the 3rd arg of outer, which is recΔ, not delta/void, after one step of the outer).
+
+Hmm wait, but the inner recΔ is itself recursive. But it's not the top of the term, so it can't reduce.
+
+So I think the system is SN. Let me try to prove it.
+
+Claim: The system is strongly normalizing.
+
+Proof sketch: Define a measure μ: Trace → ℕ (or well-ordered set) such that μ decreases under any reduction.
+
+Let me try a different measure. How about: μ(t) = (something based on recΔ depth, something based on eqW count, ...)?
+
+Alternative: I'll try to define μ via recursion on the term structure, such that μ(t) measures the "maximal reduction length" of t.
+
+For SN systems, the standard approach is to find a measure that strictly decreases. If we can't find one, the system might not be SN.
+
+Let me re-examine the problematic cases:
+- R_rec_succ: recΔ b s (delta n) → app s (recΔ b s n). The new term has the same number of reductions remaining (potentially), but the recursion has moved one level deeper in the delta chain of the 3rd arg.
+- R_eq_diff: eqW a b → integrate (merge a b). The new term is bigger, but the merge can only reduce finitely.
+
+Let me try a measure based on a tuple:
+
+Define μ(t) = (α(t), β(t)) where α is the "recΔ count" and β is the "size" or similar, and we use lex order.
+
+For α: maybe the number of "recΔ invocations" available. Each recΔ contributes some count. When we apply R_rec_succ, the count decreases.
+
+Hmm, this is getting complex. Let me try a different approach.
+
+Observation: the only way a term can grow (in size) during reduction is via R_eq_diff. But R_eq_diff is followed by reductions of the merge inside, which can decrease the size.
+
+Specifically: eqW a b → integrate (merge a b) → integrate (merge reduction of a b). The merge can reduce, decreasing the size, until it stabilizes.
+
+Let's try: measure is the size of the term, EXCEPT for the case when we just applied R_eq_diff. After R_eq_diff, we know that the next step (if any) is a merge reduction, which decreases size.
+
+So we use a measure that has a "credit" for R_eq_diff: after R_eq_diff, the term is bigger but the next reduction is forced to be a merge reduction (decreasing size).
+
+Hmm, this is getting complicated. Let me try a more direct approach.
+
+Alternative: try to find a measure using the multiset of "active subterms" or something.
+
+You know what, let me just try a different formulation.
+
+Define μ(t) = the multiset of [some measure] of subterms that can reduce.
+
+Actually, let me try a different potential. The intuition: every reduction either decreases a "primary" measure, or if it increases it, it forces a subsequent decrease.
+
+Let me use a 2-level measure:
+- Primary: some measure of size
+- Secondary: number of "credits" or "moves available"
+
+For R_eq_diff: primary increases by 1, but secondary decreases (we have 1 credit to use). Then we must use the credit by applying a merge reduction (which decreases primary).
+
+Hmm, this needs to be formalized carefully. Let me try yet another angle.
+
+Let's use a measure where the "potential" is bounded by some function, and show that every reduction decreases it. To do this, I might need a smarter measure.
+
+How about this: define μ(t) = "the number of reductions in the longest reduction sequence of t". This is well-defined if SN holds (we're trying to prove SN). If we can show μ decreases, we get SN.
+
+For R_eq_diff: eqW a b → integrate (merge a b). 
+μ(eqW a b) = 1 + μ(integrate (merge a b)) (if a ≠ b)
+μ(integrate (merge a b)) = μ(merge a b) if merge a b is not delta; or μ(merge a b) - 1 if merge a b is delta t (because then integrate reduces to void in 1 more step).
+
+Hmm, this is going in circles. Let me just try to find a measure that works.
+
+Define μ(t) by structural recursion on t:
+- μ(void) = 0
+- μ(delta t) = μ(t)
+- μ(integrate t) = 1 + μ(t)
+- μ(merge t1 t2) = 1 + max(μ(t1), μ(t2))
+- μ(app t1 t2) = μ(t2)
+- μ(recΔ b s n) = 1 + μ(b) + μ(s) + μ(n)
+- μ(eqW a b) = 1 + μ(a) + μ(b) + (if a = b then 0 else 1)
+
+Wait, this is getting ad hoc. Let me think.
+
+Actually, the simplest way: use the multiset of "reduction potentials" of subterms.
+
+Or: let me consider a well-founded relation that's a subset of the reduction relation, and use that.
+
+OK let me try a completely different approach. Let me think about whether the system is actually SN by considering possible loops.
+
+Is there any way to have a loop? Each reduction must decrease some quantity...
+
+The reductions are:
+1. integrate (delta t) → void
+2. merge void t → t
+3. merge t void → t
+4. merge t t → t
+5. recΔ b s void → b
+6. recΔ b s (delta n) → app s (recΔ b s n)
+7. eqW a a → void
+8. eqW a b → integrate (merge a b)
+
+Can we have a non-terminating sequence? Let's see.
+
+After any reduction, the result is "smaller" in some sense. For R_eq_diff, the result is bigger but is "equivalent" to the original in some sense.
+
+Hmm, integrate (merge a b) where a ≠ b and merge is stuck. This is a normal form (integrate is stuck because merge result is not delta). So we have eqW a b → integrate (merge a b) → stuck. 1 step.
+
+What if a and b are huge? It still terminates.
+
+What if a = b? Then R_eq_refl fires: eqW a a → void. 1 step.
+
+What if a = void, b = something? eqW void b → integrate (merge void b) → integrate b (via R_merge_void_left). Then if b = delta t, integrate b → void. If not, stuck.
+
+So at most 3 reductions from eqW.
+
+For recΔ, recursion is bounded by leading deltas in 3rd arg. Each R_rec_succ adds an app, but app is inert.
+
+So the system seems SN. The question is whether we can prove it with a simple measure.
+
+Let me try once more with a smarter measure. The issue is R_eq_diff and R_rec_succ both "grow" the term in size.
+
+Idea: define μ(t) = (number of recΔ/eqW "reductions remaining", size).
+
+For R_rec_succ: recΔ b s (delta n) → app s (recΔ b s n).
+The "recursions remaining" is the same (we have the same recΔ b s n remaining). So lex order doesn't help.
+
+Hmm. But after R_rec_succ, the result is `app s (recΔ b s n)`. The `app` is a "dead" wrapper. We can think of the measure of app s t as just μ(t), since the s inside app is irrelevant.
+
+For R_eq_diff: eqW a b → integrate (merge a b). 
+After this, we have integrate (merge a b). The merge can reduce (if applicable), and then integrate can reduce.
+
+Idea: define μ(t) as follows. Treat `app` as transparent, and `delta` as transparent. Then recΔ b s n becomes a "thing" that can recurse. The recursion is bounded by the number of leading deltas in n. If we extract the "core" of n, we get the bound.
+
+Alternatively: define μ(t) as the size of the term minus the number of "stuck" subterms... this is getting too ad hoc.
+
+Let me try yet another approach. Use a typing-like system or a "level" function.
+
+Hmm, let me try this: assign each subterm a "level" and define a measure based on levels.
+
+Or: define μ(t) = the number of "constructors" in t, EXCEPT we don't count `app` in the measure because it's inert.
+
+Define μ*(t) recursively:
+- μ*(void) = 1
+- μ*(delta t) = μ*(t)
+- μ*(integrate t) = 1 + μ*(t)
+- μ*(merge t1 t2) = 1 + μ*(t1) + μ*(t2)
+- μ*(app t1 t2) = μ*(t2)
+- μ*(recΔ b s n) = 1 + μ*(b) + μ*(s) + μ*(n)
+- μ*(eqW a b) = 1 + μ*(a) + μ*(b)
+
+This is the same as P from before. We had issues.
+
+OK let me try a multiset measure. The idea: each "active" subterm contributes to the multiset.
+
+Define μ(t) = the multiset of { [some measure of each reducible subterm] }.
+
+Hmm, too vague. Let me think differently.
+
+Let's just try to construct a measure and see if it works.
+
+Define μ(t) as follows. For each subterm of t that has a "head" reducible constructor, count it. But this doesn't quite work either.
+
+You know what, let me just try to use a triple (α, β, γ) with lex order.
+
+Define:
+- α(t) = number of "potential recΔ recursions" in t
+- β(t) = number of "potential eqW" 
+- γ(t) = size or similar
+
+Hmm, too ad hoc.
+
+Let me look at this differently. The key insight is:
+
+For R_eq_diff, the result `integrate (merge a b)` has merge a b which can be reduced. After merge reduces, we have `integrate t'` where t' is the merge normal form. Then either integrate reduces (if t' = delta _) or it's stuck.
+
+So the "extra work" introduced by R_eq_diff is: the merge reductions + maybe 1 integrate reduction. Total: at most 1 + (number of merge reductions).
+
+For R_rec_succ, the result `app s (recΔ b s n)` has recΔ b s n which is "smaller" in the sense of having one fewer leading delta in n.
+
+Idea: use a measure that tracks the "recursion depth" of recΔ and the "eqW pending" count.
+
+Define μ(t) = (recursion depth, eqW pending, size). Use lex order.
+
+For R_rec_succ: recΔ b s (delta n) → app s (recΔ b s n).
+LHS: (something, something, something)
+RHS: (something - 1?, ..., ...) because we lost one leading delta.
+
+For R_eq_diff: eqW a b → integrate (merge a b).
+LHS: (something, eqW pending = 1, something)
+RHS: (something, eqW pending = 0, ...) because we used the eqW but the integrate can still be there.
+
+Hmm.
+
+OK let me just try to write the measure carefully.
+
+Let me define the "potential" of a term as the multiset of "active" constructs, ordered by multiset ordering.
+
+For each subterm, we look at its "head" constructor:
+- void: terminal, no further reductions
+- delta t: inert, look inside
+- integrate t: 1 step to reduce if t is delta _, else 0
+- merge t1 t2: 1 step if void or equal, else 0
+- app t1 t2: inert
+- recΔ b s n: 1 step if n is void or delta, else 0; if n is delta, recursion continues
+- eqW a b: 1 step to reduce
+
+Hmm.
+
+OK let me try a cleaner approach. I'll define a measure using well-founded recursion.
+
+Define a function f: Trace → ℕ as the "number of reductions in the longest reduction sequence". This is what we want to bound. If f is well-defined (i.e., the system is SN), then it's a measure.
+
+But to show f is well-defined, we need... induction. Hmm.
+
+Let me try a direct proof by strong induction on some measure.
+
+Approach: induction on the size of the term. If we can show that for each rule, every term on the RHS is "smaller" than the LHS in some well-founded sense, we're done.
+
+Let's try: 
+- μ(t) = the multiset of sizes of "reducible" subterms of t, with the multiset ordering.
+
+For R_eq_diff: eqW a b → integrate (merge a b). The LHS is reducible (eqW). The RHS is integrate (merge a b). Is merge a b reducible? Yes if a = void, b = void, or a = b.
+
+Hmm, this depends on a, b.
+
+OK let me try yet another approach: use a "weight" function that depends on context.
+
+You know, let me just try to prove SN directly using a structural induction argument.
+
+Claim: For all terms t, every reduction sequence from t terminates.
+
+Proof: By structural induction on t.
+
+For each t, we show that any reduction step from t leads to a term t' from which all reduction sequences terminate (by induction on t).
+
+Case: t = void. No rules apply, so no reduction. ✓
+
+Case: t = delta t'. No rules apply. ✓
+
+Case: t = integrate t'. Only R_int_delta can fire: integrate (delta t') → void. By IH (or just by definition), void is a normal form. ✓
+
+Case: t = merge t1 t2.
+- R_merge_void_left: merge void t2 → t2. By IH on t2, all reductions from t2 terminate.
+- R_merge_void_right: merge t1 void → t1. By IH on t1, all reductions from t1 terminate.
+- R_merge_cancel: merge t1 t1 → t1. By IH on t1, all reductions from t1 terminate.
+
+But wait, t1 and t2 are not necessarily "smaller" than merge t1 t2 in any structural sense. They are subterms, though, so by structural induction, all reductions from t1, t2 terminate. ✓
+
+Case: t = app t1 t2. No rules apply. ✓
+
+Case: t = recΔ b s n.
+- R_rec_zero: recΔ b s void → b. By IH, all reductions from b terminate. ✓
+- R_rec_succ: recΔ b s (delta n) → app s (recΔ b s n). We need to show all reductions from app s (recΔ b s n) terminate. The new term is app s (recΔ b s n). app is inert, so reductions from this term are exactly reductions from (recΔ b s n) (since s is irrelevant). We need to show recΔ b s n terminates.
+
+Hmm, recΔ b s n. This is "smaller" than recΔ b s (delta n) in some sense? In terms of structure, no — the new term has the same recΔ but with a different n. The new n is the inner of delta n.
+
+For structural induction, recΔ b s n is "smaller" than recΔ b s (delta n) in the sense that n is a subterm of (delta n). But we need to do induction on a well-founded order, not just structural subterm.
+
+Idea: induction on a well-founded order, like the "delta-depth" of the 3rd argument of the outer recΔ.
+
+Let's define the "recursion depth" of a term t, denoted d(t), as the length of the longest chain of recΔ recursions.
+
+Hmm, but this is what we're trying to bound.
+
+Let me try: define d(t) as the size of t (or some measure). Then use strong induction on d.
+
+For R_rec_succ: recΔ b s (delta n) → app s (recΔ b s n).
+We need: d(app s (recΔ b s n)) < d(recΔ b s (delta n)) for some measure d.
+
+If d(app s t) = d(t) (app is inert), and d(recΔ b s (delta n)) = 1 + d(b) + d(s) + d(delta n) = 1 + d(b) + d(s) + d(n) (if d(delta n) = d(n)), then d(app s (recΔ b s n)) = d(recΔ b s n) = 1 + d(b) + d(s) + d(n).
+
+So d(LHS) = 1 + d(b) + d(s) + d(n) and d(RHS) = 1 + d(b) + d(s) + d(n). They're EQUAL.
+
+So this measure doesn't decrease. But we need strict decrease.
+
+Idea: use a different measure for the 3rd argument of recΔ, e.g., d(n) - 1 if n starts with delta, else d(n). Hmm, too ad hoc.
+
+Alternative: use a "step-indexed" measure or a measure that counts "remaining recursions".
+
+Define ν(t) = the number of times recΔ can still be applied, in some sense.
+
+For recΔ b s n: ν = (number of leading deltas in n) + (1 if n is void, but actually n = void means ν = 0 since R_rec_zero fires and we don't recurse).
+
+Hmm, this is essentially the "recursion budget".
+
+OK let me try a different formalization. Define a well-founded order < on terms and show that every reduction t → t' satisfies t' < t.
+
+Order idea: structural order, but with a special case for recΔ.
+
+Define: t' < t if either:
+- t' is a structural subterm of t (i.e., t' appears as a subterm of t), OR
+- t' = app s u and t = recΔ b s u' where u' = delta u. So recΔ b s (delta u) > app s (recΔ b s u). Hmm wait, this isn't a subterm relation. Let me re-think.
+
+Actually, t' = app s (recΔ b s n) is not a structural subterm of t = recΔ b s (delta n). Because t' has the structure app s (recΔ b s n), where recΔ b s n is a subterm. But app s (recΔ b s n) is not a subterm of t. So this rule doesn't satisfy "t' is a subterm of t".
+
+So the structural subterm order doesn't work for R_rec_succ.
+
+Hmm. Let me think about what order could work.
+
+Note: t' = app s (recΔ b s n). The "interesting" subterm of t' is recΔ b s n, which is "smaller" than t in the sense that the 3rd arg of recΔ has lost one delta.
+
+So if we define a measure that compares recΔ b s n with recΔ b s (delta n) in a non-structural way (based on the delta-count of the 3rd arg), we can have t' < t.
+
+Let me try: define a well-founded order < on terms.
+
+Idea: < is defined inductively by:
+- u < delta u (delta is "smaller than" its content... no, opposite)
+- u < integrate u
+- t_i < merge t1 t2 for i = 1, 2
+- t2 < app t1 t2
+- b < recΔ b s n, s < recΔ b s n, n < recΔ b s n (standard subterm)
+- a < eqW a b, b < eqW a b
+- Plus: recΔ b s n < recΔ b s (delta n) (recΔ b s n is "smaller than" recΔ b s (delta n))
+
+This last rule is the key one for R_rec_succ.
+
+Is this order well-founded? Let's check. Suppose we have an infinite decreasing sequence t1 > t2 > t3 > ...
+
+Each step either is a subterm step (standard structural) or a recΔ step. The recΔ step is: recΔ b s (delta n) > recΔ b s n. 
+
+Hmm, this could potentially loop with subterm steps and recΔ steps. But each recΔ step decreases the "delta-depth" of the 3rd arg.
+
+Let me define a measure on terms:
+μ(t) = (size of t, depth of leading-delta chain in t's "recΔ 3rd args") 
+
+Hmm, too vague. Let me just try a concrete measure.
+
+Define μ(t) as follows:
+- μ(void) = 0
+- μ(delta t) = μ(t)
+- μ(integrate t) = 1 + μ(t)
+- μ(merge t1 t2) = 1 + max(μ(t1), μ(t2))
+- μ(app t1 t2) = μ(t2)
+- μ(recΔ b s n) = 1 + μ(b) + μ(s) + 2*μ(n)  -- or some other formula
+- μ(eqW a b) = 1 + μ(a) + μ(b)
+
+For R_rec_succ: recΔ b s (delta n) → app s (recΔ b s n).
+LHS: 1 + μ(b) + μ(s) + 2*μ(delta n) = 1 + μ(b) + μ(s) + 2*μ(n)
+RHS: μ(app s (recΔ b s n)) = μ(recΔ b s n) = 1 + μ(b) + μ(s) + 2*μ(n)
+
+EQUAL. Still doesn't decrease.
+
+Let me try μ(recΔ b s n) = 1 + μ(b) + μ(s) + 2*μ(n) + (something based on whether n is delta n').
+
+Hmm, this is ad hoc.
+
+Let me try a different approach: lex order on (size, "recursion budget").
+
+Define ν(t) = (size of t, ...). For R_rec_succ:
+LHS = recΔ b s (delta n). size = ?
+RHS = app s (recΔ b s n). size = ?
+
+We need size to decrease or stay the same, and the second component to decrease.
+
+If size(app s t) = size(t), and size(recΔ b s (delta n)) > size(recΔ b s n) (because (delta n) is bigger than n), then:
+size(LHS) > size(RHS). ✓
+
+So size strictly decreases for R_rec_succ.
+
+Wait, let me check. size(void) = 0. size(delta t) = 1 + size(t). size(integrate t) = 1 + size(t). size(merge t1 t2) = 1 + size(t1) + size(t2). size(app t1 t2) = 1 + size(t1) + size(t2). size(recΔ b s n) = 1 + size(b) + size(s) + size(n). size(eqW a b) = 1 + size(a) + size(b).
+
+Then size(R_rec_succ LHS) = 1 + size(b) + size(s) + size(delta n) = 1 + size(b) + size(s) + 1 + size(n) = 2 + size(b) + size(s) + size(n).
+size(R_rec_succ RHS) = size(app s (recΔ b s n)) = 1 + size(s) + 1 + size(b) + size(s) + size(n) = 2 + 2 size(s) + size(b) + size(n).
+
+So size(RHS) = 2 + size(b) + 2 size(s) + size(n). And size(LHS) = 2 + size(b) + size(s) + size(n).
+
+So size(RHS) - size(LHS) = size(s) ≥ 0. So size(RHS) ≥ size(LHS). In particular, size doesn't decrease for R_rec_succ. Hmm.
+
+But if we use the measure μ(t) where μ(app t1 t2) = μ(t2) (treating app as transparent for its first arg), then:
+μ(LHS) = 1 + μ(b) + μ(s) + μ(delta n) = 1 + μ(b) + μ(s) + μ(n).
+μ(RHS) = μ(app s (recΔ b s n)) = μ(recΔ b s n) = 1 + μ(b) + μ(s) + μ(n).
+
+EQUAL. Not strictly less.
+
+So neither standard size nor "transparent-app" size strictly decreases.
+
+For R_eq_diff: eqW a b → integrate (merge a b).
+With μ(eqW a b) = 1 + μ(a) + μ(b).
+μ(integrate (merge a b)) = 1 + μ(merge a b) = 1 + 1 + μ(a) + μ(b) = 2 + μ(a) + μ(b).
+
+So μ(RHS) = 2 + μ(a) + μ(b) > 1 + μ(a) + μ(b) = μ(LHS). INCREASES.
+
+So this measure doesn't work for R_eq_diff.
+
+Hmm. The R_eq_diff case is really problematic. Let me think about it more.
+
+R_eq_diff: eqW a b → integrate (merge a b). The result is integrate (merge a b). Now, merge a b can reduce. The reductions of merge are: void or equal. So merge a b → some t' which is one of a, b, or void (depending on the case).
+
+If a = b: merge a a → a (R_merge_cancel). So integrate (merge a a) → integrate a. If a = delta t, integrate a → void. If a is anything else, integrate a is stuck.
+
+If a = void: merge void b → b. So integrate b. If b = delta t, integrate b → void. Else stuck.
+
+If b = void: similar.
+
+If a, b are not void and a ≠ b: merge a b is stuck. So integrate (merge a b) is stuck (unless a or b is delta, but merge doesn't reduce then, so it's stuck).
+
+So after R_eq_diff, we have at most 1-2 more reductions.
+
+The measure needs to capture: "R_eq_diff introduces at most 1-2 more reductions". 
+
+One way: use a measure that credits R_eq_diff with some "potential" that can be spent on subsequent reductions.
+
+Define μ(t) as follows:
+- μ(void) = 0
+- μ(delta t) = μ(t) [or some other function]
+- μ(integrate t) = 1 + μ(t) [but with some "credit" for R_eq_diff]
+- μ(merge t1 t2) = 1 + max(μ(t1), μ(t2))  [merge reduces to one of them]
+- μ(app t1 t2) = μ(t2)
+- μ(recΔ b s n) = 1 + μ(b) + μ(s) + μ(n) [with the recΔ b s n decreasing in a well-founded way]
+- μ(eqW a b) = 1 + μ(a) + μ(b) + (1 if a ≠ b else 0)
+
+Hmm, the issue is "if a ≠ b" depends on the syntactic equality, which can be decided (since Trace has DecidableEq).
+
+Wait actually, let me think. We need μ(RHS) < μ(LHS) for R_eq_diff.
+
+μ(LHS) = μ(eqW a b) = 1 + μ(a) + μ(b) (some definition)
+μ(RHS) = μ(integrate (merge a b)) = 1 + μ(merge a b)
+
+If μ(merge a b) = 1 + μ(a) + μ(b), then μ(RHS) = 2 + μ(a) + μ(b). So μ(RHS) - μ(LHS) = 1.
+
+Hmm. So if μ(eqW a b) = 2 + μ(a) + μ(b), then:
+μ(LHS) = 2 + μ(a) + μ(b).
+μ(RHS) = 2 + μ(a) + μ(b). EQUAL. ✗
+
+What if μ(eqW a b) = 1 + μ(a) + μ(b) + δ(a, b) where δ is 0 if a = b, 1 otherwise? But this depends on the syntactic form of a, b.
+
+Wait, actually, in R_eq_diff we have a ≠ b (otherwise R_eq_refl could have fired). So we can assume a ≠ b in R_eq_diff.
+
+So: μ(eqW a b) when a ≠ b can be defined as something bigger. Like, define μ(eqW a b) = 1 + μ(a) + μ(b) + (1 if a ≠ b else 0). But then for R_eq_refl, μ(LHS) = 1 + 2μ(a) + 0 = 1 + 2μ(a). μ(RHS) = μ(void) = 0. So μ decreases. ✓
+
+For R_eq_diff: μ(LHS) = 1 + μ(a) + μ(b) + 1 = 2 + μ(a) + μ(b) (since a ≠ b). μ(RHS) = μ(integrate (merge a b)) = ?
+
+If μ(merge a b) = 1 + max(μ(a), μ(b)), then μ(RHS) = 2 + max(μ(a), μ(b)) < 2 + μ(a) + μ(b) = μ(LHS) (assuming max ≤ sum, with strict if both ≥ 1, which they are since μ ≥ 0 and at least one is positive).
+
+Wait, let me check: μ(a) ≥ 0 and μ(b) ≥ 0. If μ(a) = 0, then a = void. Then merge void b = b, μ(merge void b) = μ(b) = 1 + max(0, μ(b)) = 1 + μ(b). So μ(RHS) = 2 + μ(b). And μ(LHS) = 2 + 0 + μ(b) = 2 + μ(b). EQUAL. ✗
+
+Hmm. So we need to handle the case a = void or b = void separately.
+
+What if μ(merge void b) = μ(b) (no +1 because void is "free")? Let me try:
+
+Define:
+- μ(void) = 0
+- μ(delta t) = μ(t)
+- μ(integrate t) = 1 + μ(t)
+- μ(merge t1 t2) = max(μ(t1), μ(t2)) + (1 if both t1, t2 are non-void and t1 ≠ t2 else 0)
+  Hmm, getting complicated.
+
+Let me think differently. After R_eq_diff, we have integrate (merge a b). The merge will reduce to one of a, b, or void (or stuck if no rule applies). After merge reduces, integrate might reduce (if the result is delta _). So total reductions: 1 (R_eq_diff) + up to 1 (merge) + up to 1 (integrate) = 3.
+
+So we can think of R_eq_diff as "producing 3 reductions, but the RHS is 1 reduction in".
+
+Hmm, this is too hand-wavy. Let me just try to write a measure that works.
+
+Approach: define μ(t) = the number of reductions remaining in the longest reduction sequence from t. We're trying to show this is well-defined (i.e., SN).
+
+If SN holds, then μ is well-defined and we can use it as a measure. We need to show μ is well-defined by induction.
+
+For each rule t → t', show μ(t) > μ(t'). This is automatic if μ is well-defined.
+
+So we just need to show SN, perhaps by induction on the structure of t.
+
+Wait, can we use structural induction on t directly?
+
+For each t, show that all reduction sequences from t terminate.
+
+If t is a normal form (no rules apply), this is trivial.
+
+If t is reducible, then for each rule t → t', we need to show that t' has all reduction sequences terminating. By structural induction on t, t' must be "smaller" than t. But t' might not be a structural subterm of t (e.g., R_rec_succ).
+
+So structural induction alone doesn't work.
+
+Alternative: lexicographic induction on (size, ...).
+
+Let me try induction on (size of t, something else).
+
+For R_rec_succ: LHS = recΔ b s (delta n), RHS = app s (recΔ b s n). 
+size(LHS) = 1 + size(b) + size(s) + 1 + size(n) = 2 + size(b) + size(s) + size(n)
+size(RHS) = 1 + size(s) + 1 + size(b) + size(s) + size(n) = 2 + size(b) + 2*size(s) + size(n)
+
+size(RHS) ≥ size(LHS), so size increases. Can't use size alone.
+
+For R_eq_diff: LHS = eqW a b, RHS = integrate (merge a b).
+size(LHS) = 1 + size(a) + size(b)
+size(RHS) = 1 + 1 + size(a) + size(b) = 2 + size(a) + size(b)
+
+size(RHS) > size(LHS). Size increases.
+
+So size doesn't work as a measure.
+
+Let me try a "weight" function. The intuition: app is "weightless" (its first arg is irrelevant), and delta is "weightless" (it's a marker).
+
+Define w(t):
+- w(void) = 0
+- w(delta t) = w(t)
+- w(integrate t) = 1 + w(t)
+- w(merge t1 t2) = w(t1) + w(t2) + (1 if t1 = t2 or t1 = void or t2 = void else 0)... too complicated
+
+Hmm. Let me think.
+
+For R_eq_diff: LHS = eqW a b, RHS = integrate (merge a b).
+w(LHS) = 1 + w(a) + w(b) + 1 (assuming a ≠ b) = 2 + w(a) + w(b)
+w(RHS) = 1 + w(merge a b) = 1 + w(a) + w(b) + (extra for merge reducing) 
+
+If we define w(merge a b) = w(a) + w(b) + 1 when a ≠ b and a, b are non-void, and w(merge a b) = max(w(a), w(b)) when one is void, and w(merge a b) = w(a) when a = b... this is getting too case-heavy.
+
+Let me try: w(merge a b) = max(w(a), w(b)). Then w(R_eq_diff RHS) = 1 + max(w(a), w(b)). And w(LHS) = 2 + w(a) + w(b) (for a ≠ b).
+
+w(LHS) - w(RHS) = 2 + w(a) + w(b) - 1 - max(w(a), w(b)) = 1 + min(w(a), w(b)) ≥ 1. ✓ (since w ≥ 0 and one of a, b has w ≥ 0, but if both are 0, then a = b = void, but we said a ≠ b, so at least one has w > 0, so min(w(a), w(b)) could be 0 if one is void).
+
+Hmm wait, if a = void and b = something non-void with a ≠ b: w(LHS) = 2 + 0 + w(b) = 2 + w(b). w(RHS) = 1 + max(0, w(b)) = 1 + w(b). So w(LHS) - w(RHS) = 1. ✓ (Strict decrease!)
+
+If both a, b are non-void with a ≠ b: w(LHS) = 2 + w(a) + w(b). w(RHS) = 1 + max(w(a), w(b)) ≤ 1 + w(a) + w(b) - 0 = 1 + w(a) + w(b). So w(LHS) ≥ 1 + w(a) + w(b) ≥ w(RHS). Actually w(LHS) - w(RHS) = 1 + w(a) + w(b) - 1 - max(w(a), w(b)) = min(w(a), w(b)) ≥ 1 (since both non-void have w ≥ 1). ✓
+
+If a = b (which contradicts a ≠ b in R_eq_diff, but for R_eq_refl): w(LHS) = 1 + 2w(a). w(RHS) = w(void) = 0. Strict decrease. ✓
+
+For R_eq_refl, the rule is for eqW a a → void. Let's check: w(LHS) = 1 + 2w(a) (with the "1" for being eqW, no +1 for a ≠ b since a = b). w(RHS) = 0. Strict decrease. ✓
+
+For R_merge_void_left: merge void t → t. w(LHS) = max(0, w(t)) = w(t). w(RHS) = w(t). EQUAL. ✗
+
+Hmm.
+
+Let me adjust: w(merge t1 t2) = w(t1) + w(t2) + 1 (treating merge normally).
+
+R_merge_void_left: w(LHS) = 0 + w(t) + 1 = 1 + w(t). w(RHS) = w(t). Strict decrease. ✓
+R_merge_void_right: same. ✓
+R_merge_cancel: w(LHS) = 2w(t) + 1. w(RHS) = w(t). Strict decrease. ✓ (since w(t) ≥ 0)
+
+For R_eq_diff: w(LHS) = 1 + w(a) + w(b) + (1 if a ≠ b else 0). w(RHS) = 1 + w(merge a b) = 1 + w(a) + w(b) + 1 = 2 + w(a) + w(b).
+w(LHS) - w(RHS) = (1 + w(a) + w(b) + 1) - (2 + w(a) + w(b)) = 0. EQUAL. ✗
+
+Hmm. So we need to add more to w(eqW a b) when a ≠ b.
+
+What if w(eqW a b) = 1 + w(a) + w(b) + (2 if a ≠ b else 0)? Then w(LHS) = 3 + w(a) + w(b). w(RHS) = 2 + w(a) + w(b). Strict decrease by 1. ✓
+
+But this is an arbitrary choice. Why 2? Hmm.
+
+Wait, the issue is that R_eq_diff increases w by 1, but the subsequent merge reductions can decrease w. So the net effect is: w increases by 1 (from R_eq_diff), then decreases by the merge reductions. If the merge reductions decrease w by ≥ 1, then net is non-positive.
+
+But "merge reductions decrease w by how much" depends on the merge. R_merge_void_left/right decrease w by 1 each. R_merge_cancel decreases w by (2w(t) + 1) - w(t) = w(t) + 1.
+
+So after R_eq_diff, the next reduction is on the merge, which decreases w by at least 1. So the net effect of R_eq_diff + next merge reduction is: w increases by 1, then decreases by ≥ 1. Net: non-positive.
+
+But for a strict decrease over a single step, we need: w(RHS) < w(LHS). R_eq_diff alone increases w by 1. So this doesn't work for a single step.
+
+Unless we use a measure that "remembers" the +1 from R_eq_diff, like a 2-component measure.
+
+OK let me try a 2-component measure.
+
+Define μ(t) = (α(t), β(t)) where α is the "main" measure and β is a secondary.
+
+Hmm, this is getting complex. Let me try yet another angle.
+
+Approach: define a measure using a "tag" or "color" that tracks the history.
+
+Alternatively, use a "size modulo something" or a "potential with credits".
+
+Actually, you know what, let me just think about whether the system is SN intuitively and whether there's a simple proof.
+
+The system has 8 rules, all "destructive" in some sense. The only rule that "grows" the term is R_rec_succ (which wraps in app) and R_eq_diff (which adds integrate and merge). Both are bounded by the structure of the LHS.
+
+I believe the system is SN. The proof can be done by finding an appropriate measure.
+
+Let me try once more, very carefully.
+
+Define a "level" function L: Trace → ℕ ∪ {∞} where L(t) is the "potential" of t.
+
+L(void) = 0
+L(delta t) = L(t) (delta is a marker, no extra potential)
+L(integrate t) = 1 + L(t) (integrate can fire once)
+L(merge t1 t2) = L(t1) + L(t2) + 1 (merge can fire once, then we're left with one of them)
+L(app t1 t2) = L(t2) (app is inert, only t2 matters)
+L(recΔ b s n) = L(b) + L(s) + L(n) + 1 (recΔ can fire once, then we recurse on n)
+L(eqW a b) = L(a) + L(b) + 1 (eqW can fire once, then we have a or b to reduce)
+
+Let me re-check:
+- R_int_delta: integrate (delta t) → void. L(LHS) = 1 + L(delta t) = 1 + L(t). L(RHS) = 0. So L(LHS) ≥ 1 > 0 = L(RHS). ✓
+- R_merge_void_left: merge void t → t. L(LHS) = L(void) + L(t) + 1 = L(t) + 1. L(RHS) = L(t). ✓
+- R_merge_void_right: same. ✓
+- R_merge_cancel: merge t t → t. L(LHS) = 2L(t) + 1. L(RHS) = L(t). ✓ (since L(t) ≥ 0)
+- R_rec_zero: recΔ b s void → b. L(LHS) = L(b) + L(s) + 0 + 1 = L(b) + L(s) + 1. L(RHS) = L(b). ✓ (since L(s) ≥ 0)
+- R_rec_succ: recΔ b s (delta n) → app s (recΔ b s n). L(LHS) = L(b) + L(s) + L(n) + 1. L(RHS) = L(app s (recΔ b s n)) = L(recΔ b s n) = L(b) + L(s) + L(n) + 1. EQUAL. ✗
+- R_eq_refl: eqW a a → void. L(LHS) = 2L(a) + 1. L(RHS) = 0. ✓
+- R_eq_diff: eqW a b → integrate (merge a b). L(LHS) = L(a) + L(b) + 1. L(RHS) = 1 + L(merge a b) = 1 + L(a) + L(b) + 1 = L(a) + L(b) + 2. INCREASES. ✗
+
+So R_rec_succ and R_eq_diff are problematic.
+
+R_eq_diff: L increases by 1. But the next step is on the merge inside, which decreases L by at least 1. So over two steps, L doesn't increase.
+
+R_rec_succ: L stays the same. But the recursion depth decreases (we've consumed one delta).
+
+So we need a measure that:
+- Decreases for R_rec_succ (recursion depth decreases)
+- Decreases (eventually) for R_eq_diff (but the first step increases)
+
+Let me try a measure that has two components:
+
+Define μ(t) = (a(t), b(t)) where a is the "main" and b is secondary. Use lex order.
+
+a(void) = 0
+a(delta t) = a(t)
+a(integrate t) = a(t)
+a(merge t1 t2) = max(a(t1), a(t2))
+a(app t1 t2) = a(t2)
+a(recΔ b s n) = a(n) + (1 if n is "delta _" else 0)... too ad hoc.
+
+Hmm.
+
+Let me try yet another measure.
+
+Define a measure based on the "structure" of reductions. The idea: each term can be analyzed as a tree, and reductions happen at specific locations.
+
+Actually, you know what, let me just check if the system is SN by considering potential non-termination.
+
+Suppose there's a non-terminating reduction sequence t1 → t2 → t3 → ...
+
+Each ti is a term. The number of terms is countably infinite, so by König's lemma, there might be an infinite path. But we need to bound the lengths.
+
+For each ti+1 to be derived from ti, one of the 8 rules must apply. Let me count the "active" reductions.
+
+R_int_delta: requires integrate (delta _) head.
+R_merge_void_X: requires merge _ void or merge void _ head.
+R_merge_cancel: requires merge t t head.
+R_rec_zero/succ: requires recΔ _ _ void/delta head.
+R_eq_refl/diff: requires eqW head with equal/unequal args.
+
+So reductions are head reductions, except for "head" of the term.
+
+Now, can we have a term that loops? Like eqW a b → integrate (merge a b) → ... → a → ... and back to eqW a b?
+
+After R_eq_diff: integrate (merge a b). This is a head-integrate with head-merge. Can reduce if a = void, b = void, a = b (merge cancels), or if a or b is delta. The merge can reduce to t' = a or b or void. Then integrate t' can reduce if t' = delta _.
+
+After all this, we get a term like t' or void or integrate t''. None of these is eqW or recΔ. So we can't go back to eqW or recΔ.
+
+So eqW reductions don't loop.
+
+What about recΔ? recΔ b s n. Reduces to b (if n = void) or app s (recΔ b s n') (if n = delta n'). The result is b or app s _. Neither is a recΔ at the head (well, app s _ has head app, which is inert). So we don't recurse on recΔ.
+
+Could the inner recΔ b s n' (inside the app) reduce and produce a recΔ? Only if the inner recΔ reduces. The inner recΔ b s n' can reduce to b or app s (recΔ b s n''). But b is not a recΔ (b is some term). app s (recΔ b s n'') is app at head, not recΔ. So no new recΔ at the head.
+
+So recΔ recursions don't loop either.
+
+What if we have a more complex term that, through reductions, returns to a similar term? Like recΔ b s n → ... → recΔ b' s' n' with similar structure? Let's see.
+
+recΔ b s void → b. So if n = void, result is b (not recΔ).
+recΔ b s (delta n') → app s (recΔ b s n'). The new term is app s (recΔ b s n'). The head is app, not recΔ. So we can't "recurse" to recΔ directly.
+
+For the inner recΔ b s n' to reduce to another recΔ b'' s'' n'', we'd need... well, the inner recΔ b s n' reduces to b (if n' = void) or app s (recΔ b s n'') (if n' = delta n''). Either way, no recΔ at the head.
+
+So recΔ can't produce new recΔ at the head. The recursion is strictly bounded.
+
+OK so the system is SN. The question is whether we can prove it with a measure, or whether we need a more sophisticated argument.
+
+Given the difficulty, let me consider: maybe the answer is "no, not from the system alone". Because:
+- The system has rules that increase term size (R_rec_succ, R_eq_diff).
+- Finding a measure that strictly decreases is non-trivial.
+
+But intuitively, the system IS SN. The question is whether the proof can be done "from the calculus alone" using a "standard proof method".
+
+A standard proof method: define a measure and show it decreases.
+
+We've seen that simple measures (size, structural size) don't decrease. We need a more sophisticated measure.
+
+But "standard proof method" can include things like:
+- Lexicographic induction
+- Multiset ordering
+- Various termination techniques
+
+Let me try a multiset measure. The idea: each term has a multiset of "active parts", and reductions transform the multiset in a way that decreases it in the multiset ordering.
+
+For each term, define its "active multiset" as the multiset of "things that can reduce". For void, delta, app: no active parts (multiset is empty). For integrate, merge, recΔ, eqW: one active part.
+
+Hmm, but R_rec_succ doesn't decrease this.
+
+OK let me try a different approach: use a measure that's a tuple (a, b) with lex order.
+
+Define μ(t) = (n_eq(t), n_rec(t)) where:
+- n_eq(t) = number of "pending eqW" reductions (something)
+- n_rec(t) = number of "pending recΔ" reductions
+
+Hmm, this is too vague.
+
+Let me think about it differently. The system has these reductions:
+1. integrate (delta _) → void (decreases size)
+2. merge void _ → _ (decreases size)
+3. merge _ void → _ (decreases size)
+4. merge t t → t (decreases size)
+5. recΔ _ _ void → _ (decreases size)
+6. recΔ _ _ (delta _) → app _ (recΔ _ _ _) (size same, but recursion depth decreases)
+7. eqW a a → void (decreases size)
+8. eqW a b → integrate (merge a b) (size increases, but is "consumed" by subsequent merge reductions)
+
+For SN, we need to show that the "size" doesn't grow unboundedly.
+
+Idea: define a measure on terms using the "size" but with a correction term.
+
+Let's define μ(t) by recursion:
+- μ(void) = 0
+- μ(delta t) = μ(t)
+- μ(integrate t) = 1 + μ(t)
+- μ(merge t1 t2) = 1 + max(μ(t1), μ(t2))   (merge reduces to one of them)
+- μ(app t1 t2) = μ(t2)
+- μ(recΔ b s n) = 1 + μ(b) + μ(s) + max(μ(n), 0)  -- same as before
+- μ(eqW a b) = 1 + μ(a) + μ(b) + 1  -- give eqW a +1 "credit"
+
+Check R_eq_diff: LHS = eqW a b. μ(LHS) = 1 + μ(a) + μ(b) + 1 = 2 + μ(a) + μ(b). RHS = integrate (merge a b). μ(RHS) = 1 + μ(merge a b) = 1 + 1 + max(μ(a), μ(b)) = 2 + max(μ(a), μ(b)).
+μ(LHS) - μ(RHS) = μ(a) + μ(b) - max(μ(a), μ(b)) = min(μ(a), μ(b)) ≥ 0.
+If min(μ(a), μ(b)) > 0, then strict decrease. But if min = 0, then no strict decrease.
+
+If min = 0, then one of a, b is void (since μ(void) = 0). Say a = void. Then eqW void b → integrate (merge void b) = integrate b. 
+μ(LHS) = 2 + 0 + μ(b) = 2 + μ(b).
+μ(RHS) = 1 + μ(b) (since integrate b has μ = 1 + μ(b) = 1 + μ(b)).
+So μ(LHS) - μ(RHS) = 1 > 0. ✓ (strict decrease)
+
+So actually, if a = void, the decrease is by 1. Let me recompute.
+
+R_eq_diff: LHS = eqW a b, RHS = integrate (merge a b).
+If a = void: merge void b = b, so RHS = integrate b. μ(RHS) = 1 + μ(b).
+LHS = eqW void b. μ(LHS) = 1 + 0 + μ(b) + 1 = 2 + μ(b). ✓ strict decrease by 1.
+If b = void: symmetric. ✓
+If a = b: but R_eq_diff requires a ≠ b, so this is R_eq_refl. eqW a a → void. μ(LHS) = 1 + 2μ(a) + 1 = 2 + 2μ(a). μ(RHS) = 0. ✓
+If a ≠ b, both non-void: RHS = integrate (merge a b). merge a b is stuck (no rule applies). μ(merge a b) = 1 + max(μ(a), μ(b)). μ(RHS) = 2 + max(μ(a), μ(b)). μ(LHS) = 2 + μ(a) + μ(b). μ(LHS) - μ(RHS) = min(μ(a), μ(b)) ≥ 1 (since both non-void, μ ≥ 1). ✓ strict decrease.
+
+OK so R_eq_diff strictly decreases μ in all cases! Let me re-check the measure.
+
+Define μ(t) as:
+- μ(void) = 0
+- μ(delta t) = μ(t)
+- μ(integrate t) = 1 + μ(t)
+- μ(merge t1 t2) = 1 + max(μ(t1), μ(t2))
+- μ(app t1 t2) = μ(t2)
+- μ(recΔ b s n) = 1 + μ(b) + μ(s) + μ(n)  -- wait, but I also need to handle R_rec_succ
+- μ(eqW a b) = 1 + μ(a) + μ(b) + 1  -- extra +1
+
+But wait, for μ(t) ≥ 0, we need μ(void) = 0, and all others ≥ 0. Let me check:
+- μ(delta t) = μ(t) ≥ 0 ✓
+- μ(integrate t) = 1 + μ(t) ≥ 1 ✓
+- μ(merge t1 t2) = 1 + max(μ(t1), μ(t2)) ≥ 1 ✓
+- μ(app t1 t2) = μ(t2) ≥ 0 ✓
+- μ(recΔ b s n) = 1 + μ(b) + μ(s) + μ(n) ≥ 1 ✓
+- μ(eqW a b) = 2 + μ(a) + μ(b) ≥ 2 ✓
+
+Now check all rules:
+- R_int_delta: LHS = integrate (delta t), μ = 1 + μ(t). RHS = void, μ = 0. Strict decrease by 1 + μ(t) ≥ 1. ✓
+- R_merge_void_left: LHS = merge void t, μ = 1 + max(0, μ(t)) = 1 + μ(t). RHS = t, μ = μ(t). Strict decrease by 1. ✓
+- R_merge_void_right: similar. ✓
+- R_merge_cancel: LHS = merge t t, μ = 1 + μ(t). RHS = t, μ = μ(t). Strict decrease by 1. ✓
+- R_rec_zero: LHS = recΔ b s void, μ = 1 + μ(b) + μ(s) + 0 = 1 + μ(b) + μ(s). RHS = b, μ = μ(b). Strict decrease by 1 + μ(s) ≥ 1. ✓
+- R_rec_succ: LHS = recΔ b s (delta n), μ = 1 + μ(b) + μ(s) + μ(n). RHS = app s (recΔ b s n), μ = μ(recΔ b s n) = 1 + μ(b) + μ(s) + μ(n). EQUAL. ✗
+- R_eq_refl: LHS = eqW a a, μ = 2 + 2μ(a). RHS = void, μ = 0. Strict decrease. ✓
+- R_eq_diff: LHS = eqW a b (a ≠ b), μ = 2 + μ(a) + μ(b). RHS = integrate (merge a b), μ = 1 + (1 + max(μ(a), μ(b))) = 2 + max(μ(a), μ(b)). μ(LHS) - μ(RHS) = min(μ(a), μ(b)) ≥ 0. Strict if min > 0. If min = 0, then one of a, b is void, but then merge reduces and the analysis changes.
+
+Wait, I computed RHS as integrate (merge a b), but the next step might be on the merge. Let me check the immediate RHS of R_eq_diff. Yes, the RHS of R_eq_diff is integrate (merge a b). The μ of this is 2 + max(μ(a), μ(b)).
+
+For μ(LHS) > μ(RHS): need min(μ(a), μ(b)) > 0.
+
+If a or b is void (μ = 0), then min = 0, no strict decrease from this measure.
+
+But wait, the rule R_eq_diff produces integrate (merge a b). The next step (if a = void) is R_merge_void_left: merge void b → b. So we have:
+eqW void b → integrate (merge void b) → integrate b
+
+The total: 2 steps. From eqW void b with μ = 2 + μ(b), to integrate b with μ = 1 + μ(b). Net: decrease by 1.
+
+So over 2 steps, μ decreases by 1. To show SN, we need: the number of steps is finite. If μ decreases over 2 steps, then we can still have infinite μ (since μ is unbounded). But if μ is bounded by some well-founded quantity... hmm.
+
+Wait, μ is a natural number. It can be infinite if SN doesn't hold. If μ always decreases (or doesn't increase) over a step, then μ is bounded by the initial μ, and any reduction sequence has length ≤ initial μ + 1 (or something).
+
+But our μ doesn't always decrease (R_rec_succ is constant, R_eq_diff might be constant).
+
+OK let me reconsider. The issue is R_rec_succ. Let me see if I can fix the measure for R_rec_succ.
+
+For R_rec_succ: LHS = recΔ b s (delta n), μ(LHS) = 1 + μ(b) + μ(s) + μ(n). RHS = app s (recΔ b s n), μ(RHS) = μ(recΔ b s n) = 1 + μ(b) + μ(s) + μ(n). EQUAL.
+
+What if μ(app t1 t2) = μ(t2) but we add 0 (same as before)? Hmm.
+
+What if we redefine μ for the "app" case to be different? Like μ(app t1 t2) = μ(t2) + something related to t1?
+
+That seems backwards. The point is that app is inert.
+
+Alternative: make μ(recΔ b s n) "absorb" the delta. Like μ(recΔ b s (delta n)) = μ(recΔ b s n) + 1. But this is non-structural.
+
+Actually wait, in my measure, μ(delta t) = μ(t), so μ(recΔ b s (delta n)) = 1 + μ(b) + μ(s) + μ(delta n) = 1 + μ(b) + μ(s) + μ(n). And μ(recΔ b s n) = 1 + μ(b) + μ(s) + μ(n). So they're equal. That's why R_rec_succ has μ constant.
+
+What if μ(delta t) = μ(t) + 1? Then:
+- R_int_delta: integrate (delta t) → void. μ(LHS) = 1 + μ(delta t) = 1 + μ(t) + 1 = 2 + μ(t). μ(RHS) = 0. ✓
+- R_rec_succ: recΔ b s (delta n) → app s (recΔ b s n). μ(LHS) = 1 + μ(b) + μ(s) + μ(delta n) = 1 + μ(b) + μ(s) + 1 + μ(n) = 2 + μ(b) + μ(s) + μ(n). μ(RHS) = μ(recΔ b s n) = 1 + μ(b) + μ(s) + μ(n). Strict decrease by 1. ✓
+
+OK let me try this!
+
+Define μ(t):
+- μ(void) = 0
+- μ(delta t) = 1 + μ(t)  -- delta adds 1
+- μ(integrate t) = 1 + μ(t)
+- μ(merge t1 t2) = 1 + max(μ(t1), μ(t2))
+- μ(app t1 t2) = μ(t2)
+- μ(recΔ b s n) = 1 + μ(b) + μ(s) + μ(n)
+- μ(eqW a b) = 2 + μ(a) + μ(b)  -- eqW has +2
+
+Check:
+- R_int_delta: LHS = integrate (delta t), μ = 1 + μ(delta t) = 1 + 1 + μ(t) = 2 + μ(t). RHS = void, μ = 0. Strict decrease. ✓
+- R_merge_void_left: LHS = merge void t, μ = 1 + max(0, μ(t)) = 1 + μ(t). RHS = t, μ = μ(t). Strict decrease by 1. ✓
+- R_merge_void_right: similar. ✓
+- R_merge_cancel: LHS = merge t t, μ = 1 + μ(t). RHS = t, μ = μ(t). Strict decrease by 1. ✓
+- R_rec_zero: LHS = recΔ b s void, μ = 1 + μ(b) + μ(s) + 0 = 1 + μ(b) + μ(s). RHS = b, μ = μ(b). Strict decrease by 1 + μ(s) ≥ 1. ✓
+- R_rec_succ: LHS = recΔ b s (delta n), μ = 1 + μ(b) + μ(s) + 1 + μ(n) = 2 + μ(b) + μ(s) + μ(n). RHS = app s (recΔ b s n), μ = μ(recΔ b s n) = 1 + μ(b) + μ(s) + μ(n). Strict decrease by 1. ✓
+- R_eq_refl: LHS = eqW a a, μ = 2 + 2μ(a). RHS = void, μ = 0. Strict decrease. ✓
+- R_eq_diff: LHS = eqW a b (a ≠ b), μ = 2 + μ(a) + μ(b). RHS = integrate (merge a b), μ = 1 + 1 + max(μ(a), μ(b)) = 2 + max(μ(a), μ(b)). μ(LHS) - μ(RHS) = min(μ(a), μ(b)).
+
+Now if min(μ(a), μ(b)) > 0, strict decrease. If min = 0, then no strict decrease.
+
+But! If a or b is void (μ = 0), then merge a b is reducible (R_merge_void_X). But R_eq_diff produces integrate (merge a b) directly. The next reduction is on the merge.
+
+So the immediate RHS of R_eq_diff has μ = 2 + max(μ(a), μ(b)). If a = void: μ(RHS) = 2 + max(0, μ(b)) = 2 + μ(b). μ(LHS) = 2 + 0 + μ(b) = 2 + μ(b). EQUAL.
+
+Hmm, so the immediate step doesn't decrease μ. But the next step (merge void b → b, then integrate b) will decrease.
+
+For SN, we need to show the total sequence is finite. If we use a measure that's non-increasing and occasionally decreases, we can use it to show the sequence is finite (since μ ≥ 0 and bounded).
+
+Wait, actually if μ is non-increasing and bounded below by 0, then it can only decrease finitely many times. So between decreases, the number of constant steps must be finite.
+
+Let me think: if μ is non-increasing (μ(t') ≤ μ(t) for t → t') and bounded below, then any reduction sequence has bounded length.
+
+But is μ non-increasing? Let me check:
+- R_int_delta: 0 ≤ 2 + μ(t) ✓ (μ non-increasing)
+- R_merge_void_X: μ(t) ≤ 1 + μ(t) ✓
+- R_merge_cancel: μ(t) ≤ 1 + μ(t) ✓
+- R_rec_zero: μ(b) ≤ 1 + μ(b) + μ(s) ✓
+- R_rec_succ: 1 + μ(b) + μ(s) + μ(n) ≤ 2 + μ(b) + μ(s) + μ(n) ✓
+- R_eq_refl: 0 ≤ 2 + 2μ(a) ✓
+- R_eq_diff: 2 + max(μ(a), μ(b)) ≤ 2 + μ(a) + μ(b) ✓
+
+All rules have μ non-increasing. 
+
+Now, μ is bounded below by 0. So any reduction sequence can have at most μ(t0) decreases (where t0 is the initial term). Between decreases, the number of constant-μ steps is bounded by... hmm, this doesn't immediately give us a bound.
+
+Wait, let me think. If μ is non-increasing and ≥ 0, and it strictly decreases at some steps, then we can use a more refined argument.
+
+Actually, the standard argument: if μ is non-increasing and ≥ 0, and there are only finitely many rules, and each rule can be applied at most "X" times before μ decreases, then the sequence is finite.
+
+For R_eq_diff: after R_eq_diff, μ is the same. But the next step MUST be on the merge (or the integrate, but only if merge is delta _). If merge is reducible (e.g., a = void), then R_merge_void_X decreases μ by 1. So after at most 1 step, μ decreases.
+
+But what if merge is stuck (a, b are non-void and a ≠ b)? Then the next step would have to be on... what? The term is integrate (merge a b), which has integrate as head. R_int_delta requires integrate (delta _), but here it's integrate (merge a b). Is merge a b = delta _? Only if merge a b is exactly delta of something. But merge a b with a, b non-void and a ≠ b is stuck (no rule applies). So integrate (merge a b) is stuck. The reduction sequence ends.
+
+So if merge is stuck after R_eq_diff, the sequence ends in 1 step (after R_eq_diff).
+
+If merge is reducible (one of a, b is void, or a = b), then R_eq_diff is followed by a merge reduction, which decreases μ.
+
+So in all cases, after R_eq_diff, μ decreases within at most 1 more step.
+
+So we can use a measure like: number of "consecutive non-decreasing steps remaining" or something.
+
+Actually, the standard way: use a measure (μ, ν) where μ is non-increasing and ν is a secondary measure that decreases when μ stays the same.
+
+For R_rec_succ: μ stays the same. We need ν to decrease. What is ν? It's some "depth" measure.
+
+Hmm, let me think. After R_rec_succ, the term is app s (recΔ b s n). The "active" part is recΔ b s n, which has lost one delta. So the "recursion depth" of recΔ has decreased.
+
+But the size of the term has increased (because of the app wrapper).
+
+Idea: use the "active size" (ignoring app wrappers).
+
+Let me define μ'(t) = the "active size" of t, i.e., the size ignoring inert constructors (app, delta).
+
+- μ'(void) = 0
+- μ'(delta t) = μ'(t)  -- delta is inert
+- μ'(integrate t) = 1 + μ'(t)
+- μ'(merge t1 t2) = 1 + max(μ'(t1), μ'(t2))
+- μ'(app t1 t2) = μ'(t2)  -- app is inert
+- μ'(recΔ b s n) = 1 + μ'(b) + μ'(s) + μ'(n)
+- μ'(eqW a b) = 2 + μ'(a) + μ'(b)  -- +2 for eqW
+
+Hmm, this is the same as before. Let me check R_rec_succ:
+LHS = recΔ b s (delta n). μ' = 1 + μ'(b) + μ'(s) + μ'(delta n) = 1 + μ'(b) + μ'(s) + μ'(n).
+RHS = app s (recΔ b s n). μ' = μ'(recΔ b s n) = 1 + μ'(b) + μ'(s) + μ'(n).
+EQUAL. So R_rec_succ is constant.
+
+For R_eq_diff: LHS = eqW a b (a ≠ b). μ' = 2 + μ'(a) + μ'(b). RHS = integrate (merge a b). μ' = 1 + (1 + max(μ'(a), μ'(b))) = 2 + max(μ'(a), μ'(b)). 
+If a, b both non-void: μ'(a), μ'(b) ≥ 1. μ'(LHS) - μ'(RHS) = min(μ'(a), μ'(b)) ≥ 1. ✓ Strict decrease.
+If a = void: μ'(a) = 0. μ'(LHS) = 2 + μ'(b). μ'(RHS) = 2 + μ'(b). EQUAL. ✗
+
+So same issue.
+
+But if a = void, then the next step (R_merge_void_X) decreases. So we can use a "credit" or 2-step analysis.
+
+OK let me try a different measure. Let me think about what "potential" or "decrease" we need.
+
+Alternative: use a measure on a "lifted" type. Like, we track each "R_eq_diff" with a "credit" that gets used in the next step.
+
+Or, use a well-founded order that's not based on a single natural number.
+
+OK let me just try this: use a measure that is the multiset of "subterm measures" of reducible subterms.
+
+For each term t, let M(t) be the multiset of μ'(u) for each "reducible" subterm u of t.
+
+Then for R_eq_diff, the multiset changes from {μ'(eqW a b)} to {μ'(integrate (merge a b))} = {μ'(merge a b) + 1} (if integrate is reducible, i.e., if merge a b is delta _).
+
+Hmm, this is getting too complicated.
+
+Let me just try yet another approach: induction on a tuple.
+
+Let me define μ(t) = (size of t, recursion depth of recΔ in t).
+
+size(void) = 0, depth(void) = 0
+size(delta t) = 1 + size(t), depth = depth(t)
+size(integrate t) = 1 + size(t), depth = depth(t)
+size(merge t1 t2) = 1 + size(t1) + size(t2), depth = max(depth(t1), depth(t2))
+size(app t1 t2) = 1 + size(t1) + size(t2), depth = depth(t2)  -- app is inert
+size(recΔ b s n) = 1 + size(b) + size(s) + size(n), depth = ? 
+size(eqW a b) = 1 + size(a) + size(b), depth = ?
+
+For depth, let me define it as the "recursion depth" — the number of nested recΔ's that could fire. But this is non-trivial.
+
+Alternative: depth(t) = the maximum number of consecutive R_rec_succ reductions possible from t.
+
+Hmm, this is what we're trying to bound. Circular.
+
+OK let me just try to use a "combined" measure and see.
+
+Define μ(t) = (α(t), β(t)) where:
+α(t) = the "active size" = sum of sizes of "active" subterms, with app and delta being transparent
+β(t) = the number of "pending" eqW reductions or something
+
+For R_rec_succ: α might decrease. Let me think.
+
+α(void) = 0
+α(delta t) = α(t)
+α(integrate t) = 1 + α(t)
+α(merge t1 t2) = 1 + α(t1) + α(t2)
+α(app t1 t2) = α(t2)
+α(recΔ b s n) = 1 + α(b) + α(s) + α(n)
+α(eqW a b) = 1 + α(a) + α(b)
+
+For R_rec_succ: α(LHS) = 1 + α(b) + α(s) + α(n). α(RHS) = α(recΔ b s n) = 1 + α(b) + α(s) + α(n). EQUAL. ✗
+
+So same issue. Let me just try to make α(recΔ b s n) "decrease" by 1 when n = delta n'.
+
+Define α with a "weight" for recΔ's 3rd arg.
+
+α(recΔ b s n) = 1 + α(b) + α(s) + α(n) + (something based on n)
+
+What if α(recΔ b s n) = 1 + α(b) + α(s) + (α(n) if n is not delta n' else α(n) - 1)?
+
+Hmm, but α(delta t) = α(t), so α(delta n) = α(n). Then α(n) - 1 is one less than α(delta n). So:
+
+α(recΔ b s n) = 1 + α(b) + α(s) + (α(n) - 1 if n is delta n' else α(n))
+            = α(b) + α(s) + α(n) + (1 if n is not delta n' else 0)
+
+Then:
+α(recΔ b s (delta n)) = α(b) + α(s) + α(n) + 0 = α(b) + α(s) + α(n)
+α(recΔ b s n) = α(b) + α(s) + α(n) + (1 if n is not delta n' else 0)
+
+If n is delta n', then α(recΔ b s n) = α(b) + α(s) + α(n) + 0 = same as α(recΔ b s (delta n')).
+If n is not delta n', then α(recΔ b s n) = α(b) + α(s) + α(n) + 1 = α(b) + α(s) + α(n) + 1 > α(recΔ b s (delta n)) = α(b) + α(s) + α(n).
+
+Hmm wait, let me re-examine. We have:
+α(recΔ b s n) = 1 + α(b) + α(s) + α(n) + (if n is delta n' then -1 else 0)
+            = α(b) + α(s) + α(n) + (1 if not (∃ n', n = delta n') else 0)
+
+This is non-structural (depends on the shape of n). Hmm.
+
+For R_rec_succ: LHS = recΔ b s (delta n), RHS = app s (recΔ b s n).
+α(LHS) = α(b) + α(s) + α(delta n) + 0 = α(b) + α(s) + α(n) (since α(delta n) = α(n), and the formula gives +0 for delta n case)
+
+Wait, the formula: α(recΔ b s n) = α(b) + α(s) + α(n) + (1 if n not delta _ else 0). For n = delta n', we have α(recΔ b s (delta n')) = α(b) + α(s) + α(n') + 0 (since delta n' is delta _).
+
+Hmm wait that's the same as α(b) + α(s) + α(n') because alpha is transparent on delta. So α(LHS) = α(b) + α(s) + α(n').
+
+For RHS: app s (recΔ b s n). α(RHS) = α(recΔ b s n) = α(b) + α(s) + α(n) + (1 if n not delta _ else 0).
+
+Hmm, but α(n) in the LHS context is α(n') (the inner of delta n'). So:
+α(LHS) = α(b) + α(s) + α(n')
+α(RHS) = α(b) + α(s) + α(n') + (1 if n' not delta _ else 0)
+
+If n' is not delta _, then α(RHS) > α(LHS) by 1. INCREASE. ✗
+
+That's the wrong direction. We want strict decrease for R_rec_succ.
+
+Hmm. Let me think.
+
+We want: α(RHS) < α(LHS) for R_rec_succ.
+α(LHS) = α(recΔ b s (delta n)) = α(b) + α(s) + α(delta n) + (1 if delta n not delta _ else 0)
+       = α(b) + α(s) + α(n) + 0 (since delta n IS delta _, so the +1 doesn't apply)
+       = α(b) + α(s) + α(n)
+
+α(RHS) = α(app s (recΔ b s n)) = α(recΔ b s n) = α(b) + α(s) + α(n) + (1 if n not delta _ else 0)
+
+We want α(RHS) < α(LHS), i.e., α(b) + α(s) + α(n) + (1 if n not delta _ else 0) < α(b) + α(s) + α(n). This requires (1 if n not delta _ else 0) < 0, which is impossible.
+
+So this formula doesn't work for R_rec_succ.
+
+Let me try the opposite:
+α(recΔ b s n) = α(b) + α(s) + α(n) + (something positive for n not being delta _)
+
+Wait, we want α(RHS) < α(LHS). The "extra" comes from somewhere.
+
+Alternative: let α(recΔ b s n) = α(b) + α(s) + (α(n) + 1). The +1 accounts for the recΔ itself. Then for R_rec_succ:
+α(LHS) = α(b) + α(s) + (α(delta n) + 1) = α(b) + α(s) + α(n) + 1.
+α(RHS) = α(recΔ b s n) = α(b) + α(s) + α(n) + 1.
+EQUAL. ✗
+
+Hmm.
+
+OK let me think about this differently. The R_rec_succ rule:
+recΔ b s (delta n) → app s (recΔ b s n)
+
+The recursion is: we go from "fuel" = delta n to "fuel" = n. The fuel decreases by 1 (we've consumed one delta). But the term gets bigger (app wrapper).
+
+If we measure by "fuel" alone (the depth of delta in the 3rd arg), we get decrease. But the term is bigger.
+
+For SN, we need to show the system as a whole terminates. The "fuel" decreases, and the "size" might increase, but the increase is bounded by the fuel.
+
+Specifically: each R_rec_succ decreases the "fuel" by 1, and increases the "size" by some amount. The total size increase is bounded by the initial fuel times the size per R_rec_succ.
+
+So if we use a measure like "fuel + size" (or some weighted sum), it might decrease.
+
+Let me try. Define "fuel" of a term t as the "delta depth" of t (the maximum number of consecutive deltas from the root going through recΔ's 3rd arg). Hmm, this is non-trivial.
+
+OK let me try yet another approach. Use a measure based on the "spine" of the term.
+
+Actually, you know what, let me just try the simplest possible measure: a tuple of (size, fuel).
+
+Define:
+- fuel(void) = 0
+- fuel(delta t) = 1 + fuel(t)
+- fuel(integrate t) = fuel(t)
+- fuel(merge t1 t2) = max(fuel(t1), fuel(t2))
+- fuel(app t1 t2) = fuel(t2)
+- fuel(recΔ b s n) = fuel(n)  -- fuel of recΔ is the fuel of its 3rd arg
+- fuel(eqW a b) = max(fuel(a), fuel(b))
+
+Hmm, for R_rec_succ: LHS = recΔ b s (delta n). fuel = fuel(delta n) = 1 + fuel(n). RHS = app s (recΔ b s n). fuel = fuel(recΔ b s n) = fuel(n). Strict decrease by 1. ✓
+
+For R_int_delta: LHS = integrate (delta t). fuel = fuel(delta t) = 1 + fuel(t). RHS = void. fuel = 0. ✓ (decrease if fuel(t) ≥ 0, but if fuel(t) = 0 then LHS fuel = 1 > 0 = RHS. ✓)
+
+For R_eq_diff: LHS = eqW a b. fuel = max(fuel(a), fuel(b)). RHS = integrate (merge a b). fuel = fuel(merge a b) = max(fuel(a), fuel(b)). EQUAL. ✗
+
+For R_eq_refl: LHS = eqW a a. fuel = fuel(a). RHS = void. fuel = 0. ✓ if fuel(a) > 0. If fuel(a) = 0, then a = void or something, and LHS fuel = 0 = RHS. EQUAL. ✗
+
+Hmm.
+
+OK so fuel alone doesn't work for R_eq_*. But it does work for R_rec_succ.
+
+Combine: use (size, fuel) with lex order. If size stays the same or increases, look at fuel.
+
+Hmm, but for R_rec_succ, size increases and fuel decreases. So lex order doesn't directly help.
+
+We want: (size, fuel) decreases in lex order for R_rec_succ.
+LHS = recΔ b s (delta n). size = ?, fuel = 1 + fuel(n).
+RHS = app s (recΔ b s n). size = ?, fuel = fuel(n).
+
+If size(RHS) < size(LHS), then lex says decrease regardless of fuel. But size(RHS) = 1 + size(s) + 1 + size(b) + size(s) + size(n) = 2 + size(b) + 2 size(s) + size(n). size(LHS) = 1 + size(b) + size(s) + 1 + size(n) = 2 + size(b) + size(s) + size(n). So size(RHS) - size(LHS) = size(s) ≥ 0. So size(RHS) ≥ size(LHS). EQUAL if size(s) = 0, i.e., s = void.
+
+If size(RHS) = size(LHS) (when s = void), then we need fuel(RHS) < fuel(LHS). fuel(LHS) = 1 + fuel(n), fuel(RHS) = fuel(n). Strict decrease. ✓
+
+If size(RHS) > size(LHS), then lex says INCREASE. ✗
+
+So lex order on (size, fuel) doesn't work when s is non-void.
+
+Hmm.
+
+OK let me try (size, fuel) with the second component being -fuel or something.
+
+Actually, let me think again. The size increases by size(s) in R_rec_succ. The fuel decreases by 1. If we can show that the total "size" over the whole sequence is bounded, we're done.
+
+Observation: each R_rec_succ consumes 1 fuel. Each R_rec_succ adds size(s) to the term. The total size increase from R_rec_succ is bounded by (initial fuel) * max(size(s)) over the sequence.
+
+Hmm, but max(size(s)) is unbounded if the s can grow.
+
+Wait, can s grow? Looking at the rules, s is the 2nd argument of recΔ. The recΔ reduces to app s (recΔ b s n) (in R_rec_succ) or to b (in R_rec_zero). The s is unchanged in R_rec_succ. In R_rec_zero, the recΔ is gone, so s is no longer relevant.
+
+So s doesn't grow. s is whatever it was in the original recΔ. So size(s) is constant for a given recΔ.
+
+For a given term t0, each subterm s of t0 has a fixed size. The total size increase from R_rec_succ is bounded by (number of recΔs) * (max size(s)).
+
+But the number of recΔs is also bounded by the fuel, which is bounded by the initial term.
+
+OK so intuitively, the system is SN. The proof is via a measure that tracks both size and fuel.
+
+Let me try to formalize. Define a measure μ(t) = (size(t), fuel(t)) with lex order... wait, we need to choose a well-order.
+
+Actually, I realize: for R_rec_succ, size INCREASES. So if we use lex order on (size, ...), and size increases, then the lex order doesn't decrease (the first component increases).
+
+But if we use lex order on (fuel, size), then for R_rec_succ:
+fuel(LHS) = 1 + fuel(n), fuel(RHS) = fuel(n). fuel decreases by 1. ✓
+
+For other rules:
+- R_int_delta: fuel(LHS) = fuel(delta t) = 1 + fuel(t). fuel(RHS) = fuel(void) = 0. Decrease (if fuel(t) ≥ 0, then 1 + fuel(t) ≥ 1 > 0). ✓
+- R_merge_void_X: fuel(LHS) = fuel(merge void t) = max(0, fuel(t)) = fuel(t). fuel(RHS) = fuel(t). EQUAL.
+- R_merge_cancel: fuel(LHS) = fuel(merge t t) = fuel(t). fuel(RHS) = fuel(t). EQUAL.
+- R_rec_zero: fuel(LHS) = fuel(recΔ b s void) = fuel(void) = 0. fuel(RHS) = fuel(b). If fuel(b) > 0, then INCREASE. ✗
+- R_eq_refl: fuel(LHS) = fuel(eqW a a) = fuel(a). fuel(RHS) = fuel(void) = 0. Decrease if fuel(a) > 0. ✗ if fuel(a) = 0.
+- R_eq_diff: fuel(LHS) = fuel(eqW a b) = max(fuel(a), fuel(b)). fuel(RHS) = fuel(integrate (merge a b)) = fuel(merge a b) = max(fuel(a), fuel(b)). EQUAL.
+
+So fuel doesn't work for many rules.
+
+What if we use a measure based on a different quantity?
+
+Let me try: define a "depth" of a term as the maximum nesting of recΔ and eqW. But this is tricky.
+
+Actually, let me try a completely different measure: a "potential" based on the sum of contributions from each subterm.
+
+You know, I think the cleanest way to prove SN for this system is:
+
+Observation: every reduction rule either decreases the "size" of the term or keeps it the same. The R_rec_succ and R_eq_diff increase the size, but...
+
+Wait, R_eq_diff increases the size. R_rec_succ increases or keeps the size.
+
+Hmm. Let me think.
+
+Actually, the key insight: the number of "R_eq_diff" applications is bounded by some quantity, and the number of "R_rec_succ" applications is bounded by the fuel.
+
+Let me think about R_eq_diff more carefully. R_eq_diff applies to eqW a b with a ≠ b. After applying, we get integrate (merge a b). The merge can reduce (if applicable) and then integrate can reduce (if applicable). Total reductions from R_eq_diff: at most 1 + 1 (merge) + 1 (integrate) = 3 steps.
+
+Wait, actually more. The merge can reduce by R_merge_void_X or R_merge_cancel. If both a, b are void and equal, merge a a → a = void. So merge reduces 1 step. Then integrate void is stuck. Total: 2 steps (R_eq_diff + R_merge_cancel).
+
+If a = void, b ≠ void: merge void b → b. 1 step. Then integrate b: stuck unless b = delta _. If b = delta t, integrate b → void. 1 more step. Total: 3 steps.
+
+If a ≠ b, both non-void: merge is stuck. Total: 1 step.
+
+If a = b (but this is R_eq_refl, not R_eq_diff): → void. 1 step.
+
+So R_eq_diff leads to at most 3 steps.
+
+For R_rec_succ: each application consumes 1 fuel. The number of R_rec_succ applications is bounded by the fuel of the original 3rd arg.
+
+For R_rec_zero: 1 application, then done with this recΔ.
+
+For R_int_delta: 1 application, then done with this integrate.
+
+For R_merge_*: 1 application, then merge is reduced.
+
+So the total number of reductions from a term t is bounded by:
+- Number of R_int_delta's: at most (number of integrate (delta _) subterms in t)
+- Number of R_merge_void/cancel's: at most (number of reducible merge subterms)
+- Number of R_rec_zero's: at most (number of recΔ with void 3rd arg)
+- Number of R_rec_succ's: at most (sum of fuels of recΔ 3rd args)
+- Number of R_eq_refl's: at most (number of eqW with equal args)
+- Number of R_eq_diff's: at most (number of eqW with unequal args)
+
+But these are not bounded just by t's structure, because R_eq_diff can introduce new reducible subterms (in the merge).
+
+Hmm. Let me think again.
+
+Wait, after R_eq_diff, the new term is integrate (merge a b). The new reducible subterms are: integrate, merge. The integrate can reduce (if merge result is delta _). The merge can reduce (if a = void, b = void, or a = b).
+
+If merge reduces to t' (some term), then integrate t' might be reducible (if t' = delta _).
+
+The total "new reductions" introduced by R_eq_diff is at most 2 (merge + integrate).
+
+So if we count "reductions" more carefully: each R_eq_diff can "trigger" at most 2 more reductions. So the total reductions are bounded by (initial reductions in t) + 2 * (number of R_eq_diff applications).
+
+But we still need to bound the number of R_eq_diff applications.
+
+Hmm, this is getting circular.
+
+OK let me try a different approach. Let me use a measure that "tracks" the eqW potential.
+
+Define a measure μ(t) as follows:
+- μ(void) = 0
+- μ(delta t) = μ(t)
+- μ(integrate t) = 1 + μ(t) + 1 = 2 + μ(t)  -- +1 for being reducible (if inner is delta _)
+- μ(merge t1 t2) = 1 + max(μ(t1), μ(t2)) + (1 if t1 = void or t2 = void or t1 = t2 else 0)
+- μ(app t1 t2) = μ(t2)
+- μ(recΔ b s n) = 1 + μ(b) + μ(s) + μ(n) + (1 if n is void or n is delta _ else 0)
+- μ(eqW a b) = 1 + μ(a) + μ(b) + 1  -- +1 for being reducible
+
+Wait, this is getting too ad hoc.
+
+Let me just try to write a measure and check it carefully.
+
+OK new attempt. Let me define μ based on a "potential" function that's a tuple.
+
+Define μ(t) = (α(t), β(t)) where:
+- α(t) is the "main" size
+- β(t) is the "depth" or some secondary
+
+Use lex order.
+
+For each rule, we need (α, β) to decrease.
+
+For R_rec_succ: α needs to decrease, or (α same and β decreases).
+
+α(void) = 0
+α(delta t) = α(t)  -- delta is transparent
+α(integrate t) = 1 + α(t)
+α(merge t1 t2) = 1 + α(t1) + α(t2)  -- normal size
+α(app t1 t2) = α(t2)  -- app is transparent on left
+α(recΔ b s n) = 1 + α(b) + α(s) + α(n)  -- normal size, but with recΔ structure
+α(eqW a b) = 1 + α(a) + α(b)
+
+For R_rec_succ: α(LHS) = 1 + α(b) + α(s) + α(delta n) = 1 + α(b) + α(s) + α(n). α(RHS) = α(app s (recΔ b s n)) = α(recΔ b s n) = 1 + α(b) + α(s) + α(n). EQUAL. So α is constant.
+
+For β, let me use a "fuel" measure:
+β(void) = 0
+β(delta t) = 1 + β(t)  -- delta adds 1 to fuel
+β(integrate t) = β(t)
+β(merge t1 t2) = max(β(t1), β(t2))
+β(app t1 t2) = β(t2)
+β(recΔ b s n) = β(n)
+β(eqW a b) = max(β(a), β(b))
+
+For R_rec_succ: β(LHS) = β(delta n) = 1 + β(n). β(RHS) = β(app s (recΔ b s n)) = β(recΔ b s n) = β(n). Decrease by 1. ✓
+
+So (α, β) for R_rec_succ: (same, decrease). Lex says decrease. ✓
+
+For other rules:
+- R_int_delta: α(LHS) = 1 + α(t). α(RHS) = 0. Decrease. ✓
+- R_merge_void_left: α(LHS) = 1 + 0 + α(t) = 1 + α(t). α(RHS) = α(t). Decrease by 1. ✓
+- R_merge_void_right: same.
+- R_merge_cancel: α(LHS) = 1 + 2α(t). α(RHS) = α(t). Decrease. ✓
+- R_rec_zero: α(LHS) = 1 + α(b) + α(s) + 0 = 1 + α(b) + α(s). α(RHS) = α(b). Decrease. ✓
+- R_rec_succ: α same, β decreases by 1. ✓ (lex)
+- R_eq_refl: α(LHS) = 1 + 2α(a). α(RHS) = 0. Decrease. ✓
+- R_eq_diff: α(LHS) = 1 + α(a) + α(b). α(RHS) = 1 + 1 + α(a) + α(b) = 2 + α(a) + α(b). INCREASE by 1. ✗
+
+Damn, R_eq_diff still increases α. So lex (α, β) doesn't help.
+
+OK let me think. For R_eq_diff, the size increases by 1. But the merge can then reduce, decreasing the size.
+
+Idea: use a "3-component" lex: (α, β, γ) where γ is for R_eq_diff.
+
+Define γ:
+γ(void) = 0
+γ(delta t) = γ(t)
+γ(integrate t) = γ(t)
+γ(merge t1 t2) = γ(t1) + γ(t2) + (1 if reducible else 0)
+γ(app t1 t2) = γ(t2)
+γ(recΔ b s n) = γ(b) + γ(s) + γ(n)
+γ(eqW a b) = γ(a) + γ(b) + 1  -- +1 for being reducible (R_eq_diff)
+
+For R_eq_diff: γ(LHS) = γ(a) + γ(b) + 1. γ(RHS) = γ(integrate (merge a b)) = γ(merge a b) = γ(a) + γ(b) + (1 if reducible else 0).
+γ(LHS) - γ(RHS) = 1 - (1 if reducible else 0) = 0 or 1.
+If merge a b is reducible (a or b is void, or a = b), then γ(LHS) = γ(RHS). EQUAL.
+If merge a b is not reducible, then γ(LHS) > γ(RHS). Strict decrease.
+
+So for R_eq_diff, γ is non-increasing. If γ stays the same, we need a 4th component.
+
+If merge a b is reducible, then the next step is a merge reduction, which changes γ. Let me check.
+
+merge a b reducible. Cases:
+- a = void: merge void b → b. γ(LHS) = γ(merge void b) = γ(void) + γ(b) + 1 = γ(b) + 1. γ(RHS) = γ(b). Decrease by 1. ✓
+- b = void: similar.
+- a = b: merge a a → a. γ(LHS) = γ(merge a a) = γ(a) + γ(a) + 1 = 2γ(a) + 1. γ(RHS) = γ(a). Decrease by 1 + γ(a) ≥ 1. ✓
+
+So after R_eq_diff, if merge is reducible, the next step decreases γ. So in 2 steps, the lex tuple (α, β, γ) decreases.
+
+But "in 2 steps" is not a single step. We need single-step decrease for SN proof.
+
+Unless we use a measure that "anticipates" the decrease. Like, after R_eq_diff, the measure is set to "anticipate" the merge reduction.
+
+This is the "credit" approach. Hmm.
+
+Actually, you know what, let me just try to find a different measure that works for R_eq_diff in a single step.
+
+For R_eq_diff, the size increases. But the "structure" is more "redundant". Like, the result integrate (merge a b) is "equivalent" to eqW a b in some sense (both can be reduced to void iff a = b, and both are stuck otherwise... no, integrate (merge a b) can reduce further if a = void or b = void).
+
+Hmm, actually:
+- eqW a a → void (R_eq_refl)
+- eqW a b (a ≠ b) → integrate (merge a b) → ... (stuck or reduce)
+
+- integrate (merge a a) → integrate a (R_merge_cancel) → ... (stuck or reduce)
+
+So eqW a a and integrate (merge a a) are NOT the same: eqW a a → void in 1 step, integrate (merge a a) → integrate a → (stuck or reduce).
+
+Hmm. But for a ≠ b, eqW a b and integrate (merge a b) have the same "fate" (after a few reductions).
+
+Actually, can we define a "normal form" measure? Like, what's the "value" of a term after all reductions?
+
+For our system, the "value" might be the unique normal form (if it exists). Hmm.
+
+OK let me just try a different measure.
+
+Define μ(t) = (size(t), "redundancy" of t).
+
+For R_eq_diff, the size increases but the "redundancy" might decrease. Like, the eqW is "redundant" if a = b (then it reduces to void), but R_eq_diff only fires if a ≠ b. After R_eq_diff, we have integrate (merge a b), which is "less redundant" because merge is reducible only if there's a void or equality.
+
+Hmm, this is vague. Let me try.
+
+Actually, let me try a measure based on the multiset of "sizes of reducible subterms".
+
+For each term t, let M(t) be the multiset of sizes of "reducible" subterms of t. A "reducible" subterm is one that can fire a rule.
+
+For our system, reducible subterms are:
+- integrate (delta _) (for R_int_delta)
+- merge void _, merge _ void, merge t t (for R_merge_*)
+- recΔ _ _ void, recΔ _ _ (delta _) (for R_rec_*)
+- eqW a a, eqW a b (for R_eq_*)
+
+For eqW a b, both R_eq_refl (if a = b) and R_eq_diff (if a ≠ b) can fire. So eqW a b is reducible iff... well, a and b are specific terms, and we can check equality. So eqW a b is always reducible (either R_eq_refl or R_eq_diff applies).
+
+OK so reducible subterms are: any integrate (delta _), any merge (in the specific forms), any recΔ with reducible 3rd arg, any eqW.
+
+Hmm, this is getting too complex.
+
+Let me try a completely different approach: encode the system in a way that's clearly SN.
+
+Observation: app and delta are "values" — they never reduce at the head. They're like "wrappers" or "markers".
+
+A "value" form is: void, delta v, app v1 v2, where v1, v2 are values or recursions... hmm, this is like an abstract machine.
+
+Alternatively, consider a CPS transformation or a normalization-by-evaluation.
+
+You know what, let me just accept that the system is SN (which it clearly is, intuitively) and see if a measure can be constructed.
+
+Try: define μ(t) = the multiset of [a(t)] where a(t) is some measure, for each reducible subterm of t. Use multiset ordering.
+
+Hmm, getting too complicated.
+
+Let me just try yet another measure.
+
+Define μ(t) by:
+- μ(void) = 0
+- μ(delta t) = μ(t)
+- μ(integrate t) = 1 + μ(t)
+- μ(merge t1 t2) = 1 + max(μ(t1), μ(t2))  -- merge reduces to one of them
+- μ(app t1 t2) = μ(t2)
+- μ(recΔ b s n) = 1 + μ(b) + μ(s) + μ(n)  -- recΔ recurses, but with measure absorbing
+- μ(eqW a b) = 1 + μ(a) + μ(b) + 1  -- +1 for being reducible
+
+For R_eq_diff: LHS = eqW a b, μ = 1 + μ(a) + μ(b) + 1 = 2 + μ(a) + μ(b). RHS = integrate (merge a b), μ = 1 + (1 + max(μ(a), μ(b))) = 2 + max(μ(a), μ(b)).
+μ(LHS) - μ(RHS) = min(μ(a), μ(b)).
+
+If min(μ(a), μ(b)) > 0, strict decrease. ✓
+If min(μ(a), μ(b)) = 0, then one of a, b is void. Say a = void. Then merge a b is reducible.
+But the immediate RHS is integrate (merge a b) = integrate (merge void b). μ = 2 + max(0, μ(b)) = 2 + μ(b). And μ(LHS) = 2 + 0 + μ(b) = 2 + μ(b). EQUAL.
+
+So no strict decrease in this case.
+
+Hmm. OK let me try μ(eqW a b) = 1 + μ(a) + μ(b) + 2 (with +2 for reducibility):
+
+For R_eq_refl: μ(LHS) = 1 + 2μ(a) + 2 = 3 + 2μ(a). μ(RHS) = 0. Strict decrease. ✓
+For R_eq_diff: μ(LHS) = 1 + μ(a) + μ(b) + 2 = 3 + μ(a) + μ(b). μ(RHS) = 1 + (1 + max(μ(a), μ(b))) = 2 + max(μ(a), μ(b)).
+μ(LHS) - μ(RHS) = 1 + min(μ(a), μ(b)) ≥ 1 (since both non-void in R_eq_diff). ✓
+
+Wait, in R_eq_diff, a ≠ b. But they can both be void? No, a ≠ b so at most one is void. If one is void, the other is non-void. min(μ(a), μ(b)) = 0. Then μ(LHS) - μ(RHS) = 1 + 0 = 1. ✓ Strict decrease.
+
+OK so μ(eqW a b) = 1 + μ(a) + μ(b) + 2 works for R_eq_diff and R_eq_refl.
+
+Let me re-define everything:
+- μ(void) = 0
+- μ(delta t) = μ(t)
+- μ(integrate t) = 1 + μ(t)
+- μ(merge t1 t2) = 1 + max(μ(t1), μ(t2))  -- assumes merge reduces to one of them
+- μ(app t1 t2) = μ(t2)
+- μ(recΔ b s n) = 1 + μ(b) + μ(s) + μ(n)  -- assumes recΔ recurses
+- μ(eqW a b) = 1 + μ(a) + μ(b) + 2
+
+Check all rules:
+- R_int_delta: μ(LHS) = 1 + μ(delta t) = 1 + μ(t). μ(RHS) = 0. Strict decrease. ✓
+- R_merge_void_left: μ(LHS) = 1 + max(0, μ(t)) = 1 + μ(t). μ(RHS) = μ(t). Strict decrease by 1. ✓
+- R_merge_void_right: same. ✓
+- R_merge_cancel: μ(LHS) = 1 + μ(t). μ(RHS) = μ(t). Strict decrease by 1. ✓
+- R_rec_zero: μ(LHS) = 1 + μ(b) + μ(s) + 0 = 1 + μ(b) + μ(s). μ(RHS) = μ(b). Strict decrease. ✓
+- R_rec_succ: μ(LHS) = 1 + μ(b) + μ(s) + μ(delta n) = 1 + μ(b) + μ(s) + μ(n). μ(RHS) = μ(app s (recΔ b s n)) = μ(recΔ b s n) = 1 + μ(b) + μ(s) + μ(n). EQUAL. ✗
+- R_eq_refl: μ(LHS) = 1 + 2μ(a) + 2 = 3 + 2μ(a). μ(RHS) = 0. Strict decrease. ✓
+- R_eq_diff: μ(LHS) = 1 + μ(a) + μ(b) + 2 = 3 + μ(a) + μ(b). μ(RHS) = 1 + (1 + max(μ(a), μ(b))) = 2 + max(μ(a), μ(b)). 
+  μ(LHS) - μ(RHS) = 1 + min(μ(a), μ(b)) ≥ 1. ✓
+
+So R_rec_succ is the only problem. The μ doesn't decrease.
+
+Hmm. Let me think.
+
+For R_rec_succ, the issue is that the size doesn't decrease (the recΔ structure is the same size as before, just wrapped in app).
+
+Idea: make recΔ b s n have a different μ depending on whether n is "deep" or "shallow".
+
+Define:
+μ(recΔ b s n) = 1 + μ(b) + μ(s) + 2 * μ(n)  -- double count μ(n) to make R_rec_succ decrease
+
+For R_rec_succ: μ(LHS) = 1 + μ(b) + μ(s) + 2 * μ(delta n) = 1 + μ(b) + μ(s) + 2 μ(n). μ(RHS) = μ(recΔ b s n) = 1 + μ(b) + μ(s) + 2 μ(n). EQUAL. ✗
+
+Hmm, still equal because of the +1 for recΔ itself.
+
+What if we don't add the +1 for recΔ? Like μ(recΔ b s n) = μ(b) + μ(s) + 2 μ(n). Then:
+R_rec_succ: μ(LHS) = μ(b) + μ(s) + 2 μ(n). μ(RHS) = μ(b) + μ(s) + 2 μ(n). EQUAL.
+
+Still equal.
+
+The issue: in R_rec_succ, the new term is app s (recΔ b s n). The recΔ b s n has the same "active size" as the original recΔ b s (delta n) (since the delta is transparent). So the measure of the new term is the same as the measure of the recΔ part of the original, which is the same as the measure of the original (after stripping the delta).
+
+We need a measure that distinguishes "recΔ b s (delta n)" from "app s (recΔ b s n)". The former is "active" (can reduce), the latter is "wrapped" (can't reduce directly).
+
+Idea: assign a "weight" to the head constructor. recΔ is "heavy" (active), app is "light" (inert).
+
+Define: μ(t) = (active_weight(t), passive_size(t)) or something.
+
+Or: μ(t) = (number of "active reductions" remaining, size).
+
+For recΔ b s n, the "active reductions remaining" is the fuel + 1 (for R_rec_zero) or fuel (for R_rec_succ, where we recurse). Hmm, this is circular.
+
+OK let me try: define a "tag" for each subterm indicating whether it's "active" or "inert".
+
+A subterm is "active" if it can directly participate in a reduction. A subterm is "inert" if it's wrapped in app or delta.
+
+For a term t, let A(t) be the number of "active reductions remaining" (somehow defined). And let P(t) be the "passive size" (size of the inert wrapper).
+
+Hmm, this is vague. Let me just try.
+
+Define A(t):
+- A(void) = 0
+- A(delta t) = A(t)
+- A(integrate t) = 1 + A(t)  -- integrate can fire if t is delta _
+- A(merge t1 t2) = 1 + max(A(t1), A(t2))  -- merge can fire, then we're left with one
+- A(app t1 t2) = A(t2)  -- app is inert
+- A(recΔ b s n) = 1 + A(b) + A(s) + A(n)  -- recΔ can fire
+- A(eqW a b) = 1 + A(a) + A(b) + 1  -- eqW can fire
+
+This is the same as μ before. Doesn't work for R_rec_succ.
+
+Alternative A for recΔ: A(recΔ b s n) = A(n) + 1 (only the 3rd arg matters for recursion).
+
+For R_rec_succ: A(LHS) = A(delta n) + 1 = A(n) + 1. A(RHS) = A(recΔ b s n) = A(n) + 1. EQUAL. Still.
+
+Hmm.
+
+OK let me think differently. In R_rec_succ, the new term is app s (recΔ b s n). The "interesting" subterm is recΔ b s n. The recursion has moved from n to recΔ b s n. But the "fuel" of the new recΔ b s n is the same as the fuel of the old n (since n → delta n' decreases fuel by 1, and recΔ b s n has fuel = A(n)).
+
+Wait, I defined A(recΔ b s n) = A(n) + 1. So A(recΔ b s n) = A(n) + 1. And A(recΔ b s (delta n)) = A(delta n) + 1 = A(n) + 1. EQUAL.
+
+So this A doesn't help.
+
+What if A(recΔ b s n) = A(n) + 1 + (1 if n is delta _ else 0)? Then for n = delta n', A = A(n') + 1 + 1 = A(n') + 2. And A(recΔ b s n) for n = n' is A(n') + 1 + 0 = A(n') + 1 (if n' is not delta).
+
+Hmm wait, I want A(RHS) < A(LHS) for R_rec_succ. 
+
+LHS = recΔ b s (delta n'). A(LHS) = A(delta n') + 1 + 1 = A(n') + 2.
+RHS = app s (recΔ b s n'). A(RHS) = A(recΔ b s n') = A(n') + 1 + (1 if n' is delta _ else 0).
+
+If n' is not delta _, then A(RHS) = A(n') + 1. A(LHS) = A(n') + 2. A(LHS) - A(RHS) = 1. ✓ Strict decrease.
+
+If n' is delta n'', then A(RHS) = A(n') + 1 + 1 = A(n') + 2. A(LHS) = A(n') + 2. EQUAL. ✗
+
+Hmm, so this only works if n' is not delta. But n' could be delta.
+
+OK this approach is not working. Let me think.
+
+Maybe the right measure is the size of the term, where "size" is defined in a clever way.
+
+Let me try: define size based on the "unfolding" of the term.
+
+A term t can be seen as a "program" that, when run, produces a normal form. The "size" of the program is... hmm, this is going in circles.
+
+OK let me try a measure based on the multiset of "paths" or "spines" in the term.
+
+A "reduction path" in t is a path from the root to a reducible subterm. The multiset of path lengths gives a measure.
+
+For R_rec_succ, the reducible subterms might move or change. Let me think.
+
+LHS = recΔ b s (delta n). The reducible subterms are: recΔ b s (delta n) (itself), and any reducible subterms in b, s, n.
+RHS = app s (recΔ b s n). The reducible subterms are: recΔ b s n (under app, not at root), and any reducible subterms in s, b, n.
+
+Hmm, the root of RHS is app, which is inert. So recΔ b s n is not directly reducible (it's wrapped in app). 
+
+Wait, the rules only fire at the root, right? Yes, looking at the rules, they all have specific constructors at the root. So a recΔ inside an app cannot fire (because the root is app, not recΔ).
+
+So RHS has NO directly reducible subterm at the root. It's "inert at the root". The only reducible subterms are inside (but they're not at the root, so they can't fire).
+
+Wait, that doesn't sound right. The reduction rules fire when the LHS matches the root constructor. So:
+- R_int_delta: root is integrate, immediate child is delta
+- R_merge_*: root is merge
+- R_rec_*: root is recΔ
+- R_eq_*: root is eqW
+
+So a reducible root has integrate, merge, recΔ, or eqW as the constructor.
+
+In RHS = app s (recΔ b s n), the root is app, not recΔ. So no rule applies at the root. The recΔ inside is not at the root, so it can't fire.
+
+So RHS is "stuck at the root", but it might have reducible subterms inside (in s, b, n).
+
+Wait, but if those reducible subterms are inside s, b, or n (which are inside recΔ, which is inside app), they're at depth 2 or more. The rules only fire at depth 0. So they don't fire.
+
+So RHS is a NORMAL FORM! It's stuck. The reduction sequence ends.
+
+Wait, let me double-check. RHS = app s (recΔ b s n). Root is app. No rule has app as root. So no rule applies. RHS is a normal form.
+
+So R_rec_succ: LHS → RHS, and RHS is a normal form. So this is a 1-step reduction that terminates.
+
+Wait, but then R_rec_succ is just 1 step, after which we're done. That makes R_rec_succ very simple.
+
+Hmm, but then the "recursion" in recΔ is trivial: R_rec_succ just unwraps one delta and then stops.
+
+Let me re-examine. LHS = recΔ b s (delta n). RHS = app s (recΔ b s n). RHS is app at root, with recΔ inside.
+
+For RHS to reduce further, we'd need a rule that applies to "app s (recΔ b s n)". But the root is app, and no rule has app as root. So no further reduction. RHS is a normal form.
+
+Wait, but then R_rec_succ is essentially "evaluate one step of recursion and stop". And R_rec_zero evaluates the base case. So recΔ is a 1-step function.
+
+Then the system is clearly SN! Each recΔ fires at most once (either R_rec_zero or R_rec_succ), then becomes inert (wrapped in app) or returns b.
+
+Let me re-examine. R_rec_succ: recΔ b s (delta n) → app s (recΔ b s n). The new term has recΔ at depth 1 (inside app). No rule applies to this recΔ (since it's not at the root). So no further reduction. The recΔ b s n inside is "dead" (cannot fire).
+
+So each recΔ b s n can fire at most one rule (either R_rec_zero if n = void, or R_rec_succ if n = delta n'). After that, it becomes inert (if R_rec_succ) or disappears (if R_rec_zero, replaced by b).
+
+Wait, but the "s" in the app wrapper is also a subterm. Can it reduce? Only if s has reducible structure at the root. But s is the 2nd arg of the original recΔ, and it's now in the 1st arg of app. The root of the new term is app, not whatever s is. So s's structure is hidden inside app and can't fire.
+
+So R_rec_succ truly produces a normal form (if we ignore s, b, n inside).
+
+Hmm wait, but b and n are also inside the new term. The new term is app s (recΔ b s n). The recΔ b s n contains b, s, n. The s here is the same s. The b and n are subterms.
+
+For these to reduce, the root would need to be a reducible constructor. But the root is app, and below it everything is at depth ≥ 1. The rules only fire at depth 0. So nothing inside app can reduce.
+
+Wait, that means the entire app _ _ subterms are inert. None of the rules apply to anything inside an app.
+
+So R_rec_succ truly terminates the term (the result is a normal form, modulo the inert app wrapper).
+
+Hmm wait, but the original term had recΔ at the root. After R_rec_succ, the root is app. So the original reducible structure is "dead".
+
+What about R_eq_diff? LHS = eqW a b. RHS = integrate (merge a b). The root is now integrate. The integrate can reduce if the inner is delta _. The merge inside can reduce.
+
+So R_eq_diff doesn't immediately produce a normal form. The next step is on the merge or integrate.
+
+For R_eq_diff followed by a merge reduction:
+- merge void b → b: now we have integrate b. b might be delta _, in which case integrate b → void. Else, stuck.
+- merge t t → t: now we have integrate t. Similar.
+
+For R_eq_diff followed by no merge reduction (merge is stuck):
+- integrate (merge a b) is stuck (unless merge a b is delta _, which requires merge to reduce, but it's stuck).
+
+So R_eq_diff leads to at most 2 more reductions (merge + integrate).
+
+OK so the system is SN. Let me try to prove it with a measure.
+
+Insight: app and delta are "wrappers" that make subterms inert. The "active" part of a term is the part that's not wrapped in app or delta.
+
+Define: the "kernel" of t, ker(t), as t with all app and delta wrappers removed. Wait, that's not quite right.
+
+Hmm, let me define: a "reduction-active" subterm of t is a subterm u such that u can be reduced (i.e., the root of u matches a rule's LHS).
+
+For app t1 t2, the root is app, which doesn't match any rule. So app t1 t2 is not reduction-active. But t1 and t2 are subterms. Are they reduction-active? They are at depth 1, but the rules fire at depth 0 (root). So t1 and t2 inside app are NOT reduction-active.
+
+So inside an app, nothing is reduction-active. The app is "dead code" (with respect to reductions).
+
+For delta t, the root is delta, which doesn't match any rule. So delta t is not reduction-active. The t inside is at depth 1, not reduction-active.
+
+So delta t is also "dead code".
+
+For the other constructors (void, integrate, merge, recΔ, eqW), the root might match a rule.
+
+So: the "active size" of t is the number of "active" subterms (those with reducible root constructors, at depth 0... but actually any subterm, since the rules fire at the root only).
+
+Hmm wait, the rules fire at the root of the whole term, not at arbitrary subterms. So the "active" part of t is just the root of t (if it's a reducible constructor) and any "active" subterms inside.
+
+Wait no. The Step relation is defined on pairs (t, t'). The rules are "t → t'" where t has a specific root. So Step is a relation between terms, not subterms. A reduction "t → t'" means: starting from t, we apply one rule, getting t'.
+
+But the question of whether t can reduce depends on its root. If t's root is a reducible constructor, t can reduce. Otherwise, t is a normal form.
+
+So the reducibility of t depends on the root of t.
+
+For subterms of t, they're at depth ≥ 1. They cannot directly reduce (only the whole term can reduce, at the root). So all subterms of t are "inert" except when they become the root via a reduction.
+
+So when we reduce t, the root changes. The new term t' has a new root. If t' has a reducible root, t' can reduce further. If not, t' is a normal form.
+
+Now, the key insight: when we apply a rule, the root of t changes. The new root depends on the rule:
+- R_int_delta: root was integrate, now root is void. New root not reducible. t' is normal form.
+- R_merge_*: root was merge, now root is t (some term). New root might be reducible.
+- R_rec_zero: root was recΔ, now root is b. New root might be reducible.
+- R_rec_succ: root was recΔ, now root is app. New root NOT reducible. t' is normal form.
+- R_eq_refl: root was eqW, now root is void. t' is normal form.
+- R_eq_diff: root was eqW, now root is integrate. New root reducible (if inner is delta _, but for now we just see the root change).
+
+Wait, R_eq_diff produces integrate (merge a b), which has root integrate. integrate is a reducible constructor (R_int_delta can fire if inner is delta _). So t' is not a normal form, can reduce further.
+
+R_merge_* produces t, which has root whatever t is. If t is a reducible constructor, can reduce further. If t is a normal form (root is void, delta, app), then t' is a normal form.
+
+R_rec_zero produces b, which has root whatever b is. Similar.
+
+R_int_delta, R_eq_refl produce void, which is a normal form.
+
+R_rec_succ produces app _, which has root app, a normal form. So t' is a normal form.
+
+So:
+- R_int_delta, R_eq_refl: t' is normal form (1 step then done).
+- R_rec_succ: t' is normal form (1 step then done).
+- R_merge_*, R_rec_zero, R_eq_diff: t' might reduce further.
+
+For SN, we need to show that the "non-terminal" rules (R_merge_*, R_rec_zero, R_eq_diff) can only fire finitely many times.
+
+R_merge_*: each application decreases the size of merge (from 2-arg to 1-arg). So bounded.
+R_rec_zero: each application "evaluates" a recΔ to b. The new term b is "smaller" than recΔ b s void in some sense.
+R_eq_diff: each application produces integrate (merge a b), which can reduce.
+
+The recursion in recΔ is bounded by the structure of the 3rd arg. Each R_rec_succ consumes one delta. After consuming all deltas, we hit void and R_rec_zero fires.
+
+So the number of R_rec_succ + R_rec_zero per recΔ is bounded by the "delta depth" of the 3rd arg.
+
+OK so the system is SN. The proof requires a measure that captures all these decreases.
+
+Let me try once more, very carefully.
+
+Define a "size" function σ(t):
+- σ(void) = 0
+- σ(delta t) = σ(t) (delta is transparent)
+- σ(integrate t) = 1 + σ(t)
+- σ(merge t1 t2) = 1 + σ(t1) + σ(t2) (no transparency, both args counted)
+- σ(app t1 t2) = σ(t2) (app is transparent on left)
+- σ(recΔ b s n) = 1 + σ(b) + σ(s) + σ(n)
+- σ(eqW a b) = 1 + σ(a) + σ(b)
+
+Now check:
+- R_int_delta: σ(integrate (delta t)) = 1 + σ(delta t) = 1 + σ(t). σ(void) = 0. Strict decrease. ✓
+- R_merge_void_left: σ(merge void t) = 1 + 0 + σ(t) = 1 + σ(t). σ(t) = σ(t). Strict decrease by 1. ✓
+- R_merge_void_right: similar. ✓
+- R_merge_cancel: σ(merge t t) = 1 + 2σ(t). σ(t) = σ(t). Strict decrease by 1 + σ(t) ≥ 1. ✓
+- R_rec_zero: σ(recΔ b s void) = 1 + σ(b) + σ(s) + 0 = 1 + σ(b) + σ(s). σ(b) = σ(b). Strict decrease by 1 + σ(s) ≥ 1. ✓
+- R_rec_succ: σ(recΔ b s (delta n)) = 1 + σ(b) + σ(s) + σ(delta n) = 1 + σ(b) + σ(s) + σ(n). σ(app s (recΔ b s n)) = σ(recΔ b s n) = 1 + σ(b) + σ(s) + σ(n). EQUAL. ✗
+- R_eq_refl: σ(eqW a a) = 1 + 2σ(a). σ(void) = 0. Strict decrease. ✓
+- R_eq_diff: σ(eqW a b) = 1 + σ(a) + σ(b). σ(integrate (merge a b)) = 1 + σ(merge a b) = 1 + 1 + σ(a) + σ(b) = 2 + σ(a) + σ(b). INCREASE by 1. ✗
+
+So R_rec_succ and R_eq_diff have issues with σ.
+
+For R_rec_succ: σ is constant. We need a secondary measure.
+
+For R_eq_diff: σ increases by 1. We need... a measure that decreases.
+
+Let me try a different σ. The key insight: in R_rec_succ, the recursion in recΔ b s n has moved from n to recΔ b s n, and n has lost one delta.
+
+What if σ(recΔ b s n) = σ(b) + σ(s) + 2σ(n) (double-count σ(n))?
+
+R_rec_succ: σ(LHS) = σ(b) + σ(s) + 2σ(delta n) = σ(b) + σ(s) + 2σ(n). σ(RHS) = σ(recΔ b s n) = σ(b) + σ(s) + 2σ(n). EQUAL. ✗
+
+Hmm. What if σ(recΔ b s n) = σ(b) + σ(s) + σ(n) + (something positive for n being delta _)?
+
+σ(recΔ b s (delta n)) = σ(b) + σ(s) + σ(delta n) + 1 = σ(b) + σ(s) + σ(n) + 1.
+σ(recΔ b s n) = σ(b) + σ(s) + σ(n) + (1 if n is delta _ else 0) = σ(b) + σ(s) + σ(n) + 0 (if n is not delta) or σ(b) + σ(s) + σ(n) + 1 (if n is delta _).
+
+For R_rec_succ, LHS has n = delta n', so σ(LHS) = σ(b) + σ(s) + σ(n') + 1.
+RHS = app s (recΔ b s n'). σ(RHS) = σ(recΔ b s n') = σ(b) + σ(s) + σ(n') + (1 if n' is delta _ else 0).
+
+If n' is not delta _, then σ(RHS) = σ(b) + σ(s) + σ(n'). σ(LHS) - σ(RHS) = 1. ✓ Strict decrease.
+If n' is delta _, then σ(RHS) = σ(b) + σ(s) + σ(n') + 1. σ(LHS) - σ(RHS) = 0. EQUAL. ✗
+
+Hmm. So this works only if n' is not delta. But n' could be delta.
+
+OK let me try: σ(recΔ b s n) = σ(b) + σ(s) + σ(n) + 1 + (1 if n is delta _ else 0).
+
+Then σ(recΔ b s n) = σ(b) + σ(s) + σ(n) + 1 (if n not delta) or σ(b) + σ(s) + σ(n) + 2 (if n delta _).
+
+For R_rec_succ, LHS = recΔ b s (delta n'). n = delta n', so σ(LHS) = σ(b) + σ(s) + σ(n') + 2.
+RHS = app s (recΔ b s n'). n = n', so σ(RHS) = σ(recΔ b s n') = σ(b) + σ(s) + σ(n') + 1 + (1 if n' is delta _ else 0).
+
+If n' is not delta _, σ(RHS) = σ(b) + σ(s) + σ(n') + 1. σ(LHS) - σ(RHS) = 1. ✓
+If n' is delta _, σ(RHS) = σ(b) + σ(s) + σ(n') + 2. σ(LHS) - σ(RHS) = 0. ✗
+
+Same issue.
+
+What if σ(recΔ b s n) = σ(b) + σ(s) + σ(n) + (size of n) or something based on the structure of n?
+
+Hmm. The issue is that the "recursion in recΔ" can recurse on delta n', and inside n' we might have more deltas, etc. Each R_rec_succ consumes one delta. The total number of R_rec_succ's is bounded by the "delta depth" of the original 3rd arg.
+
+But the "delta depth" of the 3rd arg doesn't decrease monotonically: the new 3rd arg is n' (not delta n'), so the delta depth might decrease by 1 (if n' is not delta _) or stay the same (if n' is delta n'').
+
+Wait actually, the recursion in recΔ is on the 3rd arg, going from n to n' (where original 3rd arg = delta n'). The new 3rd arg is n'. If n' is delta n'', the next R_rec_succ consumes that delta, and the new 3rd arg becomes n''. So the delta depth of the 3rd arg decreases by 1 each R_rec_succ.
+
+So the delta depth of the 3rd arg of the recΔ decreases by 1 per R_rec_succ. (But the recΔ itself might be wrapped in app, so the "3rd arg of the recΔ" might not be the 3rd arg of the original term.)
+
+Hmm, this is getting complicated. Let me try a different measure.
+
+Define σ'(t) = (σ(t), "delta depth of the 3rd arg of the outermost recΔ in t").
+
+Hmm, "outermost recΔ" might not exist.
+
+OK let me just try: define a "tag" for each term that indicates how many R_rec_succ's can still fire.
+
+Actually, I realize: after R_rec_succ, the new term is app s (recΔ b s n). The "recΔ b s n" is at depth 1, not at the root. So it cannot fire (rules fire at root only). So R_rec_succ produces a normal form, and no further reductions happen.
+
+Wait, I said this before. Let me re-verify.
+
+After R_rec_succ: t' = app s (recΔ b s n). The root of t' is app. The rules are:
+- R_int_delta: requires root integrate. No.
+- R_merge_*: requires root merge. No.
+- R_rec_zero/succ: requires root recΔ. No.
+- R_eq_refl/diff: requires root eqW. No.
+
+So no rule applies. t' is a normal form. So R_rec_succ is a 1-step reduction that terminates.
+
+So each recΔ can fire at most ONE rule (either R_rec_zero or R_rec_succ, but not both in sequence, because after either, the recΔ is no longer at the root).
+
+Wait, R_rec_succ produces a recΔ inside an app, but it's not at the root. So it can't fire again. R_rec_zero produces b, which is not a recΔ (unless b is a recΔ, but then the new root is recΔ, which can fire again).
+
+Hmm, b can be anything. If b = recΔ b' s' n', then after R_rec_zero, we have recΔ b' s' n' at the root, which can fire again.
+
+So recΔ CAN recurse if b is a recΔ. Like recΔ (recΔ b' s' n') s void → (R_rec_zero) recΔ b' s' n' → ... and the inner recΔ can fire.
+
+So recΔ can recurse, but the recursion is on the value b, not on the 3rd arg n.
+
+For R_rec_succ, the recursion in the 3rd arg stops after one step (the recΔ b s n' inside the app is inert).
+
+For R_rec_zero, the recursion continues via b.
+
+So the recΔ b s n structure: if n = void, the recΔ is gone (replaced by b). If n = delta n', the recΔ becomes inert (wrapped in app). The b and s are preserved in the inert form.
+
+So the recΔ can be "evaluated" via R_rec_zero, producing b. If b is a recΔ, it can be evaluated further.
+
+The total number of R_rec_succ + R_rec_zero firings is bounded by... hmm.
+
+For a recΔ b s n with n = void: 1 firing (R_rec_zero). The result is b.
+For a recΔ b s n with n = delta n': 1 firing (R_rec_succ). The result is inert. The recΔ b s n' inside is inert.
+For a recΔ b s n with n = recΔ b' s' n'': 0 firings (no rule applies). Stuck.
+For a recΔ b s n with n = integrate t: 0 firings. Stuck.
+... etc.
+
+So the recΔ structure is "evaluated" at most once, and the result is b (if n = void) or inert (if n = delta _).
+
+If b is itself a recΔ with the right structure, it can be evaluated further. So the recursion in recΔ goes through the b's.
+
+Specifically, the recursion is: recΔ b s n, where b can be a recΔ. The chain of b's can be evaluated, but each step decreases the "size" of the recΔ structure (since R_rec_zero removes the recΔ wrapper).
+
+Hmm, but R_rec_zero doesn't necessarily remove the recΔ. It replaces it with b. If b is a recΔ, the structure is "shifted".
+
+For the recursion to terminate, we need the chain of b's to terminate. The chain is: recΔ b1 s1 n1, where b1 = recΔ b2 s2 n2, where b2 = recΔ b3 s3 n3, etc. Each recΔ has a "void" or "delta _" 3rd arg to be evaluable.
+
+If the chain is finite (b_k is not a recΔ for some k), then the recursion terminates.
+
+If the chain is infinite (b_k = recΔ b_{k+1} s_{k+1} n_{k+1} for all k), then we have an infinite recursion. But each recΔ b_k s_k n_k has a specific size. If the sizes are bounded, the chain is finite.
+
+Actually, the size of b_{k+1} is strictly less than the size of recΔ b_{k+1} s_{k+1} n_{k+1} (since recΔ adds 1 + size(s_{k+1}) + size(n_{k+1})). So the size of b_{k+1} < size of b_k. So the chain is finite.
+
+So the recursion in recΔ (via the b chain) terminates.
+
+For R_rec_succ, the recΔ becomes inert, so no further recursion.
+
+OK so the system is SN. The proof requires a measure that captures:
+- R_eq_diff doesn't lead to infinite reductions (the merge and integrate reductions are bounded).
+- R_rec_succ produces an inert term (no further reductions).
+- R_rec_zero decreases the size of the recΔ structure.
+- R_merge_* decreases the size of merge.
+- R_int_delta produces void (normal form).
+- R_eq_refl produces void.
+
+Let me try to define a measure that works.
+
+Define a measure μ(t) based on the "active size" of t, where active size is the size of the term ignoring app and delta wrappers.
+
+μ(void) = 0
+μ(delta t) = μ(t)
+μ(integrate t) = 1 + μ(t)
+μ(merge t1 t2) = 1 + max(μ(t1), μ(t2))  -- merge reduces to one of them
+μ(app t1 t2) = μ(t2)  -- app is inert, t1 doesn't contribute
+μ(recΔ b s n) = 1 + μ(b) + μ(s) + μ(n)  -- recΔ can fire, decreasing the structure
+μ(eqW a b) = 1 + μ(a) + μ(b)  -- eqW can fire
+
+Hmm wait, this is similar to before. Let me check R_rec_succ:
+LHS = recΔ b s (delta n). μ = 1 + μ(b) + μ(s) + μ(n).
+RHS = app s (recΔ b s n). μ = μ(recΔ b s n) = 1 + μ(b) + μ(s) + μ(n).
+EQUAL. ✗
+
+Hmm. The issue is that μ(recΔ b s n) = 1 + μ(b) + μ(s) + μ(n), which is the same regardless of whether we wrap in delta or not.
+
+What if μ is "size of the term modulo inert wrappers"? But that's the same as before.
+
+The issue: R_rec_succ doesn't change the "active size" of the term. It just wraps in app.
+
+But the result is a NORMAL FORM! So R_rec_succ is the "last step" of the recursion.
+
+So we don't need μ to decrease for R_rec_succ — we just need to know that R_rec_succ produces a normal form, so the sequence ends.
+
+Wait, but for the inductive proof of SN, we need: if t → t', then t' is SN. By structural induction, t' should be "smaller" than t.
+
+If t' is a normal form, then t' is SN trivially. So we just need to show that t' is a normal form, which it is (root is app, no rule applies).
+
+So for R_rec_succ, we don't need the measure to decrease — we just need to show that t' is a normal form.
+
+For R_eq_diff, t' = integrate (merge a b). The root is integrate, which is reducible. So t' can reduce further. We need to show that t' is SN.
+
+For R_eq_diff, t' has the same "active size" as t (modulo the integrate and merge additions). Hmm.
+
+Let me think about it as: for R_eq_diff, the new term integrate (merge a b) is "equivalent" to eqW a b in terms of "maximal reduction length". Both can reduce to a normal form, and the normal form is determined by a and b.
+
+Actually, let's check. If a = b: eqW a a → void (1 step). integrate (merge a a) → integrate a (1 step via R_merge_cancel). If a = delta t: integrate a → void (1 more step). So integrate (merge a a) takes 2 or 3 steps depending on a.
+
+If a ≠ b: eqW a b → integrate (merge a b) (1 step). Then merge reduces or not, then integrate reduces or not. Up to 2 more steps.
+
+So the maximal reduction length differs. But it's bounded.
+
+For the measure, I need μ(t) ≥ μ(t') for all rules, with strict decrease "in the limit" or "eventually".
+
+Idea: use a measure that's not just a natural number, but something more structured.
+
+Let me try the multiset of "potential reduction counts" of reducible subterms.
+
+For each term t, let M(t) be the multiset of "potential reduction counts" of each "reducible" subterm u of t (where u is a subterm whose root matches a rule's LHS).
+
+For t = eqW a b, the reducible subterm is t itself. Its "potential" is... hmm, I need to define this.
+
+Let me try: potential of t is the number of reductions in the longest reduction sequence from t. (This is the "value" of t if SN holds.)
+
+Then M(t) is the multiset of potentials of reducible subterms. After a reduction, M(t') < M(t) in the multiset ordering (since the LHS reducible subterm is "consumed" and replaced by the RHS subterms, which have smaller potentials).
+
+This is the standard "potential" method for proving SN.
+
+For our system:
+- potential(void) = 0 (normal form)
+- potential(delta t) = potential(t) (delta is inert)
+- potential(integrate t) = 1 + potential(t) (if t = delta t', else potential(t))... no, integrate t reduces to void only if t = delta t'. If t is not delta t', integrate t is a normal form (root is integrate, R_int_delta requires integrate (delta _)).
+
+Wait, integrate t for t ≠ delta _ is a normal form. So potential(integrate t) = 0 for t ≠ delta _.
+
+Hmm. So potential(integrate (delta t)) = 1 + potential(void) = 1. And potential(integrate t) = 0 for t ≠ delta _.
+
+This is non-monotonic. The potential of a term depends on its structure.
+
+This makes the "multiset of potentials" approach tricky.
+
+OK let me just give up trying to find a measure and think about whether the system is SN from a different angle.
+
+System properties:
+1. No variables, no binding, no memory. Pure first-order rewrite system.
+2. All rules are head reductions.
+3. Some rules decrease size, some keep it the same, some increase it.
+4. The system has "destructive" rules (R_int_delta, R_eq_refl) that produce void.
+5. The "growth" rules (R_eq_diff, R_rec_succ) are bounded by the structure of the LHS.
+
+For first-order rewrite systems, SN can often be established by:
+- Polynomial interpretations
+- Matrix interpretations
+- Lexicographic and multiset path orderings
+- Dependency pairs
+
+Let me try the "lexicographic path ordering" (LPO) or "multiset path ordering" (MPO).
+
+For our system, the constructors are: void, delta, integrate, merge, app, recΔ, eqW.
+
+Define a precedence on constructors: void < integrate < merge < recΔ < eqW (and delta, app are "inert").
+
+For MPO: the term ordering is defined based on the structure.
+
+Hmm, this is getting too involved. Let me just try to argue for SN based on the structure.
+
+Argument: 
+- Each rule has a well-defined effect on the "spine" of the term.
+- R_int_delta, R_eq_refl: produce void (terminal).
+- R_merge_*: reduce merge to one of its args.
+- R_rec_zero: reduce recΔ to its base case b.
+- R_rec_succ: reduce recΔ to an inert form (app wrapper).
+- R_eq_diff: reduce eqW to integrate (merge a b), which can further reduce.
+
+In all cases, the "spine" of the term strictly decreases or becomes inert. The spine is the chain of constructors from the root.
+
+Define spine(t) = the list of constructors from the root going down (along the "main" path).
+
+Hmm, this is non-trivial. Let me just argue by induction.
+
+Claim: every term t has a finite maximal reduction length.
+
+Proof: by structural induction on t.
+
+Base: t = void, delta t', app t1 t2 (with t1, t2 not reducible at root). These are normal forms (or at least, the root is inert). Actually, void is a normal form. delta t' has root delta, no rule applies. app t1 t2 has root app, no rule applies. So they're all normal forms. Max reduction length: 0.
+
+But t1, t2 might be reducible. But they're at depth 1, not at root. So they can't fire (rules fire at root). So t = app t1 t2 is a normal form regardless of t1, t2.
+
+Wait, that's interesting. So app t1 t2 is always a normal form, even if t1 or t2 is reducible.
+
+So t = app t1 t2: normal form. Max reduction: 0.
+
+t = delta t': normal form. Max reduction: 0.
+
+t = void: normal form. Max reduction: 0.
+
+t = integrate t: root integrate. R_int_delta applies iff t = delta t'. If yes, reduces to void (1 step). If no, integrate t is a normal form (root integrate, inner not delta).
+
+Wait, let me check. R_int_delta: Step (integrate (delta t)) void. So integrate (delta t) → void. What about integrate t for t ≠ delta _? Looking at the rules, no rule applies. So integrate t is a normal form for t ≠ delta _.
+
+So:
+- integrate (delta t): reducible. Reduces to void.
+- integrate t (t ≠ delta _): normal form.
+
+For t = integrate t':
+- If t' = delta t'': reduces to void (1 step). Then void is a normal form. Max reduction: 1.
+- If t' ≠ delta _: normal form. Max reduction: 0.
+
+t = merge t1 t2: root merge. R_merge_void_left iff t1 = void. R_merge_void_right iff t2 = void. R_merge_cancel iff t1 = t2. Otherwise normal form.
+
+If reducible, reduces to t1 (or t2). Then t1 (or t2) might reduce further.
+
+t = recΔ b s n: root recΔ. R_rec_zero iff n = void. R_rec_succ iff n = delta n'. Otherwise normal form.
+
+If n = void, reduces to b. b might reduce further.
+If n = delta n', reduces to app s (recΔ b s n'), which is a normal form (root app, inert).
+If n is other, normal form.
+
+t = eqW a b: root eqW. R_eq_refl iff a = b. R_eq_diff iff a ≠ b. Always reducible (one of the two applies).
+
+If a = b, reduces to void. Max reduction: 1.
+If a ≠ b, reduces to integrate (merge a b). Then might reduce further.
+
+OK so the structure is clear. For SN, we can argue:
+
+By structural induction on t, show that t is SN.
+
+Case t = void, delta _, app _: t is a normal form. SN. ✓
+
+Case t = integrate t':
+- If t' = delta t'': t reduces to void (R_int_delta). void is normal form, SN. So t is SN (1 step then SN).
+- If t' ≠ delta _: t is a normal form. SN. ✓
+
+But wait, we don't have a guarantee that t' is "smaller" than integrate t' in some sense. We need to argue that integrate t' is SN.
+
+By structural induction on t', t' is SN. But t' is a subterm of integrate t', and after R_int_delta (if applicable), t' is consumed (replaced by void). So t' being SN is sufficient.
+
+Hmm, but for the case integrate t' (t' ≠ delta _), t is a normal form, no reduction. SN trivially.
+
+For the case integrate (delta t''), t reduces to void. void is SN. So t is SN. ✓
+
+Case t = merge t1 t2:
+- t1 = void: R_merge_void_left, t → t2. t2 is SN by IH. So t is SN.
+- t2 = void: similar.
+- t1 = t2: R_merge_cancel, t → t1. t1 is SN by IH. So t is SN.
+- t1 ≠ t2, both non-void: t is a normal form. SN. ✓
+
+Case t = recΔ b s n:
+- n = void: R_rec_zero, t → b. b is SN by IH. So t is SN.
+- n = delta n': R_rec_succ, t → app s (recΔ b s n'). app s (...) is a normal form (root app). So t is SN (1 step then done).
+- n is other: t is a normal form. SN. ✓
+
+Wait, but for R_rec_zero, t → b. b might be a recΔ with n = void, so b → b'. This is structural recursion on b. By IH on b (subterm of t), b is SN. So t is SN.
+
+But wait, b is a subterm of t (recΔ b s n). By structural induction, b is SN. So R_rec_zero's RHS (which is b) is SN. Good.
+
+For R_rec_succ, t → app s (recΔ b s n'). app s (recΔ b s n') is a normal form. So 1 step, then done. SN.
+
+For other cases, t is a normal form. SN.
+
+So all cases of recΔ are handled by structural induction. ✓
+
+Case t = eqW a b:
+- a = b: R_eq_refl, t → void. void is SN. So t is SN.
+- a ≠ b: R_eq_diff, t → integrate (merge a b). integrate (merge a b) might reduce further.
+
+For the second case, we need to show integrate (merge a b) is SN.
+
+integrate (merge a b) is not a structural subterm of eqW a b. So structural induction on t doesn't directly help.
+
+But! integrate (merge a b) is reducible (root integrate, R_int_delta can fire if inner is delta _; or merge can fire first).
+
+After reductions, we have a normal form. The normal form is either:
+- void (if merge reduces to t' and t' = delta _, then integrate t' → void)
+- t' (if integrate (merge a b) is stuck, i.e., merge a b is not delta _, and merge is not reducible)
+- t' (if merge reduces and integrate t' is stuck)
+
+To show SN, we need to show the reductions of integrate (merge a b) terminate.
+
+By structural induction, a and b are SN. merge a b is reducible (or not). 
+
+Hmm, this is getting circular.
+
+OK let me think about it as: the size of the term "in some sense" decreases.
+
+For R_eq_diff: t = eqW a b → t' = integrate (merge a b). The new term t' has "more structure" but the eqW is gone. The only reducible structure in t' is the integrate and the merge.
+
+integrate can fire if inner is delta _. So if merge a b reduces to delta _, then integrate fires. Otherwise, integrate is stuck.
+
+merge can fire if a = void, b = void, or a = b. In our case, a ≠ b (since R_eq_diff is for a ≠ b), so merge a b can fire if a = void or b = void.
+
+If a = void: merge void b → b. So t' → integrate b. Then integrate b fires if b = delta _.
+
+If b = void: similar.
+
+If a, b both non-void and a ≠ b: merge is stuck. t' is a normal form.
+
+So the total reductions from t = eqW a b (a ≠ b):
+- Case 1: a = void. t → t' = integrate (merge void b) → integrate b → (if b = delta _) void. Total: 3 steps.
+- Case 2: b = void. Similar. Total: 3 steps.
+- Case 3: a, b non-void, a ≠ b. t → t' = integrate (merge a b). t' is normal form (merge stuck, integrate stuck). Total: 1 step.
+
+In all cases, finite. So SN. But for a rigorous proof, we need a measure or induction.
+
+The structural induction on t doesn't directly work because integrate (merge a b) is not a subterm of eqW a b. So we need a different induction.
+
+Hmm. Let me think.
+
+Idea: induction on a "measure" of t. The measure should decrease for each reduction.
+
+Define a "potential" P(t) based on the structure:
+- P(void) = 0
+- P(delta t) = P(t)
+- P(integrate t) = 1 + P(t)
+- P(merge t1 t2) = 1 + P(t1) + P(t2)
+- P(app t1 t2) = P(t2)
+- P(recΔ b s n) = 1 + P(b) + P(s) + P(n)
+- P(eqW a b) = 1 + P(a) + P(b)
+
+This is the standard "size" measure. We've seen it doesn't strictly decrease for R_rec_succ and R_eq_diff.
+
+But! For R_rec_succ, the result is a normal form. So we don't need P to decrease — we just need the result to be SN, which it is (trivially, since it's a normal form).
+
+For R_eq_diff, the result is integrate (merge a b), which is not a normal form. We need to show it's SN.
+
+Hmm. The "size" P increases for R_eq_diff. So we can't use P alone.
+
+Idea: induction on P, but with a more careful analysis.
+
+For R_eq_diff: P(LHS) = 1 + P(a) + P(b). P(RHS) = 1 + 1 + P(a) + P(b) = 2 + P(a) + P(b). P(RHS) > P(LHS).
+
+But! integrate (merge a b) can reduce (in some cases). After reductions, we get a normal form, which has P ≤ 1 + P(a) + P(b) (or similar).
+
+Hmm, this is the issue: the "potential" P doesn't decrease, but the system is still SN.
+
+To prove SN, we can use induction on a well-founded order, not necessarily based on a single natural number.
+
+Let me try induction on the tuple (P(t), N(t)) where N(t) is the "number of eqW reductions possible" or something.
+
+For R_eq_diff: P increases by 1, but N decreases by 1. So lex order on (N, P) might work.
+
+For R_rec_succ: P stays the same. N stays the same (or changes?).
+
+Hmm. Let me think.
+
+For R_eq_diff, the eqW at the root is "consumed" (replaced by integrate (merge a b)). So the number of "eqW at root" decreases by 1. After R_eq_diff, there are no more eqW at the root.
+
+But the integrate or merge inside might lead to more reductions, but they don't produce new eqW at the root (since eqW can only be "produced" by... well, the rules don't produce new eqW. The rules consume the root constructor and produce something. So once eqW is consumed, it's gone.
+
+So the number of "eqW at root" strictly decreases with each R_eq_*. 
+
+For R_eq_refl: eqW a a → void. eqW is consumed. New root: void (normal form). So 0 more eqW at root. ✓
+
+For R_eq_diff: eqW a b → integrate (merge a b). eqW is consumed. New root: integrate. So 0 more eqW at root. ✓
+
+For other rules: no eqW is produced or consumed (rules don't have eqW in their RHS).
+
+So the number of eqW at the root decreases monotonically (by 1 for each R_eq_* application, by 0 for others).
+
+Similarly, the number of recΔ at the root decreases with each R_rec_* application.
+
+And the number of integrate, merge at the root also changes.
+
+Hmm, this suggests using a "spine" measure: the list of "reducible constructors" from the root, with some measure.
+
+But this is getting complex.
+
+Let me try yet another approach: use the fact that the system is "almost" a first-order term rewriting system with simple rules, and apply a standard technique.
+
+For first-order TRS, the "polynomial interpretation" method is standard. We assign each constructor a polynomial, and show that the LHS polynomial is greater than the RHS polynomial.
+
+For our system:
+- void: 0
+- delta(t): t (identity)
+- integrate(t): t + 1
+- merge(t1, t2): t1 + t2 + 1
+- app(t1, t2): t2
+- recΔ(b, s, n): b + s + n + 1
+- eqW(a, b): a + b + 1
+
+This is the "linear" interpretation. The "size" P(t).
+
+We've seen that P doesn't strictly decrease for all rules. So linear interpretations don't work.
+
+For non-linear interpretations, we can use more complex polynomials. But this is getting too involved.
+
+Let me just argue: the system is SN because each reduction strictly decreases a "size" measure, where the measure is chosen appropriately.
+
+Specifically, define a "tagged size" measure where we tag each constructor with a "color" or "level" indicating its "depth" in the recursion.
+
+Or: define the measure as a tuple (n_eq, n_rec, n_int, n_merge, n_app, n_delta, n_void), where n_X is the number of X constructors in t.
+
+For each rule, the tuple changes in a way that can be bounded.
+
+Hmm, this is too vague.
+
+OK let me just try a different measure.
+
+Define μ(t) by structural recursion:
+- μ(void) = (0, 0) -- tuple
+- μ(delta t) = (μ(t).1, μ(t).2 + 1) -- second component for "delta depth"
+- μ(integrate t) = (μ(t).1 + 1, μ(t).2) -- first component for "size"
+- μ(merge t1 t2) = (max(μ(t1).1, μ(t2).1) + 1, max(μ(t1).2, μ(t2).2))
+- μ(app t1 t2) = (μ(t2).1, μ(t2).2)
+- μ(recΔ b s n) = (μ(b).1 + μ(s).1 + μ(n).1 + 1, μ(n).2 + 1)
+- μ(eqW a b) = (μ(a).1 + μ(b).1 + 1, max(μ(a).2, μ(b).2) + 1)
+
+Hmm, this is getting ad hoc. Let me just try.
+
+For R_rec_succ: LHS = recΔ b s (delta n). μ(LHS) = (μ(b).1 + μ(s).1 + μ(n).1 + 1, μ(delta n).2 + 1) = (μ(b).1 + μ(s).1 + μ(n).1 + 1, μ(n).2 + 2).
+RHS = app s (recΔ b s n). μ(RHS) = (μ(recΔ b s n).1, μ(recΔ b s n).2) = (μ(b).1 + μ(s).1 + μ(n).1 + 1, μ(n).2 + 1).
+
+So μ(LHS) = (X, Y+1) and μ(RHS) = (X, Y) for X = μ(b).1 + μ(s).1 + μ(n).1 + 1, Y = μ(n).2. So μ(LHS) > μ(RHS) in lex order. ✓ Strict decrease.
+
+For R_eq_diff: LHS = eqW a b (a ≠ b). μ(LHS) = (μ(a).1 + μ(b).1 + 1, max(μ(a).2, μ(b).2) + 1).
+RHS = integrate (merge a b). μ(RHS) = (μ(merge a b).1 + 1, μ(merge a b).2) = (max(μ(a).1, μ(b).1) + 1 + 1, max(μ(a).2, μ(b).2)) = (max(μ(a).1, μ(b).1) + 2, max(μ(a).2, μ(b).2)).
+
+Lex order: μ(LHS).1 = μ(a).1 + μ(b).1 + 1, μ(RHS).1 = max(μ(a).1, μ(b).1) + 2. 
+μ(LHS).1 - μ(RHS).1 = (μ(a).1 + μ(b).1 + 1) - (max(μ(a).1, μ(b).1) + 2) = min(μ(a).1, μ(b).1) - 1.
+
+If min(μ(a).1, μ(b).1) ≥ 1, then μ(LHS).1 > μ(RHS).1. Strict decrease. ✓
+If min(μ(a).1, μ(b).1) = 0, then μ(LHS).1 ≤ μ(RHS).1. Then look at second component.
+μ(LHS).2 = max(μ(a).2, μ(b).2) + 1. μ(RHS).2 = max(μ(a).2, μ(b).2). 
+μ(LHS).2 - μ(RHS).2 = 1 > 0. So μ(LHS) > μ(RHS) in lex order. ✓ Strict decrease.
+
+OK so for R_eq_diff, lex order decreases if either:
+- min(μ(a).1, μ(b).1) ≥ 1 (first component decreases), or
+- min(μ(a).1, μ(b).1) = 0 (second component decreases)
+
+In all cases, lex order decreases. ✓
+
+Wait, but the case min(μ(a).1, μ(b).1) = 0: μ(LHS).1 = 0 + μ(other).1 + 1 = μ(other).1 + 1. μ(RHS).1 = max(0, μ(other).1) + 2 = μ(other).1 + 2. So μ(LHS).1 - μ(RHS).1 = -1. So first component increases by 1. Then we look at second component. μ(LHS).2 = max(μ(a).2, μ(b).2) + 1 = max(0, μ(other).2) + 1 = μ(other).2 + 1. μ(RHS).2 = max(μ(a).2, μ(b).2) = μ(other).2. So μ(LHS).2 - μ(RHS).2 = 1. Second component decreases. So lex says: μ(LHS) > μ(RHS) because first is larger (-1 vs 0 in difference, but actually the lex order is: compare first components; if first(LHS) > first(RHS), then LHS > RHS; if first(LHS) < first(RHS), then LHS < RHS; if equal, compare second).
+
+Wait, in this case first(LHS) = μ(other).1 + 1, first(RHS) = μ(other).1 + 2. So first(LHS) < first(RHS). So μ(LHS) < μ(RHS) in lex order! That's the WRONG direction. We want μ(LHS) > μ(RHS) for the measure to decrease.
+
+Hmm, I messed up. Let me reconsider.
+
+We want: for each rule t → t', μ(t) > μ(t') (or at least, μ(t') < μ(t) in some well-founded order).
+
+For R_eq_diff: t = eqW a b, t' = integrate (merge a b). We want μ(t) > μ(t').
+
+μ(t) = (μ(a).1 + μ(b).1 + 1, max(μ(a).2, μ(b).2) + 1).
+μ(t') = (max(μ(a).1, μ(b).1) + 2, max(μ(a).2, μ(b).2)).
+
+In the case min(μ(a).1, μ(b).1) = 0 (say μ(a).1 = 0):
+μ(t).1 = 0 + μ(b).1 + 1 = μ(b).1 + 1.
+μ(t').1 = max(0, μ(b).1) + 2 = μ(b).1 + 2.
+So μ(t).1 < μ(t').1. First component of t is smaller. So in lex order, μ(t) < μ(t'). WRONG.
+
+We need μ(t) > μ(t'). So the lex order doesn't work in this case.
+
+Hmm. Let me think differently.
+
+What if I use lex order on the SECOND component first? Or some other order?
+
+Define μ as before, but consider the order: (second component, first component) lex.
+
+Then for R_eq_diff with min(μ(a).1, μ(b).1) = 0:
+μ(t) = (max(μ(a).2, μ(b).2) + 1, μ(b).1 + 1).
+μ(t') = (max(μ(a).2, μ(b).2), μ(b).1 + 2).
+μ(t).second - μ(t').second = (μ(b).1 + 1) - (μ(b).1 + 2) = -1.
+So second component of t is smaller. In lex order (second, first), t < t'. WRONG.
+
+Hmm.
+
+Let me try a different measure. What if we swap the components for eqW?
+
+Define μ(eqW a b) = (max(μ(a).2, μ(b).2) + 1, μ(a).1 + μ(b).1 + 1) -- second component is "size", first is "delta depth".
+
+For R_eq_diff: μ(t) = (max(μ(a).2, μ(b).2) + 1, μ(a).1 + μ(b).1 + 1).
+μ(t') = (max(μ(a).2, μ(b).2), max(μ(a).1, μ(b).1) + 2).
+μ(t).first - μ(t').first = 1.
+So first component of t is larger. In lex (first, second), t > t'. ✓ (if first component is the discriminator).
+
+Let me check: μ(t).first = max(μ(a).2, μ(b).2) + 1. μ(t').first = max(μ(merge a b).2) = max(max(μ(a).2, μ(b).2), merge_stuff) = max(μ(a).2, μ(b).2) (assuming merge doesn't add to second component).
+
+So μ(t).first = μ(t').first + 1. Strict decrease in first component. ✓
+
+But wait, I need to define μ(merge t1 t2).2 properly. Let me re-define.
+
+Define μ(t) = (α(t), β(t)) where:
+- α(t) = "potential" measure
+- β(t) = some other measure
+
+Let me try:
+- α(void) = 0
+- α(delta t) = α(t)
+- α(integrate t) = 1 + α(t)
+- α(merge t1 t2) = 1 + max(α(t1), α(t2))
+- α(app t1 t2) = α(t2)
+- α(recΔ b s n) = 1 + α(b) + α(s) + α(n)
+- α(eqW a b) = 1 + α(a) + α(b) + 1 = 2 + α(a) + α(b)  -- extra +1 for reducibility
+
+- β(void) = 0
+- β(delta t) = 1 + β(t)  -- delta adds 1
+- β(integrate t) = β(t)
+- β(merge t1 t2) = max(β(t1), β(t2))
+- β(app t1 t2) = β(t2)
+- β(recΔ b s n) = β(n)  -- recΔ's beta is its 3rd arg's beta
+- β(eqW a b) = max(β(a), β(b)) + 1  -- +1 for being reducible (eqW)
+
+Hmm, getting complicated. Let me just try to verify.
+
+For R_rec_succ: LHS = recΔ b s (delta n). 
+α(LHS) = 1 + α(b) + α(s) + α(delta n) = 1 + α(b) + α(s) + α(n).
+β(LHS) = β(delta n) = 1 + β(n).
+RHS = app s (recΔ b s n).
+α(RHS) = α(recΔ b s n) = 1 + α(b) + α(s) + α(n).
+β(RHS) = β(recΔ b s n) = β(n).
+
+So (α(LHS), β(LHS)) = (1 + α(b) + α(s) + α(n), 1 + β(n)) and (α(RHS), β(RHS)) = (1 + α(b) + α(s) + α(n), β(n)).
+
+α same, β decreases by 1. Lex (α, β): LHS > RHS. ✓
+
+For R_eq_diff: LHS = eqW a b (a ≠ b).
+α(LHS) = 2 + α(a) + α(b).
+β(LHS) = max(β(a), β(b)) + 1.
+RHS = integrate (merge a b).
+α(RHS) = 1 + α(merge a b) = 1 + 1 + max(α(a), α(b)) = 2 + max(α(a), α(b)).
+β(RHS) = β(merge a b) = max(β(a), β(b)).
+α(LHS) - α(RHS) = min(α(a), α(b)) ≥ 0.
+
+If min(α(a), α(b)) > 0, then α(LHS) > α(RHS). Lex: LHS > RHS. ✓
+If min(α(a), α(b)) = 0, then α(LHS) = α(RHS). Look at β.
+β(LHS) = max(β(a), β(b)) + 1. β(RHS) = max(β(a), β(b)). 
+β(LHS) > β(RHS) by 1. Lex: LHS > RHS. ✓
+
+In all cases, lex (α, β) decreases for R_eq_diff. ✓
+
+Let me check the other rules with this μ = (α, β):
+
+- R_int_delta: LHS = integrate (delta t), RHS = void.
+  α(LHS) = 1 + α(t). α(RHS) = 0. Strict decrease. ✓
+  β(LHS) = β(delta t) = 1 + β(t). β(RHS) = 0. Strict decrease. ✓
+  Lex: ✓
+
+- R_merge_void_left: LHS = merge void t, RHS = t.
+  α(LHS) = 1 + max(0, α(t)) = 1 + α(t). α(RHS) = α(t). Strict decrease. ✓
+
+- R_merge_void_right: similar. ✓
+
+- R_merge_cancel: LHS = merge t t, RHS = t.
+  α(LHS) = 1 + α(t). α(RHS) = α(t). Strict decrease. ✓
+
+- R_rec_zero: LHS = recΔ b s void, RHS = b.
+  α(LHS) = 1 + α(b) + α(s) + 0 = 1 + α(b) + α(s). α(RHS) = α(b). Strict decrease. ✓
+  β(LHS) = β(void) = 0. β(RHS) = β(b). 
+  Lex: compare α first. α(LHS) > α(RHS). So LHS > RHS. ✓
+
+- R_eq_refl: LHS = eqW a a, RHS = void.
+  α(LHS) = 2 + 2α(a). α(RHS) = 0. Strict decrease. ✓
+
+So all rules are covered! Let me double-check R_rec_succ and R_eq_diff.
+
+R_rec_succ: (α, β) goes from (1 + α(b) + α(s) + α(n), 1 + β(n)) to (1 + α(b) + α(s) + α(n), β(n)). α same, β decreases by 1. Lex (α, β): LHS > RHS. ✓
+
+R_eq_diff: (α, β) goes from (2 + α(a) + α(b), max(β(a), β(b)) + 1) to (2 + max(α(a), α(b)), max(β(a), β(b))). 
+If min(α(a), α(b)) > 0, α(LHS) > α(RHS), so lex LHS > RHS. ✓
+If min(α(a), α(b)) = 0, α same, β(LHS) > β(RHS) by 1, so lex LHS > RHS. ✓
+
+All rules verified. The measure μ(t) = (α(t), β(t)) with lex order strictly decreases for each rule.
+
+So the system is SN, and we can prove it using this measure.
+
+But wait, let me double-check the definitions of α and β. I want to make sure they are well-defined and the decrease is strict.
+
+α(void) = 0
+α(delta t) = α(t)
+α(integrate t) = 1 + α(t)
+α(merge t1 t2) = 1 + max(α(t1), α(t2))
+α(app t1 t2) = α(t2)
+α(recΔ b s n) = 1 + α(b) + α(s) + α(n)
+α(eqW a b) = 2 + α(a) + α(b)
+
+β(void) = 0
+β(delta t) = 1 + β(t)
+β(integrate t) = β(t)
+β(merge t1 t2) = max(β(t1), β(t2))
+β(app t1 t2) = β(t2)
+β(recΔ b s n) = β(n)
+β(eqW a b) = max(β(a), β(b)) + 1
+
+These are well-defined by structural recursion. Both α and β are non-negative integers (since they're sums of non-negative integers).
+
+Lex order on (α, β) is well-founded (since both components are well-founded).
+
+Each rule strictly decreases (α, β) in lex order, as verified.
+
+Therefore, by the standard argument, the system is strongly normalizing.
+
+Wait, I need to double-check R_rec_zero more carefully.
+
+R_rec_zero: LHS = recΔ b s void, RHS = b.
+α(LHS) = 1 + α(b) + α(s) + α(void) = 1 + α(b) + α(s) + 0 = 1 + α(b) + α(s).
+α(RHS) = α(b).
+α(LHS) - α(RHS) = 1 + α(s) ≥ 1. So α(LHS) > α(RHS). Lex: LHS > RHS. ✓
+
+β(LHS) = β(void) = 0.
+β(RHS) = β(b).
+β(LHS) - β(RHS) = -β(b) ≤ 0. So β(LHS) ≤ β(RHS).
+
+But lex order looks at α first, and α(LHS) > α(RHS), so LHS > RHS regardless of β. ✓
+
+R_rec_succ: 
+α(LHS) = 1 + α(b) + α(s) + α(delta n) = 1 + α(b) + α(s) + α(n).
+α(RHS) = α(app s (recΔ b s n)) = α(recΔ b s n) = 1 + α(b) + α(s) + α(n).
+α same.
+
+β(LHS) = β(recΔ b s (delta n)) = β(delta n) = 1 + β(n).
+β(RHS) = β(app s (recΔ b s n)) = β(recΔ b s n) = β(n).
+β(LHS) - β(RHS) = 1. So β(LHS) > β(RHS).
+
+Lex (α, β): α same, β decreases. LHS > RHS. ✓
+
+R_eq_diff:
+α(LHS) = α(eqW a b) = 2 + α(a) + α(b) (with a ≠ b).
+α(RHS) = α(integrate (merge a b)) = 1 + α(merge a b) = 1 + (1 + max(α(a), α(b))) = 2 + max(α(a), α(b)).
+α(LHS) - α(RHS) = (2 + α(a) + α(b)) - (2 + max(α(a), α(b))) = α(a) + α(b) - max(α(a), α(b)) = min(α(a), α(b)).
+
+β(LHS) = β(eqW a b) = max(β(a), β(b)) + 1.
+β(RHS) = β(integrate (merge a b)) = β(merge a b) = max(β(a), β(b)).
+β(LHS) - β(RHS) = 1.
+
+If min(α(a), α(b)) > 0, then α(LHS) > α(RHS). Lex: LHS > RHS. ✓
+If min(α(a), α(b)) = 0, then α(LHS) = α(RHS). Lex looks at β: β(LHS) > β(RHS). ✓
+
+In all cases, lex (α, β) decreases for R_eq_diff. ✓
+
+Great, so the measure works. The system is SN.
+
+So the answer is YES, strong normalization can be established from the calculus alone, using a suitable measure (like the tuple (α, β) defined above) and showing it strictly decreases for each rule.
+
+Actually wait, let me reconsider the question. The question asks: "can strong normalization of this system be established from the presented calculus alone, without importing structural axioms or object-level assumptions beyond what is derivable from the given syntax and rewrite rules?"
+
+The answer: Yes, strong normalization can be established. The proof uses a measure μ = (α, β) defined by structural recursion on the term, with lex order. Each rewrite rule strictly decreases μ.
+
+The standard proof method: define a well-founded order on terms, show that each rule is a strict decrease. This doesn't require any extra axioms or assumptions beyond the given syntax and rules.
+
+OK so my final answer: YES, strong normalization can be established. The proof uses a lex-ordered pair of measures (α, β) defined structurally:
+- α captures the "active size" (with merge reducing to one of its args, and eqW having a reducibility credit).
+- β captures the "delta depth" of the relevant recΔ 3rd arg (and eqW's reducibility credit).
+
+For R_rec_succ, α stays the same but β decreases (the delta is consumed). For R_eq_diff, either α decreases (if both a, b are non-void) or β decreases (if one is void, the eqW's β credit is consumed by the subsequent merge reduction). For other rules, α strictly decreases.
+
+This is a standard proof technique (using a lex-ordered tuple of measures) and doesn't require any extra axioms or assumptions.
+
+Let me also verify by considering the "obvious" intuition: the system has only 8 rules, all "destructive" in some sense. The reductions that "grow" the term (R_rec_succ, R_eq_diff) are bounded by the structure of the LHS. Specifically:
+- R_rec_succ consumes one delta in the 3rd arg, producing an inert app wrapper. The recursion in the 3rd arg is bounded.
+- R_eq_diff replaces eqW with integrate (merge a b), which can reduce further (merge reduces to one of its args, then integrate reduces to void if applicable). The total reductions after R_eq_diff are bounded by 2 (merge + integrate).
+
+So the system is SN, and the proof is straightforward with the right measure.
+
+Hmm wait, I want to double-check my measure. Let me re-verify the β for R_eq_diff.
+
+β(eqW a b) = max(β(a), β(b)) + 1.
+β(integrate (merge a b)) = β(merge a b) = max(β(a), β(b)).
+
+So β(LHS) = max(β(a), β(b)) + 1, β(RHS) = max(β(a), β(b)). β(LHS) > β(RHS) by 1. ✓
+
+And for R_rec_succ:
+β(recΔ b s (delta n)) = β(delta n) = 1 + β(n).
+β(app s (recΔ b s n)) = β(recΔ b s n) = β(n).
+
+So β(LHS) = 1 + β(n), β(RHS) = β(n). β(LHS) > β(RHS) by 1. ✓
+
+Great. So the measure works.
+
+Actually, wait. I want to double-check the α for R_merge_cancel.
+
+R_merge_cancel: LHS = merge t t, RHS = t.
+α(LHS) = α(merge t t) = 1 + max(α(t), α(t)) = 1 + α(t).
+α(RHS) = α(t).
+α(LHS) - α(RHS) = 1. ✓ Strict decrease.
+
+And R_merge_void_left:
+α(LHS) = α(merge void t) = 1 + max(α(void), α(t)) = 1 + max(0, α(t)) = 1 + α(t) (since α(void) = 0 ≤ α(t)).
+α(RHS) = α(t).
+α(LHS) - α(RHS) = 1. ✓
+
+And R_rec_zero:
+α(LHS) = α(recΔ b s void) = 1 + α(b) + α(s) + α(void) = 1 + α(b) + α(s) + 0 = 1 + α(b) + α(s).
+α(RHS) = α(b).
+α(LHS) - α(RHS) = 1 + α(s) ≥ 1. ✓
+
+OK all good.
+
+So the answer is: YES, the system is SN, and the proof can be done using a lex-ordered pair of measures defined structurally.
+
+Let me write a clear, concise answer.
+
+Wait, I should also note that the question asks "Give your raw assessment" and "briefly explain the reasoning, staying within that boundary." So I should be concise.
+
+My final answer:
+
+YES, strong normalization can be established from the calculus alone. 
+
+The proof uses a lex-ordered pair of measures (α, β) defined by structural recursion on the term:
+
+α(void) = 0; α(delta t) = α(t); α(integrate t) = 1 + α(t); α(merge t1 t2) = 1 + max(α(t1), α(t2)); α(app t1 t2) = α(t2); α(recΔ b s n) = 1 + α(b) + α(s) + α(n); α(eqW a b) = 2 + α(a) + α(b).
+
+β(void) = 0; β(delta t) = 1 + β(t); β(integrate t) = β(t); β(merge t1 t2) = max(β(t1), β(t2)); β(app t1 t2) = β(t2); β(recΔ b s n) = β(n); β(eqW a b) = max(β(a), β(b)) + 1.
+
+Each rule strictly decreases (α, β) in lex order:
+- R_int_delta, R_merge_*, R_rec_zero, R_eq_refl: α strictly decreases.
+- R_rec_succ: α stays the same, β decreases by 1 (the delta is consumed).
+- R_eq_diff: either α decreases (if min(α(a), α(b)) > 0) or α stays the same and β decreases (if one of a, b is void).
+
+This is a standard technique (lex-ordered measure) and doesn't require any extra axioms, rewrite rules, or assumptions beyond the given syntax and rules.
+
+So the system is strongly normalizing.

@@ -1,0 +1,119 @@
+# Proof Skeleton for the Remaining Five Cases
+
+Below is a case-by-case analysis and proof skeleton. For each rule I identify which decrease mechanism applies (`drop_left` when `kappa` strictly drops, or `drop_right` when `kappa` ties and `mu` drops).
+
+## Case 1: `R_int_delta` — `integrate (delta t) → void`
+
+**Analysis.** `kappa (integrate (delta t)) = kappa (delta t) = kappa t`, while `kappa void = 0`. This may *tie* (if `kappa t = 0`) rather than strictly drop, so `kappa` alone is unreliable. But `mu void = 0` and `mu (integrate (delta t)) = 1 + mu (delta t) = 1 + mu t ≥ 1 > 0`. However `kappa` need not tie (it does: `kappa void = 0 ≤ kappa t`)—so prefer `drop_right` only if it truly ties. Since `kappa void = 0` and `kappa t` may be positive, use `drop_left` when possible, else `drop_right`. Safest: split.
+
+```lean
+| _, _, Step.R_int_delta t => by
+    -- kappa (integrate (delta t)) = kappa t ; kappa void = 0
+    -- If kappa t > 0, kappa strictly drops (drop_left).
+    -- If kappa t = 0, kappa ties and mu drops (drop_right).
+    rcases Nat.eq_zero_or_pos (kappa t) with h0 | hpos
+    · -- ties: kappa void = 0 = kappa t = kappa (integrate (delta t))
+      have hk  : kappa void = kappa (integrate (delta t)) := by simp [kappa, h0]
+      have hmu : mu void < mu (integrate (delta t)) := by simp [mu]; omega
+      exact drop_right hmu hk
+    · -- strict drop
+      have hk : kappa void < kappa (integrate (delta t)) := by simp [kappa]; omega
+      exact drop_left hk
+```
+
+## Case 2: `R_rec_zero` — `recDelta b s void → b`
+
+**Analysis.** The third argument `void` is **not** delta-wrapped, so the fall-through `kappa` clause applies:
+`kappa (recDelta b s void) = max (max (kappa b) (kappa s)) (kappa void) = max (max (kappa b)(kappa s)) 0`.
+Meanwhile `kappa b ≤ max (max (kappa b)(kappa s)) 0`, so `kappa` may tie. But `mu (recDelta b s void) = 3 + mu b + mu s + 0 > mu b`. Use `drop_right`, but need the tie — which may fail if `kappa s > kappa b`. So split on `drop_left` / `drop_right`.
+
+```lean
+| _, _, Step.R_rec_zero b s => by
+    -- kappa (recDelta b s void) = max (max (kappa b) (kappa s)) 0
+    -- kappa b ≤ that, so either strict drop or tie.
+    rcases Nat.lt_or_ge (kappa b) (kappa (recDelta b s void)) with hlt | hge
+    · exact drop_left hlt
+    · -- tie: kappa b = kappa (recDelta b s void)
+      have hk : kappa b = kappa (recDelta b s void) := by
+        simp [kappa] at hge ⊢; omega
+      have hmu : mu b < mu (recDelta b s void) := by simp [mu]; omega
+      exact drop_right hmu hk
+```
+
+## Case 3: `R_rec_succ` — `recDelta b s (delta n) → app s (recDelta b s n)`
+
+**Analysis.** This is the key case. LHS uses the delta clause:
+`kappa (recDelta b s (delta n)) = max (max (kappa b)(kappa s)) (kappa n) + 1`.
+RHS: `kappa (app s (recDelta b s n)) = max (kappa s) (kappa (recDelta b s n))`. Since `n` is not (necessarily) delta-wrapped in `recDelta b s n`, its `kappa` uses the fall-through clause `max (max (kappa b)(kappa s)) (kappa n)` (unless `n` itself is a `delta`, which only *equals* the same expression + more; but the +1 on the LHS from the outer `delta n` dominates). So RHS `kappa = max (kappa s) (max (max (kappa b)(kappa s)) (kappa n')...)` which is `≤ LHS - 1 < LHS`. This is a **strict `kappa` drop** — use `drop_left`.
+
+```lean
+| _, _, Step.R_rec_succ b s n => by
+    -- LHS kappa = max (max (kappa b) (kappa s)) (kappa n) + 1
+    -- RHS kappa = max (kappa s) (kappa (recDelta b s n))
+    -- The inner recDelta b s n: if n is a delta, its kappa is one more,
+    -- but still bounded by the outer +1. Bound uniformly.
+    have hk : kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n)) := by
+      simp only [kappa_app, kappa_rec_delta]
+      -- Need: max (kappa s) (kappa (recDelta b s n))
+      --        < max (max (kappa b)(kappa s)) (kappa n) + 1
+      -- Case-split on the shape of n to unfold kappa (recDelta b s n):
+      cases n with
+      | delta m =>
+          simp only [kappa_rec_delta, kappa_delta]
+          -- both sides now have explicit maxima; discharge with omega
+          -- (LHS inner recDelta gets +1 but outer LHS has +1 over larger base)
+          sorry  -- omega after establishing max facts; see NOTE below
+      | _ =>
+          -- fall-through clause for kappa (recDelta b s n)
+          simp only [kappa] <;> omega
+    exact drop_left hk
+```
+
+**NOTE for Case 3 (`n = delta m`).** Here both LHS and the inner `recDelta` acquire a `+1`. The bound
+`max (kappa s) (max (max (kappa b)(kappa s)) (kappa m) + 1) < max (max (kappa b)(kappa s)) (max (kappa m)+1?) + 1`
+must be re-checked: `kappa (delta m) = kappa m`, so LHS outer base uses `kappa (delta m) = kappa m`, giving `... (kappa m) + 1`, while RHS inner recDelta gives `... (kappa m) + 1` too, then `max (kappa s) (that)`. Since `kappa s ≤ base` and `that = base' + 1` where `base' ≤ base`, one gets RHS `= base+1` possibly **equal**, not strictly less. **If this equality occurs, fall back to `drop_right`** by additionally proving `mu` strictly drops:
+`mu (app s (recDelta b s n)) = 1 + mu s + (3 + mu b + mu s + mu n)` vs
+`mu (recDelta b s (delta n)) = 3 + mu b + mu s + mu n`. Here `mu` **increases**, so `drop_right` fails. Therefore the `kappa` drop must be genuinely strict; verify the definitions guarantee it (the transparency of `delta` to `kappa` means the inner `recDelta b s (delta m)` was *not* formed — the term is `recDelta b s n` with the original `n`). Recheck: the RHS inner term is `recDelta b s n`, and `n` here is the *bound variable* (call it `n₀`); the `delta` is only on the LHS's third slot. So use `cases n₀`, and in the `delta m` subcase the inner `recDelta b s (delta m)` genuinely gets `+1` but the LHS gets `+1` over `kappa (delta (delta m)) = kappa m` — matching bases, so strict inequality still holds because `max (kappa s) X < X+1`-style reasoning fails; **prefer replacing the whole case with a lemma** `kappa (recDelta b s n) ≤ max(max(kappa b)(kappa s))(kappa n) + 1` proven by cases, then `omega`.
+
+## Case 4: `R_eq_refl` — `eqW a a → void`
+
+**Analysis.** `kappa (eqW a a) = max (kappa a)(kappa a) = kappa a`; `kappa void = 0 ≤ kappa a`. May tie. `mu (eqW a a) = 4 + 2·mu a > 0 = mu void`. Split like Case 1.
+
+```lean
+| _, _, Step.R_eq_refl a => by
+    rcases Nat.eq_zero_or_pos (kappa a) with h0 | hpos
+    · have hk  : kappa void = kappa (eqW a a) := by simp [kappa, h0]
+      have hmu : mu void < mu (eqW a a) := by simp [mu]; omega
+      exact drop_right hmu hk
+    · have hk : kappa void < kappa (eqW a a) := by simp [kappa]; omega
+      exact drop_left hk
+```
+
+## Case 5: `R_eq_diff` — `eqW a b → integrate (merge a b)`
+
+**Analysis.** `kappa (eqW a b) = max (kappa a)(kappa b)`. RHS: `kappa (integrate (merge a b)) = kappa (merge a b) = max (kappa a)(kappa b)`. So `kappa` **always ties**. Then compare `mu`: `mu (integrate (merge a b)) = 1 + (2 + mu a + mu b) = 3 + mu a + mu b`, vs `mu (eqW a b) = 4 + mu a + mu b`. Strict drop by 1. Use `drop_right`.
+
+```lean
+| _, _, Step.R_eq_diff a b => by
+    have hk  : kappa (integrate (merge a b)) = kappa (eqW a b) := by simp [kappa]
+    have hmu : mu (integrate (merge a b)) < mu (eqW a b) := by simp [mu]; omega
+    exact drop_right hmu hk
+```
+
+## Summary Table
+
+| Rule | Mechanism | Key fact |
+|------|-----------|----------|
+| `R_int_delta` | `drop_left` or `drop_right` (split on `kappa t = 0`) | `mu void = 0 < 1 + mu t` |
+| `R_rec_zero` | `drop_left` or `drop_right` (split) | `mu b < 3 + mu b + mu s` |
+| `R_rec_succ` | `drop_left` (needs `cases n`) | outer `+1` dominates; **verify strictness** |
+| `R_eq_refl` | `drop_left` or `drop_right` (split on `kappa a = 0`) | `mu void = 0 < 4 + 2·mu a` |
+| `R_eq_diff` | `drop_right` (kappa always ties) | `mu` drops `4+·` to `3+·` |
+
+The only delicate case is **`R_rec_succ`**: I recommend factoring out a helper lemma
+```lean
+lemma kappa_recDelta_le (b s n) :
+    kappa (recDelta b s n) ≤ Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1 := by
+  cases n <;> simp [kappa] <;> omega
+```
+then the main bound follows by `simp [kappa]` + `omega` using this lemma, avoiding fragile inline case analysis.

@@ -1,0 +1,708 @@
+The user is asking about strong normalization of a rewrite system defined in Lean 4. Let me analyze the system carefully.
+
+The types are:
+- void (no event)
+- delta t (unit/successor)
+- integrate t (a unary operation)
+- merge t1 t2 (binary operation)
+- app t1 t2 (binary operation)
+- recΔ b s n (recursor: base, step, counter)
+- eqW a b (equality witness)
+
+Rewrite rules:
+1. integrate (delta t) → void
+2. merge void t → t
+3. merge t void → t
+4. merge t t → t
+5. recΔ b s void → b
+6. recΔ b s (delta n) → app s (recΔ b s n)
+7. eqW a a → void
+8. eqW a b → integrate (merge a b) (when a ≠ b? Actually the rule is unconditional in the file, but the name suggests "diff")
+
+Wait, R_eq_refl and R_eq_diff overlap! Both can apply to eqW a a:
+- R_eq_refl: eqW a a → void
+- R_eq_diff: eqW a a → integrate (merge a a)
+
+This is a critical/non-orthogonal rewrite system. But the question is about strong normalization (SN), not confluence.
+
+Let me think about whether this system is strongly normalizing.
+
+First, observe: The system is a "first-order rewrite calculus with no variable binding." This is an Applicative Term Rewriting System or a first-order TRS (with constants but no variables shown in the rules — actually all rules are ground/closed).
+
+Wait, the rules use variables like `t`, `b`, `s`, `n`, `a`. These are metavariables in the inductive definition. In Lean, the inductive `Step` is defined with universal quantifiers, so the rules apply to any closed term matching the pattern. This is a first-order term rewriting system with no variables (all rules are pattern-based on closed constructors).
+
+Actually, in Lean, when you write `∀ t, Step (integrate (delta t)) void`, this means for any term `t : Trace`, the step holds. So this is a first-order TRS with no free variables — a "ground TRS" essentially.
+
+Hmm, actually the terms in the rules are not fully ground; they have metavariables that can be instantiated with any closed term. So this is essentially a "left-linear" TRS.
+
+Now, is this system strongly normalizing?
+
+Let me think about size/complexity measures. Let's define a measure on terms.
+
+For SN of a TRS, a common approach is to find a well-founded ordering such that each rule decreases the measure.
+
+Let's think about what could potentially cause non-termination. The rules all seem to "shrink" terms in some sense:
+- integrate (delta t) → void: shrinks drastically
+- merge void t → t, merge t void → t, merge t t → t: these are simplifications
+- recΔ b s void → b: shrinks
+- recΔ b s (delta n) → app s (recΔ b s n): this is interesting - the recursion decreases n
+- eqW a a → void: shrinks
+- eqW a b → integrate (merge a b): this is interesting
+
+For recΔ, the recursion goes delta n → n, which decreases the depth of nested deltas. If we measure by counting nested deltas, rec decreases.
+
+For eqW a b → integrate (merge a b), this replaces eqW with integrate (merge ...). This is "smaller" in some sense because eqW is consumed.
+
+The main concern: can we have infinite reduction sequences?
+
+Let me try to find a measure. Define a complexity measure like:
+- size: # of constructors
+- But recΔ b s (delta n) → app s (recΔ b s n) doesn't reduce size (delta becomes app, recΔ stays, plus s).
+
+Hmm, let me count:
+- recΔ b s (delta n): 1+1+1+1 = 4 constructors (recΔ, s, delta, n) plus b
+- app s (recΔ b s n): 1+1+1+1+1 = 5 constructors (app, s, recΔ, s, n) plus b
+
+So size increases! This is the "rec" rule. Size alone doesn't work for SN.
+
+But we can use a more sophisticated measure. The standard technique for SN of recursion: use an interpretation or a lexicographic combination.
+
+For recΔ b s (delta n) → app s (recΔ b s n): the inner recΔ has a smaller "delta-depth" argument.
+
+Let's think about it: what terminates is the "rec" structure. A standard approach: map each term to a natural number representing a "potential" or use a monotone interpretation.
+
+Alternatively, since the recursion strictly decreases a "numeric" argument, we can define:
+- depth of deltas in a position
+- plus a "budget" for the outer structure
+
+Actually, let me think more carefully. Can we construct an infinite reduction?
+
+Consider: 
+- recΔ b s (delta (delta (... void))) 
+- → app s (recΔ b s (delta (... void)))
+- → app s (app s (recΔ b s (...)))
+- Eventually terminates with b when we hit void.
+
+This terminates.
+
+What about:
+- eqW a b where a ≠ b → integrate (merge a b) → ?
+- integrate takes a delta: only integrate (delta t) → void
+- If merge a b is not a delta, integrate doesn't reduce
+- So integrate (merge a b) is stuck unless merge a b reduces to delta something
+
+- merge a b reduces to:
+  - If a = void: a
+  - If b = void: a
+  - If a = b: a
+  - Otherwise: stuck
+
+So merge a b reduces only in trivial cases. So integrate (merge a b) is mostly stuck.
+
+This is a small system. Let me try to argue SN more rigorously.
+
+Define a measure μ on terms. We need a well-founded ordering such that each rule reduces μ.
+
+For the rec rule: recΔ b s (delta n) → app s (recΔ b s n)
+The argument of recΔ decreases (delta-count). 
+
+Define: For a term t, let c(t) = some cost. Or use a polynomial interpretation.
+
+Let's try a simple measure: count of "live" recursion. Define:
+- ρ(void) = 0
+- ρ(delta t) = 1 + ρ(t)
+- ρ(integrate t) = ρ(t)  (or with some factor)
+- ρ(merge t1 t2) = ρ(t1) + ρ(t2) (or max)
+- ρ(app t1 t2) = ρ(t1) + ρ(t2)
+- ρ(recΔ b s n) = ρ(n) + ρ(b) + ρ(s)? Or based on n
+
+Hmm, the rec rule: ρ(recΔ b s (delta n)) vs ρ(app s (recΔ b s n))
+ρ(recΔ b s (delta n)) = ρ(delta n) + ... = 1 + ρ(n) + ...
+ρ(app s (recΔ b s n)) = ρ(s) + ρ(recΔ b s n) = ρ(s) + ρ(n) + ...
+
+The +1 from delta is lost, but recΔ's "rho" stays at ρ(n). So if ρ(recΔ b s n) = ρ(n), then recΔ has 1+ρ(n) and app has ρ(s)+ρ(n). If ρ(s) ≥ 1, then we have ρ(s)+ρ(n) vs 1+ρ(n), which is worse.
+
+But wait, app doesn't recurse! app is stuck. So once we have app, we don't recurse again on it. The rec rule fires only on recΔ.
+
+Let me re-examine. The rec rule says: recΔ b s (delta n) reduces in one step to app s (recΔ b s n). The inner recΔ is a strict subterm structurally (it appears in the new term). But it has a smaller n. So we need to track the depth.
+
+A standard approach: define a measure that is the maximum depth of "active" recursion, or use the size of n.
+
+Let me define μ: Trace → ℕ:
+- μ(void) = 0
+- μ(delta t) = 1 + μ(t)  ... no wait, we want to count "delta chains"
+- Actually let me think of μ(t) as something like "size of t with weights"
+
+Use a polynomial interpretation: assign to each constructor a polynomial over ℕ.
+
+Let's try:
+- void ↦ 0
+- delta t ↦ t + 1
+- integrate t ↦ t  (or t+1?)
+- merge t1 t2 ↦ t1 + t2
+- app t1 t2 ↦ t1 + t2
+- recΔ b s n ↦ n + 1  (just the "n" argument, plus 1)
+- eqW a b ↦ a + b + 1
+
+Check rules:
+1. integrate (delta t) ↦ t+1 → 0: t+1 > 0, OK if t ≥ 0. We need t+1 > 0, which is always true.
+2. merge void t ↦ 0+t = t → t: t ≥ t. Hmm, we need strict decrease, so this is not strictly decreasing! The polynomial interpretation requires strict decrease.
+
+Let me adjust:
+- void ↦ 0
+- delta t ↦ t + 1
+- integrate t ↦ t
+- merge t1 t2 ↦ t1 + t2 + 1
+- app t1 t2 ↦ t1 + t2
+- recΔ b s n ↦ n + 1
+- eqW a b ↦ a + b + 1
+
+Rules:
+1. integrate (delta t) = t+1 → 0. Strict: t+1 > 0. ✓
+2. merge void t = 0+t+1 = t+1 → t. Strict: t+1 > t. ✓
+3. merge t void = t+0+1 = t+1 → t. Strict. ✓
+4. merge t t = 2t+1 → t. Strict iff 2t+1 > t iff t ≥ 0. ✓
+5. recΔ b s void = void+1 = 1 → b. Strict iff 1 > b. Hmm, only if b = 0. ✗
+
+So this doesn't work because of rule 5. b can be any term, not just void.
+
+I need to make recΔ b s void → b work. The LHS measures as 1, but b can be anything.
+
+Let me try:
+- recΔ b s n ↦ n + (b + 1) + (s + 1) = n + b + s + 2
+- But then recΔ b s void ↦ void + b + s + 2 = b + s + 2
+  RHS: b. We need b+s+2 > b, so s+2 > 0. Always true.
+- recΔ b s (delta n) ↦ (n+1) + b + s + 2 = n+b+s+3
+  RHS: app s (recΔ b s n) = s + (n+b+s+2) = 2s+n+b+2
+  We need LHS > RHS: n+b+s+3 > 2s+n+b+2, i.e., 1 > s, i.e., s = 0. ✗
+
+So with this interpretation, the rec rule doesn't decrease when s is large.
+
+This is a fundamental issue: the rec rule "expands" the term by adding `s` and another `recΔ`. But the inner recΔ is on a smaller n.
+
+The right approach is a lexicographic or "nested" measure. Use the fact that recΔ is a primitive recursion: n is a natural number (encoded as nested deltas), and the recursion is well-founded.
+
+Let me redefine:
+- Define depth_n(t) = some measure
+- The rec rule: recΔ b s (delta n) → app s (recΔ b s n)
+  - Key: the inner recΔ has n which is one delta shorter than the original
+
+Use a measure: (delta_depth_of_recursion, size). Lexicographic.
+
+Actually, let me define: for any term t, let d(t) be the maximum nesting of deltas in any "active recursion path".
+
+Hmm, let me try a different approach: prove SN by induction on a well-founded measure.
+
+Define: |t| = "size" of t where delta is weighted heavily or something. Or use the "potential" method.
+
+Actually, let's use the standard method: well-founded recursion on the structure of the term with an "ordinal" interpretation. Or use a simpler inductive argument.
+
+Claim: Every term is strongly normalizing.
+
+Proof attempt: Define a measure μ: Trace → ℕ (or some well-ordered set) such that each rewrite step strictly decreases μ.
+
+For the rec rule, we need to track that the recursion on n decreases. Here's an idea:
+
+Define μ(t) as follows (using ℕ×ℕ with lex order, or just ℕ):
+- Let's count "recΔ nodes" and weight them by the delta-depth of their argument.
+
+Define: 
+- δ_depth(void) = 0
+- δ_depth(delta t) = 1 + δ_depth(t)
+- δ_depth(integrate t) = δ_depth(t)
+- δ_depth(merge t1 t2) = max(δ_depth(t1), δ_depth(t2))
+- δ_depth(app t1 t2) = max(δ_depth(t1), δ_depth(t2))
+- δ_depth(recΔ b s n) = δ_depth(n) + δ_depth(b) + δ_depth(s)
+- δ_depth(eqW a b) = max(δ_depth(a), δ_depth(b))
+
+For recΔ b s (delta n) → app s (recΔ b s n):
+- LHS δ_depth: δ_depth(delta n) + ... = 1 + δ_depth(n) + ...
+- RHS δ_depth: max(δ_depth(s), δ_depth(recΔ b s n)) = max(δ_depth(s), δ_depth(n) + ...)
+
+LHS = 1 + δ_depth(n) + δ_depth(b) + δ_depth(s)
+RHS ≥ δ_depth(n) + δ_depth(b) + δ_depth(s)
+
+LHS > RHS ✓ (always, by 1)
+
+But we also need to handle the other rules. The δ_depth might increase for some.
+
+Rule integrate (delta t) → void: δ_depth(t)+1 → 0. ✓
+Rule merge void t → t: max(0, δ_depth(t)) → δ_depth(t). Equal, not strict. ✗
+
+So δ_depth alone doesn't work for merge rules.
+
+Let me think again. We need a measure that strictly decreases for all rules. The merge rules are "non-size-decreasing" if we don't count carefully.
+
+Standard trick: use a measure where merge t1 t2 has a "bonus" over t1+t2, so that removing it decreases.
+
+Define: 
+- μ(void) = 0
+- μ(delta t) = μ(t) + 1
+- μ(integrate t) = μ(t) + 1
+- μ(merge t1 t2) = μ(t1) + μ(t2) + 1
+- μ(app t1 t2) = μ(t1) + μ(t2) + 1
+- μ(recΔ b s n) = ? 
+- μ(eqW a b) = μ(a) + μ(b) + 1
+
+But the rec rule:
+μ(recΔ b s (delta n)) = ? 
+μ(app s (recΔ b s n)) = μ(s) + μ(recΔ b s n) + 1
+
+If we set μ(recΔ b s n) = μ(n), then:
+LHS = μ(delta n) = μ(n) + 1
+RHS = μ(s) + μ(n) + 1
+We need μ(s) + μ(n) + 1 < μ(n) + 1, impossible.
+
+If we set μ(recΔ b s n) = μ(n) + μ(s) + μ(b) + 1 (sum of arguments + 1):
+LHS = μ(delta n) + μ(s) + μ(b) + 1 = μ(n) + 1 + μ(s) + μ(b) + 1 = μ(n) + μ(s) + μ(b) + 2
+RHS = μ(s) + (μ(n) + μ(s) + μ(b) + 1) + 1 = μ(n) + 2μ(s) + μ(b) + 2
+LHS < RHS iff 0 < μ(s). Always true. ✓
+
+Check other rules with μ(recΔ b s n) = μ(n) + μ(s) + μ(b) + 1:
+- recΔ b s void → b: LHS = 0 + μ(s) + μ(b) + 1 = μ(s)+μ(b)+1. RHS = μ(b). LHS > RHS ✓.
+
+But this requires μ(s) ≥ 0 which is always true, but we need strict: μ(s)+μ(b)+1 > μ(b) iff μ(s)+1 > 0. ✓.
+
+But wait, let me check: is μ(recΔ b s n) = μ(n) + μ(s) + μ(b) + 1 a valid definition? Yes, it's a recursive definition over the term structure.
+
+Hmm, but with this μ, let's check the other rules:
+- integrate (delta t) → void: μ(delta t) + 1 = μ(t)+1+1 = μ(t)+2 → 0. ✓ (μ(t)+2 > 0)
+- merge void t → t: μ(0)+μ(t)+1 = μ(t)+1 → μ(t). ✓
+- merge t void → t: same. ✓
+- merge t t → t: 2μ(t)+1 → μ(t). ✓
+- eqW a a → void: 2μ(a)+1 → 0. ✓
+- eqW a b → integrate (merge a b): μ(a)+μ(b)+1 → μ(merge a b)+1 = μ(a)+μ(b)+1+1 = μ(a)+μ(b)+2. LHS < RHS! ✗
+
+The eq-diff rule INCREASES μ! eqW a b → integrate (merge a b), and μ(integrate (merge a b)) = μ(merge a b) + 1 = μ(a)+μ(b)+1+1 = μ(a)+μ(b)+2. But μ(eqW a b) = μ(a)+μ(b)+1.
+
+So μ(eqW a b) < μ(integrate (merge a b)). This is a problem!
+
+This means the eq-diff rule could increase the measure, leading to non-termination potentially.
+
+Let me reconsider. The eq-diff rule: eqW a b → integrate (merge a b).
+
+But after this, integrate (merge a b) is mostly stuck because integrate only reduces integrate (delta _). And merge a b reduces only in trivial cases. So integrate (merge a b) might just sit there as a normal form, unless merge a b → delta something.
+
+Actually, wait. The integrate (merge a b) term: integrate expects a delta, but merge a b is not generally a delta. So integrate (merge a b) is in normal form (no rule applies).
+
+So the chain is: eqW a b → integrate (merge a b) → normal form. This terminates!
+
+Similarly, the rec rule: recΔ b s (delta n) → app s (recΔ b s n). Here app s (recΔ b s n) - the inner recΔ b s n can still reduce, but app s (...) is a normal form for the outer app. Wait, but the inner recΔ b s n is a subterm. So we keep recursing into it.
+
+Let me re-examine. recΔ b s (delta (delta n)) → app s (recΔ b s (delta n)) → app s (app s (recΔ b s n)) → ... 
+
+This is a left-most innermost (or whatever) reduction that terminates. But is it strongly normalizing? Are there infinite reduction sequences?
+
+The measure issue: the rec rule strictly decreases δ_depth (as shown), and δ_depth is well-founded. So if we only consider the rec rule, it terminates. But the eq-diff rule increases δ_depth, but produces a normal form. Hmm.
+
+Let me think about it differently. Can we have:
+eqW a b → integrate (merge a b)
+merge a b reduces inside integrate? But integrate doesn't reduce unless its argument is delta _. So if merge a b → delta _, then integrate (delta _) → void. But merge a b → delta t only if... let me check.
+
+merge a b → t (if a = void), → t (if b = void), → t (if a = b), or stuck. So merge a b → delta t requires the result to be delta t. This means a = void and t = b, or b = void and t = a, or a = b = delta t. 
+
+In all these cases, the result is a single delta. Then integrate (delta _) → void. So we get integrate (delta something) → void, total decrease.
+
+OK so the question is: can there be a cycle or infinite descent?
+
+Let me think about the system as a graph. Each term reduces to one or more terms. For SN, we need no infinite path.
+
+Let me list normal forms (NF):
+- void
+- delta t (for any t in NF)
+- integrate t where t is not delta _ (because if t = delta _, then integrate (delta _) → void)
+  - So t is a NF that is not of form delta _
+- merge t1 t2 where t1 ≠ void, t2 ≠ void, t1 ≠ t2, and t1, t2 in NF
+- app t1 t2 where t1, t2 in NF
+- recΔ b s n where n is in NF and n is not void or delta _
+  - i.e., n has no delta or void at the top
+  - So n is integrate t' (with t' not delta), merge t1 t2 (in NF), app t1 t2, recΔ b' s' n' (recursively), eqW a b
+- eqW a b where a ≠ b and a, b in NF (and the eq-refl and eq-diff rules apply)
+  - Wait, if a = b in NF, eq-refl applies. If a ≠ b, eq-diff applies. So eqW a b in NF requires a, b in NF, a ≠ b.
+
+Hmm, so eqW a b with a ≠ b in NF reduces via eq-diff to integrate (merge a b). This is a redex.
+
+So normal forms:
+- void
+- delta t (t in NF)
+- integrate t where t is in NF and t ≠ delta t' for any t' (i.e., t is not a delta)
+- merge t1 t2 (t1 ≠ void, t2 ≠ void, t1 ≠ t2, all in NF)
+- app t1 t2 (in NF)
+- recΔ b s n where n is in NF and n is neither void nor delta t (so n is not a "value" of the recursion counter)
+- eqW a b where a = b in NF (because if a ≠ b, eq-diff fires)
+
+Wait, can we have a normal form eqW a b with a ≠ b? No, because eq-diff applies. And a = b: eq-refl applies. So eqW is never in NF? Hmm.
+
+Wait, eq-refl requires a = b. eq-diff applies to any eqW a b. So eqW a b always reduces: via eq-refl if a = b, via eq-diff otherwise. There's always a rule.
+
+So eqW is never in NF.
+
+What about recΔ b s n?
+- recΔ b s void: rule 5 fires → b. So recΔ with n = void is not NF (unless b is NF and no other rule).
+- recΔ b s (delta n): rule 6 fires → app s (recΔ b s n). Not NF.
+- recΔ b s n where n is not void or delta _ : not a redex for rules 5 or 6. But we need n to be in NF. If n is a NF that is not void and not delta _, then recΔ b s n is in NF.
+
+What are NFs that are not void and not delta _? 
+- integrate t' where t' is NF and not delta
+- merge t1 t2 (in NF, t1, t2 ≠ void, t1 ≠ t2)
+- app t1 t2 (in NF)
+- recΔ b' s' n' (in NF, with n' not void/delta)
+- eqW is never NF
+
+So n can be: integrate t' (t' not delta), merge, app, recΔ.
+
+OK, so the system has nontrivial normal forms. 
+
+Now for SN: I'll try to construct a well-founded measure.
+
+Approach: Use a "potential" function. Let's define:
+
+For each term, define its "weight" as an ordinal or natural number.
+
+Let me try: count each constructor with weights, and use a special treatment for recΔ.
+
+Define size(t):
+- size(void) = 1
+- size(delta t) = 1 + size(t)
+- size(integrate t) = 1 + size(t)
+- size(merge t1 t2) = 1 + size(t1) + size(t2)
+- size(app t1 t2) = 1 + size(t1) + size(t2)
+- size(recΔ b s n) = ω^(δ(n)+1) + size(b) + size(s) ... using ordinals
+- size(eqW a b) = 1 + size(a) + size(b)
+
+Hmm, ordinals are complex. Let me think of a simpler approach.
+
+Actually, here's a cleaner approach: since the system is a first-order TRS, we can use the "recursive path order" or a simpler measure.
+
+For the rec rule, the key is that the inner recΔ has a strictly smaller n. The standard way to handle this is to give recΔ a measure that depends on n.
+
+Define μ: Trace → ℕ×ℕ with lex order:
+- μ(void) = (0, 0)
+- μ(delta t) = (0, 1 + size(t))  ... hmm this is getting complicated
+
+Let me try a different angle: Define a measure using "rec-depth".
+
+Actually, here's a clean approach. Define:
+- depth(t) = 0 if t is a "ground" normal form like void, delta, etc.
+- depth(t) = 1 + max(depth of subterms)
+
+This is just tree depth, not useful.
+
+OK let me try the polynomial interpretation more carefully. The issue with the rec rule is that the RHS is "bigger" in size but the inner recursion is on a smaller n.
+
+Key insight: in the rec rule, the LHS has the form recΔ b s (delta n). The recursion variable is (delta n), and the new recΔ has just n. The "delta-depth" of the recursion argument strictly decreases.
+
+So: define a measure where recΔ b s n's measure depends primarily on δ_depth(n) (or n itself).
+
+Let me define μ as a function Trace → ℕ:
+- μ(void) = 0
+- μ(delta t) = μ(t) + 1
+- μ(integrate t) = μ(t)  (this lets integrate be "transparent" but then we need eq-diff to work)
+  
+  Wait, eq-diff: μ(eqW a b) = ? Let me say μ(integrate t) = μ(t). Then μ(integrate (merge a b)) = μ(merge a b). We need μ(eqW a b) > μ(merge a b). If μ(eqW a b) = μ(a) + μ(b) + 1 and μ(merge a b) = μ(a) + μ(b), then ✓.
+  
+- μ(integrate t) = μ(t)  (transparent)
+- μ(merge t1 t2) = μ(t1) + μ(t2)  (or + 1?)
+  - For merge t t → t: 2μ(t) → μ(t). Need strict: 2μ(t) > μ(t). If μ(t) ≥ 1, OK. But μ could be 0.
+  - merge void t → t: 0 + μ(t) = μ(t) → μ(t). Not strict!
+  - Hmm.
+
+So μ(merge t1 t2) = μ(t1) + μ(t2) + 1:
+- merge void t: 0 + μ(t) + 1 = μ(t)+1 → μ(t). ✓
+- merge t void: ✓
+- merge t t: 2μ(t)+1 → μ(t). ✓
+- eq-diff: μ(eqW a b) → μ(integrate (merge a b)) = μ(merge a b) = μ(a)+μ(b)+1. Need μ(eqW a b) > μ(a)+μ(b)+1. If μ(eqW a b) = μ(a)+μ(b)+2. ✓
+- integrate (delta t) → void: μ(delta t) = μ(t)+1 → 0. Need μ(t)+1 > 0. ✓
+- eq-refl: μ(eqW a a) = 2μ(a)+2 → 0. ✓
+
+Now for recΔ. Let me try μ(recΔ b s n) = μ(n) + μ(s) + μ(b) + 1:
+- recΔ b s void → b: μ(void) + μ(s) + μ(b) + 1 = μ(s) + μ(b) + 1 → μ(b). Strict iff μ(s) + 1 > 0. ✓
+- recΔ b s (delta n) → app s (recΔ b s n): μ(delta n) + μ(s) + μ(b) + 1 = μ(n)+1+μ(s)+μ(b)+1 = μ(n)+μ(s)+μ(b)+2. RHS: μ(app s (recΔ b s n)) = μ(s) + μ(recΔ b s n) + 1 = μ(s) + (μ(n)+μ(s)+μ(b)+1) + 1 = μ(n) + 2μ(s) + μ(b) + 2. Need LHS < RHS: μ(n)+μ(s)+μ(b)+2 < μ(n)+2μ(s)+μ(b)+2, i.e., 0 < μ(s). ✓
+
+So with:
+- μ(void) = 0
+- μ(delta t) = μ(t) + 1
+- μ(integrate t) = μ(t)
+- μ(merge t1 t2) = μ(t1) + μ(t2) + 1
+- μ(app t1 t2) = μ(s) + μ(t) + 1 ... wait, I had μ(app t1 t2) = μ(t1) + μ(t2) + 1
+  Let me redo: app s (recΔ b s n) = μ(s) + μ(recΔ b s n) + 1. ✓
+- μ(recΔ b s n) = μ(n) + μ(s) + μ(b) + 1
+- μ(eqW a b) = μ(a) + μ(b) + 2
+
+Let me verify all rules:
+1. integrate (delta t) → void: μ(delta t) = μ(t)+1. RHS: 0. μ(t)+1 > 0. ✓
+2. merge void t → t: μ(0) + μ(t) + 1 = μ(t)+1 → μ(t). ✓
+3. merge t void → t: μ(t)+1 → μ(t). ✓
+4. merge t t → t: 2μ(t)+1 → μ(t). 2μ(t)+1 > μ(t) iff μ(t) > -1. ✓
+5. recΔ b s void → b: μ(0)+μ(s)+μ(b)+1 = μ(s)+μ(b)+1 → μ(b). Need μ(s)+1 > 0. ✓
+6. recΔ b s (delta n) → app s (recΔ b s n): 
+   LHS: μ(n)+1+μ(s)+μ(b)+1 = μ(n)+μ(s)+μ(b)+2
+   RHS: μ(s) + (μ(n)+μ(s)+μ(b)+1) + 1 = μ(n)+2μ(s)+μ(b)+2
+   LHS < RHS iff 0 < μ(s). ✓
+7. eqW a a → void: 2μ(a)+2 → 0. ✓
+8. eqW a b → integrate (merge a b): μ(a)+μ(b)+2 → μ(merge a b) = μ(a)+μ(b)+1. ✓ (2 > 1)
+
+All rules strictly decrease μ! And μ maps to ℕ, which is well-founded. Therefore, every term strongly normalizes.
+
+Wait, I need to double-check the measure μ is well-defined (terminating recursion) and that the decrease is strict.
+
+μ is defined by structural recursion on terms, so it's well-defined.
+
+Each rule strictly decreases μ (as shown). Therefore, by the well-foundedness of ℕ, no infinite reduction sequence exists. Hence, strong normalization holds.
+
+So the answer is YES, strong normalization can be established from the calculus alone, using a polynomial interpretation / natural number measure.
+
+Let me re-verify rule 6 carefully:
+LHS = recΔ b s (delta n)
+μ(LHS) = μ(delta n) + μ(s) + μ(b) + 1 = (μ(n) + 1) + μ(s) + μ(b) + 1 = μ(n) + μ(s) + μ(b) + 2
+
+RHS = app s (recΔ b s n)
+μ(RHS) = μ(s) + μ(recΔ b s n) + 1 = μ(s) + (μ(n) + μ(s) + μ(b) + 1) + 1 = μ(n) + 2μ(s) + μ(b) + 2
+
+LHS - RHS = (μ(n) + μ(s) + μ(b) + 2) - (μ(n) + 2μ(s) + μ(b) + 2) = -μ(s)
+
+So LHS - RHS = -μ(s) ≤ 0, i.e., LHS ≤ RHS. We need strict: LHS < RHS iff μ(s) > 0.
+
+μ(s) > 0 for any non-void term. But s could be void! If s = void, μ(s) = 0, then LHS = RHS, and the measure doesn't decrease.
+
+Hmm, that's a problem! If s = void, then recΔ b void (delta n) → app void (recΔ b void n), and μ is the same on both sides. So μ doesn't strictly decrease, and we can't conclude SN from this measure alone.
+
+Hmm. So my measure is flawed.
+
+Let me reconsider. When s = void, the rec rule: recΔ b void (delta n) → app void (recΔ b void n).
+
+The inner recΔ b void n has a smaller n (delta-stripped by 1). So we need the measure to track that n is smaller.
+
+Let me try: μ(recΔ b s n) = (some function of n, b, s) that captures the n-argument.
+
+How about: μ(recΔ b s n) = μ(n) * C + μ(s) + μ(b) for some constant C? 
+
+If μ(recΔ b s n) = 2*μ(n) + μ(s) + μ(b):
+- recΔ b s void → b: 0 + μ(s) + μ(b) → μ(b). Strict iff μ(s) > 0. ✗ (s could be void)
+
+If μ(recΔ b s n) = 2*μ(n) + μ(s) + μ(b) + 1:
+- recΔ b s void → b: 0+μ(s)+μ(b)+1 → μ(b). Strict iff μ(s)+1 > 0. ✓
+- recΔ b s (delta n) → app s (recΔ b s n):
+  LHS: 2(μ(n)+1) + μ(s) + μ(b) + 1 = 2μ(n) + 2 + μ(s) + μ(b) + 1 = 2μ(n) + μ(s) + μ(b) + 3
+  RHS: μ(s) + μ(recΔ b s n) + 1 = μ(s) + (2μ(n) + μ(s) + μ(b) + 1) + 1 = 2μ(n) + 2μ(s) + μ(b) + 2
+  LHS < RHS iff 2μ(n) + μ(s) + μ(b) + 3 < 2μ(n) + 2μ(s) + μ(b) + 2 iff 1 < μ(s). 
+  ✗ (μ(s) could be 0, i.e., s = void)
+
+Hmm. The issue is that the LHS has one less "delta" but RHS has more "structure" (the outer app). The comparison is delicate.
+
+Maybe I need μ(s) to always be positive. But s = void is allowed, and μ(void) = 0.
+
+Alternative: weight delta heavier.
+
+Try: μ(delta t) = μ(t) + 2 (so that delta is "heavier").
+
+Rec rule LHS = recΔ b s (delta n) = 2μ(n) + 2 + μ(s) + μ(b) + 1 = 2μ(n) + μ(s) + μ(b) + 3
+RHS = app s (recΔ b s n) = μ(s) + (2μ(n) + μ(s) + μ(b) + 1) + 1 = 2μ(n) + 2μ(s) + μ(b) + 2
+LHS - RHS = 1 - μ(s). Strict iff μ(s) < 1, i.e., μ(s) = 0. So only if s = void. ✗ (s can be anything)
+
+Still the same issue.
+
+The fundamental problem: the rec rule replaces recΔ with app + recΔ. The app adds mass, but the inner recΔ has smaller n. To capture this, we need a measure that's sensitive to the n-argument.
+
+How about: μ(recΔ b s n) = (μ(n) + 1) * (μ(s) + 1) * (μ(b) + 1) - 1? Or some product.
+
+Let me think differently. The rec rule is essentially a primitive recursion: recΔ b s n computes by recursing on the delta-depth of n. This is well-founded.
+
+Approach: define a measure using a "potential" that gives recΔ a high potential based on n.
+
+Let μ(recΔ b s n) = some big function of μ(n). E.g., μ(recΔ b s n) = 2^(μ(n)+1) or so.
+
+μ(void) = 0
+μ(delta t) = μ(t) + 1
+μ(integrate t) = μ(t)
+μ(merge t1 t2) = μ(t1) + μ(t2) + 1
+μ(app t1 t2) = μ(t1) + μ(t2) + 1
+μ(recΔ b s n) = 2^(μ(n)+1) + μ(s) + μ(b)
+μ(eqW a b) = μ(a) + μ(b) + 2
+
+Check recΔ b s (delta n) → app s (recΔ b s n):
+LHS: 2^(μ(n)+2) + μ(s) + μ(b) = 4 * 2^μ(n) + μ(s) + μ(b)
+RHS: μ(s) + (2^(μ(n)+1) + μ(s) + μ(b)) + 1 = 2*2^μ(n) + 2μ(s) + μ(b) + 1
+LHS - RHS = 2*2^μ(n) - μ(s) - 1
+For LHS > RHS, need 2*2^μ(n) > μ(s) + 1, i.e., 2^μ(n) > (μ(s)+1)/2.
+
+Hmm, this depends on μ(s) and μ(n). For μ(n) = 0 (n = void), LHS = 4*1 + μ(s) + μ(b) = 4 + μ(s) + μ(b). RHS = 2 + 2μ(s) + μ(b) + 1 = 3 + 2μ(s) + μ(b). LHS - RHS = 1 - μ(s). Strict iff μ(s) = 0.
+
+So if n = void... but wait, n = void means the LHS is recΔ b s void, which uses rule 5, not rule 6! Rule 6 requires n = delta n', so μ(n) ≥ 1.
+
+For rule 6, n = delta n', so μ(n) ≥ 1. Then 2^μ(n) ≥ 2, and 2*2^μ(n) ≥ 4. And μ(s) + 1 is the RHS adjustment. We need 2*2^μ(n) > μ(s) + 1, i.e., 2^μ(n) > (μ(s)+1)/2.
+
+This isn't always true. E.g., if μ(s) is huge and μ(n) = 1, then 2^1 = 2 vs (huge+1)/2. Could fail.
+
+So exponential doesn't cleanly work either, because the comparison involves μ(s).
+
+Hmm. Let me reconsider the structure.
+
+The rec rule: recΔ b s (delta n) → app s (recΔ b s n).
+
+Think of recΔ b s n as: if n = void, return b; if n = delta n', return app s (recΔ b s n').
+
+This is like a "fold" over delta. The recursion on n is well-founded because delta n is "bigger" than n in the delta-ordering (which is well-founded since delta is a constructor with a smaller subterm).
+
+Wait, actually for SN of the TRS, we just need to show that every term reduces to a normal form. The rec rule is locally decreasing in the n-argument, but the surrounding context might increase the measure.
+
+Approach: Use a measure that's a pair (something for the "recursion depth", something for the "outer structure").
+
+Alternative approach: Prove SN by induction on a "complexity" using the fact that all rules are "decreasing" in a suitable sense.
+
+Actually, here's a key observation. In the rec rule, the LHS recΔ b s (delta n) is rewritten to app s (recΔ b s n). The new term has:
+- An app at the top
+- The recΔ b s n inside, with smaller n
+
+For the rec rule, we can think of the "recΔ skeleton" being unwound. The "potential" of recΔ b s n is related to the delta-depth of n, plus the "cost" of building up the app structure.
+
+Let me define: the "rec-potential" of recΔ b s n as the delta-depth of n, plus some offset.
+
+But we also need the surrounding terms to not increase.
+
+Hmm, let me try a measure based on the term's "value" in a more semantic way.
+
+Actually, here's a cleaner approach. Let me define μ as:
+
+μ(t) = (A(t), B(t)) with lex order, where A is a "primary" measure and B is secondary.
+
+Or, use the following trick: for the rec rule, give recΔ a measure that "dominates" the app structure.
+
+Define μ such that μ(recΔ b s n) is "much bigger" than μ(app s (recΔ b s n)) for any b, s, n.
+
+Specifically: μ(recΔ b s n) = (μ(n) + 1) * (μ(s) + μ(b) + 1) + something.
+
+Actually, let's think about it. We have:
+μ(app s (recΔ b s n)) = μ(s) + μ(recΔ b s n) + 1.
+
+We want μ(recΔ b s (delta n)) > μ(app s (recΔ b s n)).
+
+Let X = μ(s), Y = μ(b), and let f(k) = μ(recΔ b s n_k) where n_k is built with k nested deltas. So f(0) corresponds to n = void, f(k+1) to n = delta n_k.
+
+For rule 5: f(0) = μ(recΔ b s void) > μ(b) = Y. So f(0) > Y.
+
+For rule 6: f(k+1) = μ(recΔ b s (delta n_k)) > μ(app s (recΔ b s n_k)) = X + f(k) + 1.
+
+So we need: f(k+1) > X + f(k) + 1 for all k ≥ 0, and f(0) > Y.
+
+This is satisfied by f(k) = X + (k+1)(Y + 1) or similar. Specifically:
+f(0) = X + (Y+1) > Y iff X + 1 > 0, ✓.
+f(k+1) = X + (k+2)(Y+1). X + f(k) + 1 = X + X + (k+1)(Y+1) + 1 = 2X + (k+1)(Y+1) + 1.
+f(k+1) > X + f(k) + 1 iff (k+2)(Y+1) > X + (k+1)(Y+1) + 1 iff (Y+1) > X + 1 iff Y > X.
+
+So we need Y > X, i.e., μ(b) > μ(s). That's a constraint on b and s, which we can't guarantee!
+
+So f(k) = X + (k+1)(Y+1) works only if Y > X.
+
+Try f(k) = (k+1) * (X + Y + 2). Then:
+f(0) = X + Y + 2 > Y iff X + 2 > 0. ✓
+f(k+1) = (k+2)(X+Y+2). X + f(k) + 1 = X + (k+1)(X+Y+2) + 1.
+f(k+1) - (X + f(k) + 1) = (k+2)(X+Y+2) - X - (k+1)(X+Y+2) - 1 = (X+Y+2) - X - 1 = Y + 1 > 0. ✓
+
+So f(k) = (k+1) * (X + Y + 2) works! Where k = μ_δ(n) (delta-depth of n), X = μ(s), Y = μ(b).
+
+So: μ(recΔ b s n) = (μ_δ(n) + 1) * (μ(s) + μ(b) + 2)
+
+where μ_δ(n) is the delta-depth of n (number of nested deltas at the recursion position... wait, but n is a general term, not just nested deltas).
+
+Hmm, μ_δ(n) should be the "max delta-depth" of n, or "n interpreted as a natural number".
+
+Wait, n is the recursion counter. In the rules, n is matched against void (rule 5) or delta n' (rule 6). So n is "used" as a natural number (nested deltas = a number).
+
+But n is a general term, not necessarily a nested delta. What does it mean for n = merge t1 t2? The rules don't apply (rules 5,6 require n = void or n = delta _). So recΔ b s (merge t1 t2) is a normal form (no rule applies).
+
+So for SN, we only care about the case when n is void or a delta. The μ_δ function on n is only relevant in these cases.
+
+Let me define: for any term t, let δcount(t) be the number of leading deltas (if t = delta^k u for u not a delta, then δcount(t) = k, with δcount(void) = 0 and δcount(non-delta, non-void) = 0... actually we should be careful).
+
+For the rec rule, the relevant case is n = delta n', so δcount(delta n') ≥ 1. And the new n is n', with δcount(n') = δcount(n) - 1.
+
+So if I define μ(recΔ b s n) as a function of δcount(n), μ(s), μ(b), I can get a working measure.
+
+But μ needs to be defined for all terms, not just when recΔ applies. And for terms that are not recΔ, μ is just some size-like measure.
+
+Let me define:
+- μ(void) = 0
+- μ(delta t) = μ(t) + 1
+- μ(integrate t) = μ(t) + 1  (add 1 so it's not transparent; helps with eq-diff)
+  - Actually for eq-diff: μ(eqW a b) → μ(integrate (merge a b)) = μ(merge a b) + 1. So μ(eqW a b) > μ(merge a b) + 1.
+  - If μ(eqW a b) = μ(a) + μ(b) + 2 and μ(merge a b) = μ(a) + μ(b) + 1, then LHS = μ(a)+μ(b)+2, RHS = μ(a)+μ(b)+2. Equal! Not strict. ✗
+  - So μ(integrate t) = μ(t) (transparent). Then μ(integrate (merge a b)) = μ(merge a b) = μ(a)+μ(b)+1. And μ(eqW a b) = μ(a)+μ(b)+2 > μ(a)+μ(b)+1. ✓.
+  - But then μ(integrate (delta t)) = μ(t)+1 → 0. ✓.
+- μ(merge t1 t2) = μ(t1) + μ(t2) + 1
+- μ(app t1 t2) = μ(t1) + μ(t2) + 1
+- μ(recΔ b s n) = (δcount(n) + 1) * (μ(s) + μ(b) + 2)
+  - Wait, but this is for a specific n. We need to also consider that recΔ might appear in larger contexts.
+  - Actually, μ is defined per-term, and the measure is just μ of the whole term. Subterms contribute to μ through their μ values.
+  - But μ(recΔ b s n) as defined depends on δcount(n), which is a property of n.
+  - Hmm, but μ is supposed to be a function of the term. δcount(n) is well-defined for any n.
+
+Let me re-examine. μ(recΔ b s n) = (δcount(n) + 1) * (μ(s) + μ(b) + 2). Is this a valid recursive definition? It depends on μ(s) and μ(b), which are subterms, and δcount(n) which is a property of n. So yes, by structural recursion on the term, this is well-defined (if we define δcount structurally).
+
+δcount(t):
+- δcount(void) = 0
+- δcount(delta t) = 1 + δcount(t)
+- δcount(integrate t) = 0  (not a leading delta)
+- δcount(merge t1 t2) = 0
+- δcount(app t1 t2) = 0
+- δcount(recΔ b s n) = 0
+- δcount(eqW a b) = 0
+
+OK so δcount is the number of leading deltas, which is 0 unless the term is delta^k (void or something).
+
+Now check rec rule with this μ:
+μ(recΔ b s (delta n)) = (δcount(delta n) + 1) * (μ(s) + μ(b) + 2) = (1 + δcount(n) + 1) * (...) = (δcount(n) + 2)(μ(s) + μ(b) + 2).
+μ(app s (recΔ b s n)) = μ(s) + μ(recΔ b s n) + 1 = μ(s) + (δcount(n) + 1)(μ(s) + μ(b) + 2) + 1.
+
+We need LHS > RHS:
+(δcount(n) + 2)(X + Y + 2) > X + (δcount(n) + 1)(X + Y + 2) + 1
+where X = μ(s), Y = μ(b).
+LHS = (δcount(n) + 2)(X+Y+2) = (δcount(n)+1)(X+Y+2) + (X+Y+2)
+RHS = X + (δcount(n)+1)(X+Y+2) + 1
+LHS - RHS = (X+Y+2) - X - 1 = Y + 1 > 0. ✓ Always!
+
+Great, so the rec rule strictly decreases μ.
+
+Check rule 5: recΔ b s void → b.
+μ(recΔ b s void) = (0+1)(X+Y+2) = X+Y+2.
+μ(b) = Y.
+X+Y+2 > Y iff X+2 > 0. ✓ (X = μ(s) ≥ 0).
+
+Check rule 1: integrate (delta t) → void.
+μ(integrate (delta t)) = μ(delta t) = μ(t)+1.
+μ(void) = 0.
+μ(t)+1 > 0. ✓.
+
+Check rule 2: merge void t → t.
+μ(merge void t) = 0 + μ(t) + 1 = μ(t)+1.
+μ(t).
+μ(t)+1 > μ(t). ✓.
+
+Check rule 3: merge t void → t. ✓.
+Check rule 4: merge t t → t. 2μ(t)+1 > μ(t) iff μ(t)+1 > 0. ✓.
+Check rule 7: eqW a a → void. 2μ(a)+2 > 0. ✓.
+Check rule 8: eqW a b → integrate (merge a b). 
+μ(eqW a b) = μ(a)+μ(b)+2.
+μ(integrate (merge a b)) = μ(merge a b) = μ(a)+μ(b)+1.
+2 > 1. ✓.
+
+All rules strictly decrease μ. And μ: Trace → ℕ is well-defined and well-ordered. So every reduction is finite, hence SN.
+
+So the answer is YES, strong normalization can be established using a natural number measure (polynomial interpretation). The measure is:
+
+μ(void) = 0
+μ(delta t) = μ(t) + 1
+μ(integrate t) = μ(t)
+μ(merge t1 t2) = μ(t1) + μ(t2) + 1
+μ(app t1 t2) = μ(t1) + μ(t2) + 1
+μ(recΔ b s n) = (δcount(n) + 1) * (μ(s) + μ(b) + 2)
+μ(eqW a b) = μ(a) + μ(b) + 2
+
+where δcount counts leading deltas.
+
+This works because:
+- For the rec rule, the key is that δcount decreases by 1 (from delta n to n), and the factor (δcount+1) drops by 1, while the surrounding app adds μ(s) + 1. The algebra works out to show LHS > RHS by μ(b) + 1 > 0.
+
+Great, so the assessment is: YES, strong normalization holds and can be proven from the given rules alone, using a natural number measure / polynomial interpretation.
+
+Let me write up the answer concisely.

@@ -1,0 +1,506 @@
+We need to analyze the given rewrite calculus: a first-order rewrite system on the data type `Trace`. The system has constructors:
+
+- `void`
+- `delta : Trace → Trace`
+- `integrate : Trace → Trace`
+- `merge : Trace → Trace → Trace`
+- `app : Trace → Trace → Trace`
+- `recΔ : Trace → Trace → Trace → Trace`
+- `eqW : Trace → Trace → Trace`
+
+Rewrite rules (Step relation):
+
+1. `R_int_delta`: `integrate (delta t) → void`
+2. `R_merge_void_left`: `merge void t → t`
+3. `R_merge_void_right`: `merge t void → t`
+4. `R_merge_cancel`: `merge t t → t`
+5. `R_rec_zero`: `recΔ b s void → b`
+6. `R_rec_succ`: `recΔ b s (delta n) → app s (recΔ b s n)`
+7. `R_eq_refl`: `eqW a a → void`
+8. `R_eq_diff`: `eqW a b → integrate (merge a b)`
+
+We are asked: can strong normalization (SN) be established from the presented calculus alone, without importing structural axioms or object-level assumptions beyond what is derivable from the given syntax and rewrite rules? We need to provide raw assessment: yes or no? And explain reasoning.
+
+We must also obey a strict execution contract: if a step duplicates a subterm S, first show additive failure: M(after) = M(before) - 1 + M(S) and explain why no strict drop when M(S) >= 1. Only then propose a fix. State and check the key premise your chosen fix requires, and verify it explicitly. If you cannot discharge it, admit failure (CONSTRAINT BLOCKER).
+
+The contract seems to be about a measure function M mapping terms to natural numbers (or ordinals) that would decrease with each step. If a rewrite duplicates a subterm, the measure might not decrease strictly. The contract asks: for any step that duplicates a subterm S, we need to compute M(after) in terms of M(before) and M(S). Show that it's not a strict drop if M(S) >= 1. Then propose a fix (maybe a different measure or a lexicographic ordering). State and check the key premise required for the fix. If we cannot discharge it, admit failure.
+
+Thus the problem is to analyze SN for this rewrite system.
+
+First, let's examine each rule.
+
+- `integrate (delta t) → void`. This reduces the size: removes a `delta` and `integrate`. So likely measure decreases.
+
+- `merge void t → t`. Removes `merge` and `void`. Decreases.
+
+- `merge t void → t`. Same.
+
+- `merge t t → t`. Removes a `merge` and one copy of t. However, note that t appears twice on left, once on right. This is a contraction: duplicates t? Actually left side has t twice, right side has t once. So it's a reduction in size. So measure decreases.
+
+- `recΔ b s void → b`. Removes `recΔ`, s, void. Decreases.
+
+- `recΔ b s (delta n) → app s (recΔ b s n)`. This rule replaces a `recΔ` with an `app` and a smaller `recΔ` (n instead of delta n). However, note that s is copied: left side has s, right side has s inside `app s ...`. So s is duplicated? Actually left side: `recΔ b s (delta n)`. Right side: `app s (recΔ b s n)`. So s appears once on left, once inside `app` on right. So no duplication of s. Wait: `app` is a constructor taking two arguments: `app s (recΔ b s n)`. So s appears once. The `recΔ` on right has s as second argument again. So s appears twice on the right side? Let's check: `recΔ b s n` includes s as second argument. So s appears in two places: as first argument of `app`, and as second argument of the inner `recΔ`. So the rule duplicates s. Indeed, the left side has one occurrence of s; the right side has two occurrences of s. So this is a duplication of subterm s.
+
+- `eqW a a → void`. Removes `eqW` and a. Decreases.
+
+- `eqW a b → integrate (merge a b)`. This replaces `eqW` with `integrate` and `merge`. No duplication of a or b; they appear once each in the right side inside `merge`. So size may increase? Actually left side: `eqW a b` has two children. Right side: `integrate (merge a b)` has `merge a b` as child, which has two children. So the tree size might be similar or slightly larger because of extra `integrate` node. But we need to check measure.
+
+Thus the main problematic rule is `R_rec_succ` which duplicates s. Also perhaps `R_eq_diff` might increase measure.
+
+Thus we need to see if we can find a measure that strictly decreases for all steps, or if there is a counterexample to normalization (i.e., infinite reduction sequence). The system might be non-terminating due to the duplication in `R_rec_succ` combined with other rules that can increase the size of s or allow recursion.
+
+Specifically, `R_rec_succ` is reminiscent of a primitive recursion rule: recursor over natural numbers (represented as `void` for zero and `delta n` for successor). The rule is:
+
+`recΔ b s (delta n) → app s (recΔ b s n)`
+
+This is like: rec(b, s, S n) = s (rec(b, s, n)). However, the duplication of s is problematic: s is used both as the function to apply (via `app`) and as the step argument for the recursive call. This is typical for a recursor: the step function s is applied to the recursive result. But here s is a `Trace` term, not a function. The `app` constructor applies a function? Actually `app` is just a constructor; no reduction rule for `app` is given. So `app s (recΔ b s n)` is just a pair (s, recursive call). There's no rule that reduces `app`. So after applying `R_rec_succ`, we get a term containing `app s (recΔ b s n)`. The `recΔ` can be further reduced if n is `delta n'`. So we can keep unfolding the recursion. But each time we unfold, we duplicate s.
+
+Thus consider a term `recΔ b s (delta^n void)` where `delta^n void` means n nested deltas. Each step reduces the number of deltas by one (replacing `delta n` with n), but duplicates s. So after k steps, we have `app s (app s (... (app s b)...))` with k copies of s? Let's simulate:
+
+Start: `recΔ b s (delta (delta (... (delta void)...)))` with n deltas.
+
+Step 1: `recΔ b s (delta n1) → app s (recΔ b s n1)` where n1 has n-1 deltas.
+
+Step 2: `recΔ b s n1` is `recΔ b s (delta n2) → app s (recΔ b s n2)`. So we get `app s (app s (recΔ b s n2))`.
+
+After n steps: `app s (app s (... (app s b)...))` with n copies of s.
+
+Thus the size grows linearly with the number of steps. However, we cannot apply any further `recΔ` steps because the innermost is b. So the reduction terminates. So for a concrete natural number (finite nesting of delta), we terminate. But what if the argument to recΔ is not a finite chain of deltas? The system has no typing; terms can be arbitrary. For example, consider `recΔ b s (integrate (delta t))`. Actually `integrate (delta t)` reduces to `void` via `R_int_delta`. But `recΔ` expects the third argument to be matched against `void` or `delta n`. It doesn't have a rule for `integrate`. So if the third argument is `integrate ...`, the recΔ is stuck? Actually no rule applies, so it's a normal form (or blocked). But we can have cycles? Let's see if we can create infinite loops.
+
+The rule `R_eq_diff` transforms `eqW a b` into `integrate (merge a b)`. Then `integrate` can be eliminated if its argument is `delta t`. But `merge a b` might reduce if a or b is void or if a=b. But if a and b are arbitrary, we might not have reduction. But we could perhaps create a loop using `eqW` and `integrate` and `merge`? Let's see.
+
+The rule `R_eq_diff` yields `integrate (merge a b)`. If `merge a b` reduces to something, but `integrate` is stuck unless its argument is `delta t`. So `integrate` is a guard. The only way to reduce `integrate x` is if x is `delta t`. So after `R_eq_diff`, we have `integrate (merge a b)`. For this to reduce further, we need `merge a b` to be `delta t`. That would require `a` and `b` to be such that `merge a b` reduces to `delta t`. `merge` reduces only if one argument is void, or both are equal. So if a=b, then `merge a a → a`. Then we have `integrate a`. For this to reduce, a must be `delta t`. So if a = delta t, then `integrate (delta t) → void`. So `eqW (delta t) (delta t) → integrate (merge (delta t) (delta t)) → integrate (delta t) → void`. That's fine.
+
+But what about infinite regress? Perhaps we can have a term where `recΔ` creates a larger term that contains an `eqW` that expands and creates more work, etc.
+
+We need to assess strong normalization: does every reduction sequence terminate? The system is first-order, no variable binding. Usually, first-order term rewriting systems can be non-terminating even with simple rules. For example, the rule `f(x) → g(x, x)` duplicates x and if g has rules that bring back f, we can loop. Here we have duplication in `R_rec_succ`. The step function s is duplicated. If s contains a `recΔ` or other redexes that can grow, we could have infinite reduction.
+
+Specifically, consider s = `recΔ b s' n`? Wait s is a subterm; we can choose s to be something that, when duplicated, leads to more reductions that produce larger terms. Since s is duplicated, we can create exponential growth. But does that lead to non-termination? Not necessarily; growth doesn't mean infinite. However, we can try to construct a term that loops.
+
+Consider the term `recΔ void t (delta void)`, where t is a term that, when duplicated, creates a new `recΔ` that again duplicates t, etc. But the duplication in `R_rec_succ` places one copy of s inside an `app` and another copy as the step argument of the inner `recΔ`. So the inner `recΔ` retains s as its second argument. So the recursion unfolds, but the step argument s remains the same. So after n steps, we have n copies of s nested in `app`s, but the innermost recΔ has the same s. So the s is not changed. So if s itself is a redex that can be reduced, we might reduce each copy of s. But the reduction of s might be independent.
+
+If s is a term that reduces to something that contains a `recΔ` with the same structure, we could have infinite reduction? Let's try to craft a loop.
+
+We have no rule that reduces `app`. So `app` is a "pairing" constructor that is inert. So after we unfold `recΔ`, we get a bunch of `app` nested, each with s as left child. The s subterms are independent; each can be reduced. But if s reduces to a term that contains the original `recΔ` again, we could have infinite recursion. However, the `recΔ` inside s would have its own arguments. We need to see if we can create a cycle.
+
+Consider s = `recΔ b s n`. That is recursive: the step argument s appears inside the term s itself. But s is just a term; we can have self-referential terms? In inductive types, we can have infinite trees? No, `Trace` is an inductive type, so all terms are finite trees. So s cannot be infinite. But s can contain a subterm that is a recΔ with the same b, s, n? That would be a finite term, but it's nested.
+
+Suppose we set s = `recΔ void void void`. Then `R_rec_succ` yields `app s (recΔ void s n)`. The inner recΔ has s as second argument, which is `recΔ void void void`. So the inner recΔ is `recΔ void (recΔ void void void) n`. This is a larger term. But we can unfold that inner recΔ if n is `delta n'`. So we can keep unfolding. The size may grow because s is nested deeper each time? Actually s is fixed; the inner recΔ has s as argument, but s is the same term. So the term size grows linearly with the number of unfoldings. But the number of unfoldings is bounded by the number of deltas in the third argument. If that argument is finite, we stop. If that argument is something that doesn't reduce (like `void`), we stop after one step (if it's `void`, we use `R_rec_zero`). So for any given initial term, the recursion depth is finite because the third argument is a finite tree, and each step peels off one `delta`. However, we could have a term where the third argument is not a chain of deltas but something that reduces to a chain of deltas, potentially generating more deltas? Let's examine.
+
+The third argument of `recΔ` can be any term. The reduction rules for `recΔ` only match when the third argument is `void` or `delta n`. If it's something else, `recΔ` is stuck. So to make progress, we need to reduce the third argument to either `void` or `delta n`. There are rules that produce `delta`? No. The constructors are `void`, `delta`, `integrate`, `merge`, `app`, `recΔ`, `eqW`. The only rules that produce `delta` are none; `delta` is a constructor that wraps a term. The rewrite rules do not produce `delta` on the right-hand side, except maybe indirectly? Let's check:
+
+- `R_int_delta` produces `void`.
+- `R_merge_*` produce t or void, no delta.
+- `R_rec_zero` produces b.
+- `R_rec_succ` produces `app s (recΔ b s n)`. No delta.
+- `R_eq_refl` produces `void`.
+- `R_eq_diff` produces `integrate (merge a b)`. No delta.
+
+Thus `delta` is never created by rewriting; it can only be consumed (by `R_int_delta` and `R_rec_succ` which matches on `delta`). So the number of `delta` constructors in a term can only decrease or stay same? Actually `R_rec_succ` removes a `delta` from the third argument of recΔ, but does not create new deltas. So the total number of `delta` nodes in the term is non-increasing. Since `delta` is a constructor, each `recΔ` step consumes one `delta`. So the depth of the chain of deltas is finite and decreases.
+
+Thus any sequence of `R_rec_succ` steps is bounded by the number of `delta` nodes in the initial term. So that part terminates.
+
+Now consider other rules: `R_eq_diff` creates an `integrate` and a `merge`. `merge` can be reduced if arguments are void or equal. `integrate` can be reduced only if its argument is `delta t`. So if `merge a b` reduces to something that is `delta t`, then `integrate` can be eliminated. But `merge` never produces `delta` (as we saw). So `integrate (merge a b)` cannot be reduced further via `R_int_delta` because `merge a b` is not a `delta` (unless a or b is `delta` and the merge reduces to that). Wait: `merge t t → t`. So if a = b = delta t', then `merge (delta t') (delta t') → delta t'`. So `integrate (merge (delta t') (delta t')) → integrate (delta t') → void`. So that works.
+
+But if a and b are distinct and not void, `merge a b` is stuck (no rule applies). So `integrate (merge a b)` is stuck.
+
+Thus `R_eq_diff` can lead to a stuck term, but not to infinite loops.
+
+The main risk is the duplication in `R_rec_succ`. Even though `delta` count decreases, the duplication of s could cause the size to increase. But if we define a measure that counts the number of `delta` nodes plus something else that accounts for the size of s in a way that duplication doesn't increase the measure, we might prove termination.
+
+Standard approach: use a weight that assigns a large enough ordinal to `recΔ` so that the duplication is offset by the decrease in the third argument. For primitive recursion, the standard measure is lexicographic: the third argument (the natural number) decreases, and the second argument (the step) is unchanged or considered "smaller" in some well-founded order. But here we have no order on `Trace` that makes s smaller. However, we can assign a measure that is a pair: (number of deltas in third argument, size of term). But duplication of s increases size, but the first component decreases. So lexicographic order works: (d, m) where d is the number of deltas in the third argument of the outermost recΔ. When we apply `R_rec_succ`, d decreases by 1 (since we replace `delta n` with n). The duplication of s may increase m, but the lexicographic order (d, m) with d decreasing ensures well-foundedness.
+
+But we need to ensure that other rules do not increase d. `R_int_delta` reduces a `delta`. `R_merge_*` reduces `merge` and void, not affecting deltas. `R_rec_zero` removes a recΔ. `R_eq_diff` creates an `integrate` and `merge`, but does not create `delta`. So d (total number of deltas) is non-increasing across all rules. Actually, `R_rec_succ` consumes one delta. So d strictly decreases in that rule. For other rules, d may stay same or decrease (if they remove a delta). So we can define a measure: the multiset of deltas in the term, ordered by multiset extension (which is well-founded). Or simply the number of deltas.
+
+But the problem is that the duplication of s could introduce new deltas if s contains deltas. However, s is a subterm that is already present; the rule duplicates s, so the number of deltas in the term can increase because we add a copy of s (which may contain deltas). Wait: The left side has s appearing once. The right side has s appearing twice. So if s contains k deltas, the total number of deltas in the term increases by k. But we also remove the `delta` from the third argument of recΔ, which reduces the count by 1. So net change: +k - 1. If k >= 1, the total number of deltas might not decrease; it could increase or stay same. So the simple count of deltas is not strictly decreasing.
+
+For example, suppose s = `delta void`. Then s contains one delta. The left side: `recΔ b s (delta n)` has s (one delta) plus the outer delta (one delta) plus whatever deltas in n and b. Right side: `app s (recΔ b s n)`. Here s appears twice: one as left child of app, one inside the inner recΔ. So we have two copies of s (each with one delta) = two deltas from s, plus whatever deltas in n and b. So total deltas: left side had 1 (in s) + 1 (outer delta) + deltas in n. Right side has 2 (in two copies of s) + deltas in n. So net change: +1 delta. So the total number of deltas increases.
+
+Thus the simple count of deltas does not decrease.
+
+But we can assign a weight to each node: assign to `recΔ` a weight that is larger than the weight of its second argument multiplied by something? This is reminiscent of the Ackermann function or recursion that duplicates the step function. Actually, the rewrite rule is similar to the primitive recursion combinator: `rec(b, s, S n) = s (rec(b, s, n))`. In lambda calculus, this is strongly normalizing because the recursion is structural on the natural number argument. However, here `s` is a term, not a function, and `app` just pairs them. The duplication of s is just sharing; but in rewriting, it's duplication of the term tree. If s is large, the term size grows.
+
+Nevertheless, strong normalization might still hold because the number of recΔ unfoldings is bounded by the number of outer deltas in the third argument. Even though the term size grows, the "potential" measured by the number of recΔ redexes is decreasing. But the system could have other interactions: after unfolding recΔ, we get many copies of s that might contain recΔ redexes themselves. But those recΔ redexes are independent; each has its own third argument. However, the third argument of the inner recΔ is n, which is smaller (fewer deltas) than the original third argument (delta n). So the inner recΔ has a smaller "fuel". But we have two copies of s: one inside `app` and one as the step argument of the inner recΔ. The copy inside `app` is inert (since app has no rules) unless s itself has redexes. The copy inside the inner recΔ is the step argument for further recursion.
+
+Thus the recursion depth is bounded by the number of deltas in the original third argument. The duplication of s does not create new recΔ redexes with larger fuel; the fuel is n, which is smaller. So we can define a measure that is a multiset of the third arguments of all recΔ nodes in the term, ordered by the well-founded order on natural numbers (the depth of delta nesting). Or more simply, we can define a weight function W(t) that is an ordinal, defined recursively:
+
+- W(void) = 0
+- W(delta t) = W(t) + 1
+- W(integrate t) = W(t) + 1? Or something.
+- W(merge t1 t2) = max(W(t1), W(t2)) + 1? Or sum?
+- W(app t1 t2) = max(W(t1), W(t2)) + 1?
+- W(recΔ b s n) = ω * (W(n) + 1) + something? Actually we need to ensure that when we replace with `app s (recΔ b s n')` where n = delta n', the weight decreases.
+
+We can try: W(recΔ b s n) = ω * (D(n)) + size(b, s) where D(n) is the number of deltas in n. Since D(n) decreases by 1, the leading term drops by ω, which dominates any increase in size due to duplication of s. Since s is duplicated, the size may double, but ω is infinite, so the ordinal decreases.
+
+But we need to stay within the constraints: we cannot import structural axioms beyond the given syntax and rewrite rules. However, we can define a measure using standard ordinal arithmetic, which is allowed. The question is whether we can prove SN using standard methods (like a weight function) without extra assumptions.
+
+The contract requires: if a step duplicates a subterm S, first show the additive failure: M(after) = M(before) - 1 + M(S) and explain why no strict drop when M(S) >= 1. Then propose a fix.
+
+Thus we need to identify the step that duplicates S. That's `R_rec_succ`. It duplicates s. Let's denote S = s. The left side is `recΔ b s (delta n)`. The right side is `app s (recΔ b s n)`. Let's define a measure M(t) = total number of nodes in t (size). Then:
+
+M(before) = 1 (recΔ node) + M(b) + M(s) + 1 (delta node) + M(n) = 2 + M(b) + M(s) + M(n).
+
+M(after) = 1 (app) + M(s) + (1 (recΔ) + M(b) + M(s) + M(n)) = 2 + M(b) + 2*M(s) + M(n).
+
+So M(after) = M(before) - 1 + M(s). Because M(before) = 3 + M(b) + M(s) + M(n)? Wait recount.
+
+Actually, define size precisely:
+
+Let |t| be number of constructors.
+
+|void| = 1
+|delta t| = 1 + |t|
+|integrate t| = 1 + |t|
+|merge t1 t2| = 1 + |t1| + |t2|
+|app t1 t2| = 1 + |t1| + |t2|
+|recΔ b s n| = 1 + |b| + |s| + |n|
+|eqW a b| = 1 + |a| + |b|
+
+Now compute:
+
+Before: |recΔ b s (delta n)| = 1 + |b| + |s| + |delta n| = 1 + |b| + |s| + (1 + |n|) = 2 + |b| + |s| + |n|.
+
+After: |app s (recΔ b s n)| = 1 + |s| + |recΔ b s n| = 1 + |s| + (1 + |b| + |s| + |n|) = 2 + |b| + 2|s| + |n|.
+
+Thus difference: |after| - |before| = (2 + |b| + 2|s| + |n|) - (2 + |b| + |s| + |n|) = |s|.
+
+Thus |after| = |before| + |s|.
+
+But the contract formula says M(after) = M(before) - 1 + M(S). Let's see: If we consider that we remove the outer delta and recΔ, we subtract something. Actually the transformation removes the recΔ and delta, and adds an app and a recΔ. So net change: remove recΔ (1 node), remove delta (1 node), add app (1 node), add recΔ (1 node). So structural nodes: 2 removed, 2 added. But the arguments: s is duplicated. So the size increase is exactly |s|. So M(after) = M(before) - 2 + 2 + |s| = M(before) + |s|. But the contract says M(after) = M(before) - 1 + M(S). Maybe they count differently (e.g., counting redexes or something). But the idea is that M increases by M(S) - 1? Actually M(after) = M(before) - 1 + M(S) would mean if M(S) > 1, M(after) > M(before). So it's not strictly decreasing.
+
+Thus the additive failure: M(after) = M(before) - 1 + M(S). If M(S) >= 1, then M(after) >= M(before). So no strict drop.
+
+We need to propose a fix. The fix is to use a lexicographic measure: first component is the "fuel" (number of deltas in the third argument of recΔ), second component is the size. Or use an ordinal weight that gives infinite weight to the fuel.
+
+Specifically, define a measure μ(t) = (D(t), |t|) lexicographically, where D(t) is the total number of delta constructors in t. For the rule `R_rec_succ`:
+
+Before: D(before) = D(b) + D(s) + D(delta n) = D(b) + D(s) + 1 + D(n).
+
+After: D(after) = D(s) + D(recΔ b s n) = D(s) + D(b) + D(s) + D(n) = D(b) + 2*D(s) + D(n).
+
+Thus D(after) - D(before) = (D(b) + 2D(s) + D(n)) - (D(b) + D(s) + 1 + D(n)) = D(s) - 1.
+
+If D(s) >= 1, then D(after) >= D(before). So the first component may not decrease; it could increase. So lexicographic with D first fails.
+
+We need a measure that assigns more weight to the position of the recΔ's third argument. Since the third argument is being destructed, we can assign a weight that is a function of the third argument's "height" or number of deltas, multiplied by something larger than any possible weight of s.
+
+Since s can be arbitrarily large, we need to bound the weight of s by something that is multiplied by the number of deltas left. But we can use an ordinal measure: assign to each term an ordinal < ω^ω or something.
+
+Specifically, define a function rank: Trace → ℕ (or ordinal) recursively:
+
+- rank(void) = 0
+- rank(delta t) = rank(t) + 1
+- rank(integrate t) = rank(t) + 1
+- rank(merge t1 t2) = max(rank(t1), rank(t2)) + 1
+- rank(app t1 t2) = max(rank(t1), rank(t2)) + 1
+- rank(recΔ b s n) = ω * (rank(n) + 1) + rank(s) + rank(b) + 1? Or something.
+
+We need to ensure that for `R_rec_succ`, the rank decreases.
+
+Let’s try: rank(recΔ b s n) = ω * (δ(n)) + size(b) + size(s) + size(n), where δ(n) is the number of delta wrappers around n (i.e., the "natural number" value). Actually we can define δ(t) = number of delta nodes in t (count). But as we saw, δ can increase.
+
+Better: define a weight that is a pair (δ(n), something) but with δ(n) being the depth of the third argument's delta chain, not total deltas. But the third argument could be any term, not just a chain. However, the reduction only proceeds when the third argument is of the form `delta n`. If it's not, the recΔ is stuck. So we can consider the "potential" of a recΔ redex: it can fire only if the third argument is `delta n`. When it fires, the new recΔ has third argument n, which has fewer deltas (specifically, the outermost delta is removed). So the depth of the third argument (in terms of leading deltas) decreases.
+
+But the duplication of s introduces s which may contain many deltas. However, those deltas are not in the third argument of the new recΔ; they are in the second argument (which stays the same) and in the first argument of app. So they don't affect the potential for further recΔ steps on that inner recΔ. The inner recΔ still has the same s as its second argument. So the "fuel" for the inner recΔ is n, which is smaller.
+
+Thus we can define a measure that is a multiset of the third arguments of all recΔ subterms, ordered by the well-founded relation "is a subterm of" or "has fewer leading deltas". Actually, we can define a measure: for each recΔ node, assign the number of delta constructors in its third argument. Then the total measure is the sum of these numbers over all recΔ nodes. When we apply `R_rec_succ` to a particular recΔ node, we remove that node (the outer recΔ) and create a new recΔ node with third argument n (which has one fewer delta than the original third argument delta n). However, we also create a new recΔ node? Wait: the outer recΔ is replaced by `app s (recΔ b s n)`. So we have a new recΔ node (the inner one). The outer recΔ is gone. So we replace a recΔ with third argument `delta n` (which contributes 1 + δ(n) to the measure) with a recΔ with third argument n (which contributes δ(n)). So the contribution from that recΔ node decreases by 1. However, we also add an `app` node and duplicate s. But the duplication of s may contain recΔ nodes itself, each contributing their own measures. So the total measure may increase if s contains recΔ nodes.
+
+Thus we need to account for the recΔ nodes inside s. Since s is duplicated, the measure could increase.
+
+But note: s is the second argument of the original recΔ. In the new term, s appears as the second argument of the new inner recΔ (same as before) and as the first argument of app. The copy inside the inner recΔ is the same as the original s. The copy inside app is new. So we have one extra copy of s. If s contains recΔ nodes, we are adding their contributions to the measure. So the total measure could increase.
+
+Thus we need a measure that penalizes the second argument of recΔ in a way that duplication is offset by the decrease in the third argument. Since the third argument loses one delta, we can assign weight ω to that delta, which dominates any finite increase from duplication of s.
+
+Thus ordinal measure works: assign to each term t an ordinal < ω^ω. Define recursively:
+
+- |void|_o = 0
+- |delta t|_o = |t|_o + 1
+- |integrate t|_o = |t|_o + 1
+- |merge t1 t2|_o = max(|t1|_o, |t2|_o) + 1
+- |app t1 t2|_o = max(|t1|_o, |t2|_o) + 1
+- |recΔ b s n|_o = ω * (|n|_o + 1) + |b|_o + |s|_o
+
+Now check `R_rec_succ`:
+
+Left: |recΔ b s (delta n)|_o = ω * (|delta n|_o + 1) + |b|_o + |s|_o = ω * ((|n|_o + 1) + 1) + |b|_o + |s|_o = ω * (|n|_o + 2) + |b|_o + |s|_o.
+
+Right: |app s (recΔ b s n)|_o = max(|s|_o, |recΔ b s n|_o) + 1.
+
+Compute |recΔ b s n|_o = ω * (|n|_o + 1) + |b|_o + |s|_o.
+
+Thus the right side ordinal is max(|s|_o, ω*(|n|_o+1) + ... ) + 1. Since ω*(|n|_o+1) is infinite (if we treat ω as infinite), it's larger than any finite |s|_o (assuming |s|_o is finite). Actually, we need to be careful: |s|_o is an ordinal < ω^ω, but could be larger than ω. For example, if s contains recΔ, its ordinal could be ω*k + ... So we need to compare.
+
+But note: |recΔ b s n|_o has leading term ω*(|n|_o+1). The |s|_o term is added after that. So |recΔ b s n|_o > |s|_o (since ω*(...) dominates finite sum). Actually, ordinal addition: ω*(|n|_o+1) + |b|_o + |s|_o is strictly larger than |s|_o (assuming |n|_o is finite or any ordinal less than ω^ω). So max(|s|_o, |recΔ b s n|_o) = |recΔ b s n|_o.
+
+Thus |right|_o = |recΔ b s n|_o + 1 = ω*(|n|_o+1) + |b|_o + |s|_o + 1.
+
+Left side: ω*(|n|_o+2) + |b|_o + |s|_o = ω*(|n|_o+1) + ω + |b|_o + |s|_o.
+
+Since ω > 1 (as ordinal), left side is strictly larger than right side: left = right - 1 + ω. Actually left = ω*(|n|_o+1) + ω + ... ; right = ω*(|n|_o+1) + ... + 1. Since ω > 1, left > right.
+
+Thus the ordinal measure decreases. So SN holds.
+
+We need to verify that all other rules also decrease this measure.
+
+Check other rules:
+
+- `R_int_delta`: left = |integrate (delta t)|_o = |delta t|_o + 1 = (|t|_o + 1) + 1 = |t|_o + 2. Right = |void|_o = 0. Decrease.
+
+- `R_merge_void_left`: left = |merge void t|_o = max(0, |t|_o) + 1 = |t|_o + 1. Right = |t|_o. Decrease by 1.
+
+- `R_merge_void_right`: similar.
+
+- `R_merge_cancel`: left = |merge t t|_o = max(|t|_o, |t|_o) + 1 = |t|_o + 1. Right = |t|_o. Decrease.
+
+- `R_rec_zero`: left = |recΔ b s void|_o = ω*(|void|_o+1) + |b|_o + |s|_o = ω*1 + |b|_o + |s|_o = ω + |b|_o + |s|_o. Right = |b|_o. Since ω > 0, left > right.
+
+- `R_eq_refl`: left = |eqW a a|_o = max(|a|_o, |a|_o) + 1 = |a|_o + 1. Right = 0. Decrease.
+
+- `R_eq_diff`: left = |eqW a b|_o = max(|a|_o, |b|_o) + 1. Right = |integrate (merge a b)|_o = |merge a b|_o + 1 = (max(|a|_o, |b|_o) + 1) + 1 = max(|a|_o, |b|_o) + 2. So left = max + 1, right = max + 2. That is an increase! So this rule increases the ordinal measure by 1. That is a problem.
+
+Wait, check: |integrate t|_o = |t|_o + 1. So |integrate (merge a b)|_o = |merge a b|_o + 1 = (max(|a|_o, |b|_o) + 1) + 1 = max(|a|_o, |b|_o) + 2. Left side |eqW a b|_o = max(|a|_o, |b|_o) + 1. So indeed the rule increases the measure by 1. So the ordinal measure does not decrease for `R_eq_diff`.
+
+Thus we need to adjust the measure for `eqW`. The rule `R_eq_diff` creates an `integrate` and a `merge`. It might be non-terminating if we can loop: `eqW a b` reduces to `integrate (merge a b)`. If `merge a b` reduces to something that triggers `eqW` again? But `merge` does not produce `eqW`. `integrate` does not produce `eqW`. So no direct loop. However, the measure increase suggests that this rule could be applied infinitely if we can generate new `eqW` redexes from the result. But the result has no `eqW`. So we only apply `R_eq_diff` once per `eqW`. So even though the measure increases, we can bound the number of times `R_eq_diff` can be applied because it consumes an `eqW`. But if the measure increases, we need to ensure that the overall process is still well-founded. Since each `eqW` is consumed, we can treat `eqW` as a "resource" that is eliminated. So we can define a measure that counts the number of `eqW` nodes, or give `eqW` a heavy weight that decreases even though the size increases.
+
+Specifically, assign weight to `eqW` that is larger than any weight of its expansion. For example, assign |eqW a b|_o = ω + max(|a|_o, |b|_o) + 1. Then right side is max + 2, which is less than ω + max + 1 (since ω is infinite). So ordinal decreases.
+
+Thus we can adjust the measure:
+
+Define rank(t) as an ordinal < ω*2 or ω^2:
+
+- rank(void) = 0
+- rank(delta t) = rank(t) + 1
+- rank(integrate t) = rank(t) + 1
+- rank(merge t1 t2) = max(rank(t1), rank(t2)) + 1
+- rank(app t1 t2) = max(rank(t1), rank(t2)) + 1
+- rank(recΔ b s n) = ω * (rank(n) + 1) + rank(b) + rank(s)
+- rank(eqW a b) = ω + max(rank(a), rank(b)) + 1
+
+Now check all rules:
+
+`R_int_delta`: left = rank(integrate (delta t)) = rank(delta t) + 1 = (rank(t)+1)+1 = rank(t)+2. Right = 0. Decrease.
+
+`R_merge_void_left`: left = max(0, rank(t)) + 1 = rank(t)+1. Right = rank(t). Decrease.
+
+`R_merge_void_right`: similar.
+
+`R_merge_cancel`: left = max(r,r)+1 = r+1. Right = r. Decrease.
+
+`R_rec_zero`: left = ω*(0+1) + rank(b) + rank(s) = ω + rank(b) + rank(s). Right = rank(b). Since ω > 0, left > right.
+
+`R_rec_succ`: left = ω*(rank(delta n)+1) + rank(b) + rank(s) = ω*((rank(n)+1)+1) + rank(b) + rank(s) = ω*(rank(n)+2) + rank(b) + rank(s). Right = max(rank(s), rank(recΔ b s n)) + 1. rank(recΔ b s n) = ω*(rank(n)+1) + rank(b) + rank(s). Since ω*(rank(n)+1) >= ω, it dominates rank(s). So max = rank(recΔ b s n). So right = ω*(rank(n)+1) + rank(b) + rank(s) + 1. Compare left and right: left = ω*(rank(n)+1) + ω + ... ; right = ω*(rank(n)+1) + 1 + ... . Since ω > 1, left > right. So decrease.
+
+`R_eq_refl`: left = ω + max(r,r) + 1 = ω + r + 1. Right = 0. Decrease.
+
+`R_eq_diff`: left = ω + max(ra, rb) + 1. Right = rank(integrate (merge a b)) = rank(merge a b) + 1 = (max(ra, rb) + 1) + 1 = max(ra, rb) + 2. Since ω > 2, left > right. So decrease.
+
+Thus all rules decrease the ordinal rank. Therefore the system is strongly normalizing.
+
+Now, is there any hidden issue? The measure uses ordinal ω, which is standard. The contract asks: "State and check the key premise your chosen fix requires, and verify it explicitly." The fix is using an ordinal measure with a leading ω coefficient for the recΔ fuel and for eqW. The key premise is that the duplication of s in `R_rec_succ` does not increase the leading coefficient (the fuel) and that the increase in the finite part is bounded by the decrease in the leading coefficient.
+
+Specifically, for `R_rec_succ`, we need that ω > M(s) + 1 (or something). Actually we need that the decrease of ω in the leading term (from ω*(k+2) to ω*(k+1)) is larger than the increase in the finite part (rank(s) + ...). Since we subtract ω, which is infinite, and add at most a finite ordinal (the duplication of s adds rank(s) to the finite part), the net effect is a decrease. The key premise is that rank(s) is a finite ordinal (or less than ω). But rank(s) could be arbitrarily large, possibly ≥ ω. Indeed, if s contains recΔ or eqW, its rank could be ω or larger. For example, s = recΔ void void void has rank ω. Then duplication of s adds ω to the finite part? Actually in our definition, rank(recΔ b s n) = ω*(rank(n)+1) + rank(b) + rank(s). So rank(s) can be ω or larger. So the "finite part" is not bounded by ω; it can be any ordinal < ω^2 (if s contains recΔ). So we need to ensure that the coefficient of ω in the leading term is high enough to dominate the rank(s) that is being added.
+
+Let's examine the ordinal arithmetic more carefully.
+
+Define rank: Trace → Ord (ordinals < ω^2 maybe).
+
+We want:
+
+rank(recΔ b s n) = ω * f(n) + g(b, s, n) where f(n) is something like the number of deltas in n? Actually we used rank(n) + 1. But rank(n) itself could be large (≥ ω). If n contains recΔ, rank(n) could be ω*k + m. So f(n) = rank(n) + 1 could be ≥ ω. Then ω * f(n) is at least ω^2. That might be okay, but we need to ensure well-foundedness.
+
+Alternatively, we can define a measure that is a pair (number of recΔ nodes, ...). But the duplication of s adds recΔ nodes if s contains them.
+
+Better: Use a multiset ordering: assign to each recΔ node a "weight" equal to the number of deltas in its third argument. Since each recΔ step consumes one delta in the third argument, the multiset of these numbers decreases (in the multiset ordering) even if we duplicate s, because the new recΔ node has a smaller number (by 1) and the other copy of s is placed in a context (app) where it does not contribute to the multiset (since app is not recΔ). However, if s contains recΔ nodes, those are duplicated, so the multiset gets additional elements. But those elements have weights corresponding to their own third arguments. Since we are duplicating s, we are adding copies of the recΔ nodes inside s. The multiset ordering can handle duplication: if we replace an element (the outer recΔ) with a smaller element (the inner recΔ with weight decreased by 1) plus some other elements (the recΔ nodes inside s), the multiset may not decrease because we are adding elements. The multiset ordering compares multisets by removing occurrences of common elements and checking that the remaining elements on the left are all greater than those on the right. Here, we remove the outer recΔ (weight w = D(delta n) = D(n)+1) and add the inner recΔ (weight w' = D(n) = w-1) plus the recΔ nodes inside s (which have some weights). The multiset after is {w'} ∪ M_s ∪ M_rest, where M_s is the multiset of recΔ weights in s. The original multiset was {w} ∪ M_rest (assuming s was not part of the outer recΔ's weight). Actually s is the second argument; it may contain recΔ nodes. In the original term, the outer recΔ contributes weight w, and s contributes its own recΔ nodes M_s. In the new term, we have the inner recΔ contributing weight w' and also s appears twice: once inside the inner recΔ (as second argument) and once inside app. The copy inside the inner recΔ is part of the inner recΔ's second argument, but does that count? The weight of the inner recΔ is based on its third argument n, not on s. So the inner recΔ contributes weight w'. The copy of s inside the inner recΔ does not add a new recΔ node; it's just the second argument. The copy of s inside app adds a copy of s, which includes its recΔ nodes M_s. So the new multiset of recΔ weights is {w'} ∪ M_s (from the app copy) ∪ M_s (from the inner recΔ's second argument? No, the inner recΔ's second argument is s, but that does not create a new recΔ node; it's just a subterm. The recΔ nodes inside s are already counted in M_s. So we have the original M_s (from the s in the outer recΔ) plus a new copy of M_s from the duplicated s in app. So we add M_s again. So the new multiset is {w'} ∪ M_s ∪ M_s ∪ (other recΔ nodes in b and n). The original multiset was {w} ∪ M_s ∪ (other recΔ nodes in b and n). So we replaced w with w' (w-1) and added an extra copy of M_s. So the multiset changed by removing one w and adding one w' and adding M_s. Since w' < w, but we add M_s which could be larger than w' or contain many elements, the multiset may not be smaller.
+
+Thus multiset ordering may not work directly.
+
+We need a weight that assigns to each recΔ node a value that is larger than the sum of weights of all recΔ nodes that could be duplicated from s. Since s can be arbitrary, we need something like a ranking that ensures rank(s) is less than the difference between w and w'. That suggests using a ranking where the weight of a recΔ node is an ordinal of the form ω * α + β, where β is larger than any weight of its second argument. But the second argument s can be arbitrarily large, so we cannot bound β by a fixed finite number. However, we can define the weight recursively such that weight(recΔ b s n) is greater than weight(s) multiplied by something.
+
+Standard approach for recursor: weight(recΔ b s n) = weight(n) * ω + weight(s) + weight(b) or something. Let's think.
+
+We want weight(recΔ b s (delta n)) > weight(app s (recΔ b s n)). Since weight(app ...) is roughly max(weight(s), weight(recΔ b s n)) + 1. If we set weight(recΔ b s n) = ω * (weight(n) + 1) + weight(s) + weight(b), then as we saw, it works provided weight(s) < ω. But weight(s) can be large.
+
+However, we can define weight recursively such that weight(s) is always less than ω * (weight(n) + 1). Since n is arbitrary, we can ensure that the coefficient of ω dominates weight(s). But weight(s) could be arbitrarily large, e.g., if s = recΔ ... with large n. But note that in the rule `R_rec_succ`, the n in the inner recΔ is the predecessor of the original n. So we can define a measure based on the "depth" of the third argument's delta chain, but we need to handle arbitrary s.
+
+One approach: define a measure that is a pair (d, m) where d is the number of recΔ nodes along the "spine" of the term? Or the maximum number of nested recΔ nodes? Not sure.
+
+Alternatively, we can prove SN by structural induction on the "fuel" argument (the third argument of recΔ). Since the rewrite system is essentially primitive recursion, we can define a termination metric based on the lexicographic order (fuel, size) where fuel is the number of leading deltas in the third argument. However, the duplication of s increases size, but fuel strictly decreases. Since the fuel is a natural number (or ordinal), the lexicographic order (fuel, size) is well-founded. Even though size can increase, the first component decreases. So any infinite reduction would require infinitely many steps where fuel decreases, but fuel is bounded below by 0. So only finitely many `R_rec_succ` steps can occur. Other rules decrease size or fuel. So overall SN holds.
+
+But we need to be careful: after applying `R_rec_succ`, the new term contains the inner recΔ with the same fuel (the new n) but also a copy of s in app. That copy of s may contain recΔ nodes with their own fuel. Those recΔ nodes could be reduced independently. However, the fuel for those recΔ nodes is determined by their own third arguments, which are subterms of s. Since s is fixed, the total "fuel" sum over all recΔ nodes in the term might increase because we duplicated s. So we need a global measure that accounts for all recΔ nodes.
+
+Define the measure as the multiset of the "fuel" values of all recΔ nodes in the term, where fuel of a recΔ node is the number of leading deltas in its third argument (or some measure of the third argument that decreases when recΔ fires). When we apply `R_rec_succ` to a recΔ node with fuel f+1 (since third argument is delta n), we replace it with a recΔ node with fuel f (the inner one) and also a copy of s (which may contain recΔ nodes with various fuels). So the multiset changes: remove one occurrence of f+1, add one occurrence of f, and add a copy of the multiset of fuels of recΔ nodes in s. If s contains recΔ nodes, we are adding those fuels. So the multiset may not decrease: we removed a larger number f+1 and added a smaller number f, but also added some other numbers (the fuels in s). The multiset ordering requires that after removing common elements, all remaining elements on the left are greater than those on the right. Here we have left multiset: {f+1} ∪ M_s (the fuels in s, which were present originally because s is a subterm of the original term). Actually, originally, the term includes s as the second argument of the outer recΔ. So the original multiset includes the fuels of recΔ nodes in s: call it M_s. So original multiset: {f+1} ∪ M_s ∪ M_rest (where M_rest includes fuels in b and n). After rewriting, we have: the inner recΔ contributes fuel f. The duplicated s contributes another copy of M_s. The original s is still there as the second argument of the inner recΔ, so it contributes M_s as well. So total M_s appears twice. So new multiset: {f} ∪ M_s (from inner recΔ's second argument) ∪ M_s (from app) ∪ M_rest (fuels in b and n). So new multiset: {f} ∪ (M_s ⊎ M_s) ∪ M_rest.
+
+Thus we removed one f+1 and added one f and an extra copy of M_s. Since M_s can be non-empty, the multiset may be larger. For example, suppose s is a recΔ node with fuel 0. Then M_s = {0}. Original multiset: {f+1, 0} ∪ ... . New multiset: {f, 0, 0} ∪ ... . Compare: remove common {f} and {0}? Actually we need to compare multisets. Original: {f+1, 0}. New: {f, 0, 0}. Remove one 0 from both: original {f+1}, new {f, 0}. Now f+1 > f, but we have an extra 0 on the right. In multiset ordering, we compare by removing common elements and checking that all remaining left elements are > all remaining right elements. Here after removing common {f} (if f appears in both?) Actually original does not have f (unless f is present elsewhere). Let's be precise.
+
+Let M_rest be empty for simplicity. Let b, n have no recΔ. Original term: recΔ b s (delta n) where s = recΔ b' s' n' (so s has one recΔ node). Fuel of outer recΔ: f+1 = 1 + D(n). Fuel of s: D(n'). So original multiset: {1 + D(n), D(n')}.
+
+After rewrite: app s (recΔ b s n). Here we have the inner recΔ with fuel D(n). The s appears twice: each copy has fuel D(n'). So multiset: {D(n), D(n'), D(n')}.
+
+Now compare {1 + D(n), D(n')} vs {D(n), D(n'), D(n')}.
+
+Remove common elements: we have D(n') on both sides. Remove one copy: left {1 + D(n)}, right {D(n), D(n')}. Now we need all elements on left > all elements on right. Is 1 + D(n) > D(n) and 1 + D(n) > D(n')? The first is true, but the second may not be: D(n') could be larger than 1 + D(n). Since s is arbitrary, D(n') could be anything. So the multiset ordering does not guarantee decrease.
+
+Thus we need a more sophisticated measure.
+
+The standard solution for primitive recursion with explicit substitution is to use a weight function that is linear in the "fuel" with a coefficient larger than the maximum possible weight of the step function. But since the step function can be arbitrarily large, we need to assign ordinals such that the weight of recΔ is something like ω * (fuel) + weight(s) + ... and we rely on the fact that ω * (fuel) dominates weight(s) for any weight(s) that is less than ω * (fuel). But weight(s) could be larger than ω * (fuel). For example, if s itself is a recΔ with large fuel. Then weight(s) could be ω * (large number) + ..., which is larger than ω * (fuel) of the outer recΔ.
+
+Thus we need to ensure that the weight of the outer recΔ is greater than the weight of the inner recΔ plus the weight of s. Since the inner recΔ has smaller fuel, its weight is smaller by at least ω. So the outer weight is at least ω more than the inner weight. If weight(s) < ω, then we are fine. But weight(s) could be >= ω.
+
+However, note that s is the same in both outer and inner recΔ. So if weight(s) is large, it appears in both sides. Let's compute with ordinals that are polynomials in ω.
+
+Define weight(t) as an ordinal < ω^ω recursively:
+
+- weight(void) = 0
+- weight(delta t) = weight(t) + 1
+- weight(integrate t) = weight(t) + 1
+- weight(merge t1 t2) = max(weight(t1), weight(t2)) + 1
+- weight(app t1 t2) = max(weight(t1), weight(t2)) + 1
+- weight(recΔ b s n) = ω * (weight(n) + 1) + weight(s) + weight(b) + 1
+- weight(eqW a b) = ω^2 + max(weight(a), weight(b)) + 1
+
+Wait, we need to handle the fact that weight(s) can be large. In the rule `R_rec_succ`, left weight = ω*(weight(delta n)+1) + weight(s) + weight(b) + 1 = ω*((weight(n)+1)+1) + weight(s) + weight(b) + 1 = ω*(weight(n)+2) + weight(s) + weight(b) + 1.
+
+Right weight = weight(app s (recΔ b s n)) = max(weight(s), weight(recΔ b s n)) + 1.
+
+weight(recΔ b s n) = ω*(weight(n)+1) + weight(s) + weight(b) + 1.
+
+Since ω*(weight(n)+1) >= ω, and weight(s) is some ordinal < ω^ω, the max is weight(recΔ b s n) (unless weight(s) is larger, but weight(recΔ ...) has a leading term ω*(...), which dominates any weight(s) that is < ω^2? Actually weight(s) could be ω^2 or larger if s contains eqW or nested recΔ with large n. But weight(recΔ b s n) has leading coefficient ω, so it is of the form ω * α + β. weight(s) could be of the form ω^2 * γ + ... which is larger. So we cannot assume weight(recΔ ...) > weight(s).
+
+Thus we need to ensure that the weight of recΔ is larger than any weight of its second argument s. That suggests we need to assign weight(recΔ b s n) = ω * (weight(n) + 1) + something that dominates weight(s). But we cannot bound weight(s) by a fixed finite number. However, we can assign weight(recΔ b s n) = ω * (weight(n) + 1) * (weight(s) + 1) or something multiplicative. But ordinal multiplication is not commutative. We can set weight(recΔ b s n) = ω^{weight(s)+1} * (weight(n)+1) + ...? That would be huge.
+
+But we need a well-founded order. Using ordinal exponentiation: ω^{α} is well-founded. We can define weight(recΔ b s n) = ω^{weight(s)+1} * (weight(n)+1) + weight(b). Then when we duplicate s, the weight of the new recΔ (inner) is ω^{weight(s)+1} * (weight(n)+1) + weight(b). The weight of the outer recΔ is ω^{weight(s)+1} * (weight(n)+2) + weight(b). Since multiplication by ω^{...} is monotone, we have left > right by ω^{weight(s)+1}. The duplication of s adds a copy of s in app. The weight of app s (recΔ ...) is max(weight(s), weight(recΔ ...)) + 1. Since weight(recΔ ...) >= ω^{weight(s)+1} > weight(s) (assuming weight(s) < ω^{weight(s)+1}, which holds for ordinals), the max is weight(recΔ ...). So weight(right) = weight(recΔ ...) + 1 = ω^{weight(s)+1} * (weight(n)+1) + weight(b) + 1. This is strictly less than left = ω^{weight(s)+1} * (weight(n)+2) + weight(b). Because left - right = ω^{weight(s)+1} - 1 > 0. So the measure decreases.
+
+Now we need to check other rules with this new weight.
+
+Define weight(t) recursively:
+
+- weight(void) = 0
+- weight(delta t) = weight(t) + 1
+- weight(integrate t) = weight(t) + 1
+- weight(merge t1 t2) = max(weight(t1), weight(t2)) + 1
+- weight(app t1 t2) = max(weight(t1), weight(t2)) + 1
+- weight(recΔ b s n) = ω^{weight(s)+1} * (weight(n) + 1) + weight(b)
+- weight(eqW a b) = ω^{ω} + max(weight(a), weight(b)) + 1? Or something to dominate its expansion.
+
+But we need to ensure that weight(eqW a b) > weight(integrate (merge a b)). weight(integrate (merge a b)) = weight(merge a b) + 1 = max(weight(a), weight(b)) + 2. So we can set weight(eqW a b) = ω + max(weight(a), weight(b)) + 1. Since ω is larger than any finite max+2, this works.
+
+But we also need to ensure that weight(recΔ ...) is defined consistently: weight(s) is an ordinal < ω^ω (if we restrict). Actually weight(s) could be arbitrarily large if s contains recΔ or eqW. But exponentiation ω^{α} is defined for any ordinal α. We need to ensure that the weight function yields a well-defined ordinal less than some fixed ordinal (e.g., ε0). Since the syntax is finite, the weight is finite-depth nested exponentials, so it's < ε0.
+
+Thus we can prove SN using this ordinal assignment.
+
+Now, the contract requires: "State and check the key premise your chosen fix requires, and verify it explicitly." The fix is to use an ordinal weight that assigns to `recΔ` a leading exponent based on the weight of s. The key premise is that for any term s, ω^{weight(s)+1} > weight(s) + 1 (so that the max in the app case picks the recΔ weight, and the duplication of s does not outweigh the decrease in the coefficient). Actually the key premise is that ω^{α} is a strictly increasing function of α and that ω^{α} > α for all α < ε0. This ensures that the leading term dominates the weight of the duplicated subterm.
+
+Specifically, for `R_rec_succ`, we need:
+
+weight(recΔ b s (delta n)) > weight(app s (recΔ b s n)).
+
+Compute:
+
+LHS = ω^{w(s)+1} * (w(n)+2) + w(b).
+
+RHS = max(w(s), ω^{w(s)+1} * (w(n)+1) + w(b)) + 1.
+
+Since ω^{w(s)+1} > w(s) (as w(s) is an ordinal less than ε0, and ω^{β} > β for β ≥ 1), we have max = ω^{w(s)+1} * (w(n)+1) + w(b). So RHS = ω^{w(s)+1} * (w(n)+1) + w(b) + 1.
+
+Now, LHS - RHS = ω^{w(s)+1} * (w(n)+2) - (ω^{w(s)+1} * (w(n)+1) + 1) = ω^{w(s)+1} - 1 > 0.
+
+Thus strict decrease. This holds as long as ω^{w(s)+1} > 1, which is true for any w(s) finite or infinite (as long as w(s) is an ordinal). Actually for w(s) = 0, ω^{1} = ω > 1. So fine.
+
+Thus the key premise is that for all ordinals α occurring as weights, ω^{α+1} > α + 1 and ω^{α+1} is additive with respect to multiplication by a natural number. Actually we need that ω^{α+1} * (k+1) > ω^{α+1} * k + β for any β < ω^{α+1}. This holds because ω^{α+1} is a limit ordinal and multiplication by natural number yields a sequence that is cofinal in ω^{α+1} * ω, but we are just comparing finite multiples. Specifically, ω^{α+1} * (k+1) = ω^{α+1} * k + ω^{α+1}. Since ω^{α+1} > β for any β < ω^{α+1}, we have LHS > RHS.
+
+Thus the measure works.
+
+Now, check other rules:
+
+- `R_rec_zero`: LHS = ω^{w(s)+1} * (0+1) + w(b) = ω^{w(s)+1} + w(b). RHS = w(b). Since ω^{w(s)+1} > 0, LHS > RHS.
+
+- `R_int_delta`, `R_merge_*`, `R_eq_refl`, `R_eq_diff` are easy as before.
+
+Thus SN holds.
+
+Now, the question: "Give your raw assessment: can strong normalization of this system be established from the presented calculus alone, without importing structural axioms or object-level assumptions beyond what is derivable from the given syntax and rewrite rules? You may use any standard proof method provided it does not require strengthening the system with extra rewrite rules, guards, side conditions, or hidden assumptions."
+
+Answer: Yes, strong normalization can be established.
+
+We need to present the reasoning, including the contract steps.
+
+Contract: Identify the duplication step. That's `R_rec_succ`. Show additive failure for a naive measure (size). Then propose the fix: assign an ordinal weight with exponential blow-up for the second argument of recΔ. Check the key premise: ω^{α} > α and monotonicity of ordinal arithmetic.
+
+We also need to check that we can discharge the premise. Yes, standard ordinal arithmetic.
+
+Thus final answer: Yes, SN holds. Provide the measure and verification.
+
+But we must be careful: the system includes `eqW` which expands into `integrate (merge a b)`. If a and b are large, this could increase size. But we handled it by giving `eqW` a weight with a leading ω.
+
+Thus the assessment: SN can be established using a weight function into ordinals < ε0.
+
+Now, we must follow the contract exactly:
+
+- If a step duplicates a subterm S, first show the additive failure: M(after) = M(before) - 1 + M(S) and explain why no strict drop when M(S) >= 1.
+
+Let's do that:
+
+Consider the naive measure M(t) = number of constructors (size). For `R_rec_succ`, we have:
+
+Before: recΔ b s (delta n). Size = 1 + |b| + |s| + (1 + |n|) = 2 + |b| + |s| + |n|.
+
+After: app s (recΔ b s n). Size = 1 + |s| + (1 + |b| + |s| + |n|) = 2 + |b| + 2|s| + |n|.
+
+Thus M(after) = M(before) + |s|. So we can write M(after) = M(before) - 1 + (|s| + 1). If we let S = s, then M(S) = |s|. Actually M(after) = M(before) - 1 + (|s| + 1). But the contract says M(after) = M(before) - 1 + M(S). Let's adjust: If we consider that we remove the outer delta node (size 1 + |n|) and the recΔ node (size 1), and add app (size 1) and inner recΔ (size 1 + |b| + |s| + |n|). So net: - (1+1+|n|) + (1 + 1 + |b| + |s| + |n|) + |s|? Actually we need to be precise.
+
+Better: M(before) = 1 (recΔ) + M(b) + M(s) + (1 + M(n)) = 2 + M(b) + M(s) + M(n).
+
+M(after) = 1 (app) + M(s) + (1 + M(b) + M(s) + M(n)) = 2 + M(b) + 2*M(s) + M(n).
+
+Thus M(after) = M(before) + M(s). So M(after) = M(before) - 1 + (M(s) + 1). If we define M(S) = M(s) + 1, then M(after) = M(before) - 1 + M(S). So S is the subterm s plus maybe the node. But the contract says "duplicates a subterm S". In the rule, s is duplicated. So we can say S = s. Then M(after) = M(before) - 1 + M(s). Actually we have +M(s). To match the contract exactly, we can adjust M to count nodes excluding the topmost constructor? Let's just present the equation as M(after) = M(before) - 1 + M(s). Since M(before) = 2 + M(b) + M(s) + M(n) and M(after) = 2 + M(b) + 2M(s) + M(n) = M(before) + M(s). So we can write M(after) = M(before) - 1 + (M(s) + 1). So we can set S to be s with an extra node. But the contract likely expects us to note that the increase is exactly M(s). So we can say: M(after) = M(before) - 1 + M(s) + 1? Actually we need to show "no strict drop when M(S) >= 1". Since M(s) >= 1 (unless s is void), we have M(after) >= M(before). So no strict drop.
+
+Thus we satisfy the contract: show additive failure.
+
+Then propose fix: use ordinal measure weight(t) as defined above.
+
+State key premise: For any ordinal α < ε0, ω^{α+1} > α + 1 and ω^{α+1} is closed under addition of smaller ordinals. Specifically, for any β < ω^{α+1}, we have ω^{α+1} * (k+1) > ω^{α+1} * k + β.
+
+Verify: By standard ordinal arithmetic, ω^{γ} is an ε-number? Actually ω^{γ} is a limit ordinal for γ>0. For any β < ω^{γ}, there exists δ < ω^{γ} such that β + δ = ω^{γ}. But we need: ω^{γ} * (k+1) = ω^{γ} * k + ω^{γ} > ω^{γ} * k + β. This holds because ordinal addition is monotone and ω^{γ} > β.
+
+Thus the premise holds.
+
+Now, we also need to handle `eqW`. The rule `R_eq_diff` duplicates nothing but increases size. We assign weight(eqW a b) = ω + max(weight(a), weight(b)) + 1. Since ω > any finite increase, it decreases.
+
+Thus overall, each step reduces the ordinal weight, proving SN.
+
+Thus answer: Yes, SN can be established.
+
+Now, is there any subtlety? The system is first-order, no binders, so we can assign weights recursively. The only potential issue is that the weight function must be well-defined and total. It is, by structural induction.
+
+Thus final assessment: Yes, strong normalization holds.
+
+We should also mention that the system is essentially a combinatory version of primitive recursion with explicit equality testing, and the measure reflects the recursion depth.
+
+We must stay within the boundary: no extra axioms. Using ordinal arithmetic is standard and allowed.
+
+Thus the final answer: Yes, SN can be proven using an ordinal weight function.
+
+Now produce the final response following the contract.
+
+The contract says: "If a step duplicates a subterm S, first show the additive failure: M(after) = M(before) - 1 + M(S) and explain why no strict drop when M(S) >= 1. Only then propose a fix. State and check the key premise your chosen fix requires, and verify it explicitly. If you cannot discharge it, admit failure (CONSTRAINT BLOCKER)."
+
+Thus we must structure the answer accordingly.
+
+Step 1: Identify the duplicating step: `R_rec_succ`.
+
+Step 2: Define naive measure M(t) = size (number of constructors). Compute M(before) and M(after). Show M(after) = M(before) + M(s). Express as M(after) = M(before) - 1 + (M(s) + 1). So S is s (or s plus one node). Conclude that if M(s) >= 1, M(after) >= M(before). So strict decrease fails.
+
+Step 3: Propose fix: ordinal weight function W(t) defined recursively as above. Specifically, assign to `recΔ` a weight that is exponential in the weight of its second argument s: W(recΔ b s n) = ω^{W(s)+1} * (W(n)+1) + W(b). For other constructors, define W appropriately (e.g., W(eqW a b) = ω + max(W(a), W(b)) + 1, etc.).
+
+Step 4: State key premise: For all ordinals α occurring as W(s), we have ω^{α+1} > α + 1 and for any β < ω^{α+1}, ω^{α+1} * (k+1) > ω^{α+1} * k + β.
+
+Step 5: Verify premise: By definition of ordinal exponentiation and the fact that ω^{γ} is a limit ordinal strictly greater than any smaller ordinal. For any α, ω^{α+1} = ω^{α} * ω, which is a limit of ω^{α} * n. Since β < ω^{α+1}, there exists n such that β < ω^{α} * n. Actually more simply: ω^{α+1} > β for any β < ω^{α+1}. Then adding ω^{α+1} to ω^{α+1} * k yields a strictly larger ordinal than adding β. So the inequality holds.
+
+Step 6: Conclude that W strictly decreases on `R_rec_succ` and on all other rules, thus SN holds.
+
+We should also verify the other rules quickly.
+
+Thus final answer: Yes, SN can be established.
+
+Now, write the answer clearly.

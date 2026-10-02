@@ -1,0 +1,182 @@
+I'll analyze this rewrite system carefully. Let me work through the rules and look for potential non-termination.
+
+[TOOL-CALL code_execution]
+{
+ "code": "\n# Let me model the Trace type and Step rules, then search for infinite reduction sequences.\n# \n# Rules:\n# 1. R_mango_grape:      mango (grape t) -> plum\n# 2. R_peach_plum_left:  peach plum t -> t\n# 3. R_peach_plum_right: peach t plum -> t\n# 4. R_peach_cancel:     peach t t -> t\n# 5. R_banana_zero:      banana b s plum -> b\n# 6. R_apple_orange:     banana b s (grape n) -> pear s (banana b s n)\n# 7. R_cherry_refl:      cherry a a -> plum\n# 8. R_cherry_diff:      a != b => cherry a b -> mango (peach a b)\n#\n# Note: Step is defined only at the ROOT (no congruence/closure rules given!).\n# But typically \"rewrite calculus\" implies closure under contexts. The question\n# is subtle. Let me first analyze assuming the standard one-step relation is \n# the compatible closure (rewriting anywhere in the term), which is the usual\n# reading of a \"rewrite calculus\". Actually the file defines Step ONLY at root.\nprint(\"Analyzing the rules\")\n"
+}
+[/TOOL]
+
+
+
+[TOOL-RESULT code_execution]
+{
+ "type": "code_execution_result",
+ "stdout": "Analyzing the rules",
+ "stderr": "",
+ "return_code": 0,
+ "content": [],
+ "abort_reason": null
+}
+[/TOOL]
+
+
+
+[TOOL-CALL code_execution]
+{
+ "code": "\nimport sys\nfrom functools import lru_cache\nsys.setrecursionlimit(100000)\n\n# Represent traces as nested tuples.\n# ('plum',), ('grape', t), ('mango', t), ('peach', a, b),\n# ('pear', a, b), ('banana', a, b, c), ('cherry', a, b)\n\nPLUM = ('plum',)\ndef grape(t): return ('grape', t)\ndef mango(t): return ('mango', t)\ndef peach(a,b): return ('peach', a, b)\ndef pear(a,b): return ('pear', a, b)\ndef banana(a,b,c): return ('banana', a, b, c)\ndef cherry(a,b): return ('cherry', a, b)\n\ndef root_steps(t):\n    \"\"\"All root-level reducts.\"\"\"\n    res = []\n    h = t[0]\n    if h == 'mango':\n        (_, x) = t\n        if x[0] == 'grape':\n            res.append(PLUM)\n    elif h == 'peach':\n        (_, a, b) = t\n        if a == PLUM: res.append(b)\n        if b == PLUM: res.append(a)\n        if a == b: res.append(a)\n    elif h == 'banana':\n        (_, b, s, n) = t\n        if n == PLUM: res.append(b)\n        if n[0] == 'grape':\n            res.append(pear(s, banana(b, s, n[1])))\n    elif h == 'cherry':\n        (_, a, b) = t\n        if a == b: res.append(PLUM)\n        else: res.append(mango(peach(a,b)))\n    return res\n\ndef all_steps(t):\n    \"\"\"Full one-step rewrite: root + congruence (rewrite in any subterm).\"\"\"\n    res = list(root_steps(t))\n    h = t[0]\n    args = t[1:]\n    for i, sub in enumerate(args):\n        for r in all_steps(sub):\n            newargs = list(args)\n            newargs[i] = r\n            res.append((h,)+tuple(newargs))\n    return res\n\n# Check the \"banana ... grape\" rule for growth: \n# banana b s (grape^n plum) with n grapes\ndef grapes(n, base=PLUM):\n    t = base\n    for _ in range(n):\n        t = grape(t)\n    return t\n\n# banana b s (grape n) -> pear s (banana b s n) : this is like iterating, decreasing grape count. Terminates.\nprint(\"banana grape rule decreases grape depth on the 3rd arg -> terminating iterator\")\n"
+}
+[/TOOL]
+
+
+
+[TOOL-RESULT code_execution]
+{
+ "type": "code_execution_result",
+ "stdout": "banana grape rule decreases grape depth on the 3rd arg -> terminating iterator",
+ "stderr": "",
+ "return_code": 0,
+ "content": [],
+ "abort_reason": null
+}
+[/TOOL]
+
+
+
+[TOOL-CALL code_execution]
+{
+ "code": "\n# The one potentially dangerous rule is R_cherry_diff:\n#   cherry a b  ->  mango (peach a b)     (when a != b)\n#\n# This creates a NEW mango and a NEW peach. Does it create new cherries? No.\n# But could a chain regenerate a cherry? Let's see what produces cherry: nothing on the RHS\n# of any rule contains cherry. So cherry can never be created by rewriting.\n#\n# Let's check each rule's RHS for which constructors it can introduce:\nrules_rhs_constructors = {\n    'R_mango_grape':      set(),               # -> plum\n    'R_peach_plum_left':  {'(subterm t)'},     # -> t (already existed)\n    'R_peach_plum_right': {'(subterm t)'},\n    'R_peach_cancel':     {'(subterm t)'},\n    'R_banana_zero':      {'(subterm b)'},\n    'R_apple_orange':     {'pear','banana'},    # -> pear s (banana b s n)\n    'R_cherry_refl':      set(),               # -> plum\n    'R_cherry_diff':      {'mango','peach'},    # -> mango (peach a b)\n}\nfor k,v in rules_rhs_constructors.items():\n    print(f\"{k:22s}: introduces {v}\")\n"
+}
+[/TOOL]
+
+
+
+[TOOL-RESULT code_execution]
+{
+ "type": "code_execution_result",
+ "stdout": "R_mango_grape         : introduces set()\nR_peach_plum_left     : introduces {'(subterm t)'}\nR_peach_plum_right    : introduces {'(subterm t)'}\nR_peach_cancel        : introduces {'(subterm t)'}\nR_banana_zero         : introduces {'(subterm b)'}\nR_apple_orange        : introduces {'banana', 'pear'}\nR_cherry_refl         : introduces set()\nR_cherry_diff         : introduces {'mango', 'peach'}",
+ "stderr": "",
+ "return_code": 0,
+ "content": [],
+ "abort_reason": null
+}
+[/TOOL]
+
+
+
+[TOOL-CALL code_execution]
+{
+ "code": "\n# Key structural observations:\n# - No rule creates a 'grape', 'cherry', or (new) 'banana' from nothing except:\n#     * R_apple_orange creates a banana, but with a STRICTLY SMALLER 3rd argument\n#       (grape n -> n), and copies subterms b, s that already existed.\n# - R_cherry_diff creates mango+peach but consumes a cherry and does NOT create cherry/grape/banana.\n#\n# Let me design a well-founded measure and TEST it exhaustively via random / systematic search\n# to confirm strong normalization, then reason about the measure.\n#\n# Candidate measure: a polynomial interpretation into the naturals.\n# We want [t] > [t'] for every rule (with congruence: interpretation must be strictly monotone\n# in each argument so that reduction in subterms decreases the whole).\n#\n# Let's try to auto-find a polynomial interpretation with small coefficients.\nimport itertools\n\n# Constructors and arities\n# plum: 0, grape: 1, mango:1, peach:2, pear:2, banana:3, cherry:2\n# We seek interpretations. Use linear-ish with products for banana (needed for iterator growth).\n#\n# The apple_orange rule: banana(b,s,n grape) -> pear(s, banana(b,s,n))\n# Grape increments something; banana multiplies. Classic: banana behaves like a fold/loop.\n# For strict decrease we likely need banana to be exponential-ish in n. Let's try to\n# find interpretations by search over a parametrized family.\n\n# Interpretation family (all coefficients >=1 to ensure monotonicity, constants >=1):\n# [plum] = P\n# [grape x] = x + G\n# [mango x] = Mx + M0\n# [peach x y] = x + y + Q   (must be >= x, >=y strictly for plum rules)\n# [pear x y] = x + y + R\n# [banana b s n] = ?  need to handle: banana(b,s,plum)->b  and banana(b,s,grape n)->pear(s,banana(b,s,n))\n# [cherry x y] = need cherry(a,a)->plum and cherry(a,b)->mango(peach(a,b))\n\n# Let's just numerically search a template and verify all rule schemas symbolically using sympy.\nfrom sympy import symbols, Symbol, simplify, expand, Poly\n\nprint(\"Set up symbolic search\")\n"
+}
+[/TOOL]
+
+
+
+[TOOL-RESULT code_execution]
+{
+ "type": "code_execution_result",
+ "stdout": "Set up symbolic search",
+ "stderr": "",
+ "return_code": 0,
+ "content": [],
+ "abort_reason": null
+}
+[/TOOL]
+
+
+
+[TOOL-CALL code_execution]
+{
+ "code": "\nfrom sympy import symbols, expand, Poly, simplify\n\n# Variables for arbitrary subterm interpretations (range over reals >= some bound m0).\nb,s,n,t,a,x,y = symbols('b s n t a x y', nonnegative=True)\n\n# Try an interpretation. Intuition:\n# banana must, on the grape rule, satisfy:\n#   [banana b s (grape n)] > [pear s (banana b s n)]\n# Let [grape n] = n + 1 (so grape adds 1).\n# Let [banana b s n] = b + s*n + f(n)  ... we need the recursion to strictly decrease.\n#\n# apple_orange:  [banana b s (n+1)] vs [pear s (banana b s n)] = [s] + [banana b s n] + R\n# If [banana b s n] = b + (s+K)*n + C  (linear in n with slope depending on s):\n#   LHS: b + (s+K)*(n+1) + C = b + (s+K)*n + (s+K) + C\n#   RHS: s + [banana b s n] + R = s + b + (s+K)*n + C + R\n#   LHS - RHS = (s+K) - s - R = K - R\n#   Need > 0: choose K > R. Good, purely linear works!  No exponential needed.\n#\n# banana_zero: [banana b s plum] > [b]:\n#   [banana b s plum] = b + (s+K)*[plum] + C.  With [plum]=p>=... need > b, i.e. (s+K)*p + C >0. OK since p>=1.\n#\n# Now peach:\n#   peach plum t -> t : [peach [plum] t] > [t]\n#   peach t plum -> t\n#   peach t t -> t\n# Let [peach x y] = x + y + 1.  Then peach plum t -> t: [plum]+[t]+1 > [t] iff [plum]+1>0 OK.\n#   peach t t -> t : [t]+[t]+1 > [t] iff [t]+1>0 OK.\n#\n# cherry:\n#   cherry a a -> plum : [cherry a a] > [plum]\n#   cherry a b -> mango(peach a b) : [cherry a b] > [mango(peach a b)]\n# Let [mango x] = x + 1. [peach a b]=a+b+1. mango(peach a b) = a+b+2.\n# Need [cherry a b] > a+b+2 for all a,b, and > [plum] for the refl case.\n# Let [cherry x y] = x + y + 3.  Then cherry a b -> mango(peach a b): a+b+3 > a+b+2 OK.\n#   cherry a a -> plum: 2a+3 > [plum]. Need [plum] < 3 for all a>=0 -> [plum] <= 2. Set [plum]=1.\n#\n# mango_grape: mango(grape t) -> plum : [mango(grape t)] = [grape t]+1 = (t+1)+1 = t+2 > [plum]=1 OK.\n#\n# pear: appears only on RHS, need monotonic; [pear x y]=x+y+1, R=1. Need K>R=1, choose K=2.\n#\n# Let's now set all and VERIFY every rule strictly decreases for all nonneg subterm values,\n# with the minimal interpretation value being >=1 (well-founded on naturals via floor, but\n# strictly decreasing positive integer-valued... we must ensure integer valued & monotone).\n\nP = 1\ndef I_plum(): return P\ndef I_grape(v): return v + 1\ndef I_mango(v): return v + 1\ndef I_peach(u,v): return u + v + 1\ndef I_pear(u,v): return u + v + 1\nK = 2\ndef I_banana(vb,vs,vn): return vb + (vs + K)*vn + 1   # C=1\ndef I_cherry(u,v): return u + v + 3\n\n# Symbolic checks: LHS - RHS should be > 0 for all nonneg arg-interpretations.\nchecks = []\n\n# 1 mango(grape t) -> plum\nlhs = I_mango(I_grape(t)); rhs = I_plum()\nchecks.append((\"mango_grape\", expand(lhs - rhs)))\n\n# 2 peach plum t -> t\nlhs = I_peach(I_plum(), t); rhs = t\nchecks.append((\"peach_plum_left\", expand(lhs - rhs)))\n\n# 3 peach t plum -> t\nlhs = I_peach(t, I_plum()); rhs = t\nchecks.append((\"peach_plum_right\", expand(lhs - rhs)))\n\n# 4 peach t t -> t\nlhs = I_peach(t, t); rhs = t\nchecks.append((\"peach_cancel\", expand(lhs - rhs)))\n\n# 5 banana b s plum -> b\nlhs = I_banana(b, s, I_plum()); rhs = b\nchecks.append((\"banana_zero\", expand(lhs - rhs)))\n\n# 6 banana b s (grape n) -> pear s (banana b s n)\nlhs = I_banana(b, s, I_grape(n)); rhs = I_pear(s, I_banana(b, s, n))\nchecks.append((\"apple_orange\", expand(lhs - rhs)))\n\n# 7 cherry a a -> plum\nlhs = I_cherry(a, a); rhs = I_plum()\nchecks.append((\"cherry_refl\", expand(lhs - rhs)))\n\n# 8 cherry a b -> mango(peach a b)\nlhs = I_cherry(a, b); rhs = I_mango(I_peach(a, b))\nchecks.append((\"cherry_diff\", expand(lhs - rhs)))\n\nfor name, diff in checks:\n    print(f\"{name:20s}: LHS-RHS = {diff}\")\n"
+}
+[/TOOL]
+
+
+
+[TOOL-RESULT code_execution]
+{
+ "type": "code_execution_result",
+ "stdout": "mango_grape         : LHS-RHS = t + 1\npeach_plum_left     : LHS-RHS = 2\npeach_plum_right    : LHS-RHS = 2\npeach_cancel        : LHS-RHS = t + 1\nbanana_zero         : LHS-RHS = s + 3\napple_orange        : LHS-RHS = 1\ncherry_refl         : LHS-RHS = 2*a + 2\ncherry_diff         : LHS-RHS = 1",
+ "stderr": "",
+ "return_code": 0,
+ "content": [],
+ "abort_reason": null
+}
+[/TOOL]
+
+Every rule strictly decreases the measure. Now let me verify strict monotonicity (needed for closure under contexts / congruence) and that the interpretation is integer-valued and bounded below.
+
+[TOOL-CALL code_execution]
+{
+ "code": "\n# For the polynomial interpretation to prove SN even under congruence (rewriting in subterms),\n# each constructor's interpretation must be STRICTLY MONOTONE in every argument, and\n# arguments range over integers >= minimum value (>=1). Check monotonicity: each interpretation\n# is a polynomial with all positive coefficients on the argument variables => strictly increasing\n# in each argument over nonneg integers. Let's confirm the partial \"derivatives\"/coefficients.\n\n# I_grape: v+1 -> coeff of v is 1 >0  (mono)\n# I_mango: v+1 -> 1 (mono)\n# I_peach: u+v+1 -> both 1 (mono)\n# I_pear:  u+v+1 -> both 1 (mono)\n# I_banana: vb + (vs+K)vn + 1\n#    d/dvb = 1 >0\n#    d/dvn = vs + K >0  (since vs>=1, K=2)\n#    d/dvs = vn ... this is 0 when vn=0!  PROBLEM: not strictly monotone in vs when vn=0.\n# Check: does that matter? Strict monotonicity in s is needed so that a reduction inside s\n# strictly decreases [banana b s n]. If vn=0 (n=plum), then [banana b s plum]=b+1 doesn't depend on s.\n# But we still need: if s -> s' then banana(b,s,plum) reduces and measure must strictly drop.\n# It does NOT under this measure (banana b s plum and banana b s' plum both = b+1).\n# So we need strict monotonicity in ALL args. Fix banana interpretation.\n\nfrom sympy import symbols, expand\nb,s,n,t,a = symbols('b s n t a', nonnegative=True)\n\n# New banana: add +s term to force strict monotonicity in s.\n# I_banana = b + s + (s+K)*n + 1  -> d/ds = 1 + n >0 always. Good.\ndef I_plum(): return 1\ndef I_grape(v): return v + 1\ndef I_mango(v): return v + 1\ndef I_peach(u,v): return u + v + 1\ndef I_pear(u,v): return u + v + 1\nK = 2\ndef I_banana(vb,vs,vn): return vb + vs + (vs + K)*vn + 1\ndef I_cherry(u,v): return u + v + 3\n\nchecks = []\nlhs=I_mango(I_grape(t)); checks.append((\"mango_grape\", expand(lhs-I_plum())))\nchecks.append((\"peach_plum_left\", expand(I_peach(I_plum(),t)-t)))\nchecks.append((\"peach_plum_right\", expand(I_peach(t,I_plum())-t)))\nchecks.append((\"peach_cancel\", expand(I_peach(t,t)-t)))\nchecks.append((\"banana_zero\", expand(I_banana(b,s,I_plum())-b)))\nchecks.append((\"apple_orange\", expand(I_banana(b,s,I_grape(n)) - I_pear(s,I_banana(b,s,n)))))\nchecks.append((\"cherry_refl\", expand(I_cherry(a,a)-I_plum())))\nb2=symbols('b2',nonnegative=True)\nchecks.append((\"cherry_diff\", expand(I_cherry(a,b2)-I_mango(I_peach(a,b2)))))\n\nfor name,d in checks:\n    print(f\"{name:18s}: LHS-RHS = {d}\")\n\nprint(\"\\nMonotonicity (all arg-coefficients positive over nonneg integers):\")\nprint(\"grape:1 | mango:1 | peach:(1,1) | pear:(1,1) | cherry:(1,1)\")\nprint(\"banana d/db=1, d/ds=1+n>0, d/dn=s+K>0  -> strictly monotone in all args\")\n"
+}
+[/TOOL]
+
+
+
+[TOOL-RESULT code_execution]
+{
+ "type": "code_execution_result",
+ "stdout": "mango_grape       : LHS-RHS = t + 1\npeach_plum_left   : LHS-RHS = 2\npeach_plum_right  : LHS-RHS = 2\npeach_cancel      : LHS-RHS = t + 1\nbanana_zero       : LHS-RHS = 2*s + 3\napple_orange      : LHS-RHS = 1\ncherry_refl       : LHS-RHS = 2*a + 2\ncherry_diff       : LHS-RHS = 1\n\nMonotonicity (all arg-coefficients positive over nonneg integers):\ngrape:1 | mango:1 | peach:(1,1) | pear:(1,1) | cherry:(1,1)\nbanana d/db=1, d/ds=1+n>0, d/dn=s+K>0  -> strictly monotone in all args",
+ "stderr": "",
+ "return_code": 0,
+ "content": [],
+ "abort_reason": null
+}
+[/TOOL]
+
+All eight rules strictly decrease the measure, and every constructor is strictly monotone in each argument. Let me do a final empirical stress test to make sure no reduction sequence (including nested/context reductions and the `cherry` inequality side condition) ever fails to decrease.
+
+[TOOL-CALL code_execution]
+{
+ "code": "\nimport random\nsys=__import__('sys'); sys.setrecursionlimit(1000000)\n\nPLUM=('plum',)\ndef measure(t):\n    h=t[0]\n    if h=='plum': return 1\n    if h=='grape': return measure(t[1])+1\n    if h=='mango': return measure(t[1])+1\n    if h=='peach': return measure(t[1])+measure(t[2])+1\n    if h=='pear':  return measure(t[1])+measure(t[2])+1\n    if h=='banana':\n        vb,vs,vn=measure(t[1]),measure(t[2]),measure(t[3])\n        return vb+vs+(vs+2)*vn+1\n    if h=='cherry': return measure(t[1])+measure(t[2])+3\n\ndef root_steps(t):\n    res=[]; h=t[0]\n    if h=='mango' and t[1][0]=='grape': res.append(PLUM)\n    if h=='peach':\n        _,x,y=t\n        if x==PLUM: res.append(y)\n        if y==PLUM: res.append(x)\n        if x==y: res.append(x)\n    if h=='banana':\n        _,bb,ss,nn=t\n        if nn==PLUM: res.append(bb)\n        if nn[0]=='grape': res.append(('pear',ss,('banana',bb,ss,nn[1])))\n    if h=='cherry':\n        _,x,y=t\n        if x==y: res.append(PLUM)\n        else: res.append(('mango',('peach',x,y)))\n    return res\n\ndef all_steps(t):\n    res=list(root_steps(t))\n    args=t[1:]\n    for i,sub in enumerate(args):\n        for r in all_steps(sub):\n            na=list(args); na[i]=r; res.append((t[0],)+tuple(na))\n    return res\n\ndef rand_term(d):\n    if d<=0 or random.random()<0.25: return PLUM\n    c=random.choice(['grape','mango','peach','pear','banana','cherry'])\n    if c in('grape','mango'): return (c,rand_term(d-1))\n    if c in('peach','pear','cherry'): return (c,rand_term(d-1),rand_term(d-1))\n    return ('banana',rand_term(d-1),rand_term(d-1),rand_term(d-1))\n\nrandom.seed(1)\nbad=0; checked=0; maxlen=0\nfor _ in range(20000):\n    t=rand_term(random.randint(1,6))\n    # verify every one-step reduct strictly decreases measure\n    for r in all_steps(t):\n        checked+=1\n        if not (measure(r)<measure(t)): bad+=1\n    # also run a full reduction to normal form to confirm termination + length finite\n    steps=0; cur=t\n    while True:\n        nx=all_steps(cur)\n        if not nx: break\n        cur=nx[0]  # leftmost-ish\n        steps+=1\n        if steps>10000: bad+=1; break\n    maxlen=max(maxlen,steps)\n\nprint(f\"one-step decrease checks: {checked}, violations: {bad}\")\nprint(f\"max reduction length observed: {maxlen}\")\nprint(\"Measure is integer-valued, bounded below by 1, strictly decreasing on every step.\")\n"
+}
+[/TOOL]
+
+
+
+[TOOL-RESULT code_execution]
+{
+ "type": "code_execution_result",
+ "stdout": "one-step decrease checks: 53454, violations: 0\nmax reduction length observed: 61\nMeasure is integer-valued, bounded below by 1, strictly decreasing on every step.",
+ "stderr": "",
+ "return_code": 0,
+ "content": [],
+ "abort_reason": null
+}
+[/TOOL]
+
+## Assessment
+
+**Yes — strong normalization is provable from the presented calculus alone**, with no added rewrite rules, guards, side conditions, or imported structural/object-level axioms. It follows from a single, elementary **monotone polynomial interpretation** into the naturals, which is exactly the kind of proof that stays inside the boundary you set: it uses only the given syntax and the eight rewrite rules.
+
+### The proof
+
+Define an interpretation `⟦·⟧ : Trace → ℕ` by structural recursion (no external memory, no binders needed):
+
+| Constructor | Interpretation |
+|---|---|
+| `plum` | `1` |
+| `grape x` | `⟦x⟧ + 1` |
+| `mango x` | `⟦x⟧ + 1` |
+| `peach x y` | `⟦x⟧ + ⟦y⟧ + 1` |
+| `pear x y` | `⟦x⟧ + ⟦y⟧ + 1` |
+| `banana b s n` | `⟦b⟧ + ⟦s⟧ + (⟦s⟧ + 2)·⟦n⟧ + 1` |
+| `cherry x y` | `⟦x⟧ + ⟦y⟧ + 3` |
+
+**Two facts discharge SN:**
+
+1. **Every rule strictly decreases `⟦·⟧`** (verified symbolically; each `LHS − RHS` is a positive polynomial over non‑negative argument values):
+   - `mango_grape`: `t+1`; `peach_plum_left/right`: `2`; `peach_cancel`: `t+1`; `banana_zero`: `2s+3`; `apple_orange`: `1`; `cherry_refl`: `2a+2`; `cherry_diff`: `1`.
+   - Note the two subtle rules: `apple_orange` (`banana b s (grape n) → pear s (banana b s n)`) is a linear "loop" whose 3rd argument depth strictly drops, giving margin `1`; and `cherry_diff` needs only that `cherry` sits one unit above `mango(peach …)`, which the constant `3 > 2` supplies. The side condition `a ≠ b` is *not needed for termination* — the measure drops regardless.
+
+2. **Each constructor is strictly monotone in every argument** (all argument coefficients are positive: `banana` has `∂/∂b = 1`, `∂/∂s = 1 + ⟦n⟧ > 0`, `∂/∂n = ⟦s⟧ + 2 > 0`). This is what makes the argument work under the *compatible/congruence closure* — i.e. rewriting inside any subterm still strictly lowers the whole term. (The `+⟦s⟧` term in `banana` exists solely to guarantee strict monotonicity in `s` even when `⟦n⟧ = 0`.)
+
+Since `⟦·⟧` maps into `ℕ` (bounded below by 1) and every rewrite step strictly decreases it, there can be no infinite reduction sequence. `<` on `ℕ` is well-founded, so `Step` is strongly normalizing. The empirical stress test (53,454 one-step reductions across 20,000 random terms, zero measure violations, all normalizing) corroborates this.
+
+### Why it stays inside the boundary
+
+- **No structural axioms imported.** The only ingredients are the inductive `Trace` type, the eight `Step` constructors, and the well-foundedness of `<` on `ℕ` — the latter is derivable/available from the ambient metatheory, not an object-level assumption about `Trace` or `Step`.
+- **No system strengthening.** The interpretation is a *metatheoretic measure*; it adds no rewrite rules, no guards, and imposes no side conditions on the calculus. In particular I did not lean on the `a ≠ b` guard.
+- **Non-creation of dangerous constructors is a bonus, not a crutch.** One can observe that no RHS ever introduces a fresh `cherry`, `grape`, or an *enlarging* `banana` (the `apple_orange` `banana` is strictly smaller), which intuitively rules out feedback loops — but the polynomial interpretation already settles termination on its own without needing that combinatorial argument.
+
+**Bottom line:** the system is strongly normalizing, and this is establishable purely from the given syntax and rules via a monotone polynomial interpretation — a standard method requiring no extension of the calculus.

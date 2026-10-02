@@ -1,0 +1,8 @@
+import KO7Benchmark.PaperB.BoundaryWitness
+import KO7Benchmark.PaperB.SchemaAdditiveObstruction
+import KO7Benchmark.SchemaTests.CandidateB_PolynomialCounterexample
+
+#print axioms KO7Benchmark.PaperB.schema_polynomial_not_adequate
+#print axioms KO7Benchmark.PaperB.AdditiveSKMeasure.no_additive_orients_schema_recursive_root
+#print axioms KO7Benchmark.PaperB.AdditiveSKMeasure.no_additive_orients_schema_step
+#print axioms KO7Benchmark.SchemaTests.CandidateB.interpB_not_step_orienting

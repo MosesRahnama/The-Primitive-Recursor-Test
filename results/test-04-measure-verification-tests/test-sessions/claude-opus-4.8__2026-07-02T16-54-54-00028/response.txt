@@ -1,0 +1,55 @@
+I need to check whether the lexicographic measure `(phase t, cost t)` decreases for every rewrite rule under the lexicographic order on `Nat × Nat`.
+
+Let me analyze each rule. For each, I need `measure(lhs) > measure(rhs)` lexicographically, meaning either `phase(lhs) > phase(rhs)`, or `phase(lhs) = phase(rhs)` and `cost(lhs) > cost(rhs)`.
+
+**R_int_delta**: `integrate (delta t) → void`
+- phase(lhs) = 0 (integrate matches `_`), phase(void) = 0. Equal.
+- cost(lhs) = 1 + (1 + cost t) = 2 + cost t. cost(void) = 0. Decreases. ✓
+
+**R_merge_void_left**: `merge void t → t`
+- phase(lhs) = 0, phase(t) could be 0 or 1.
+- If t is `recDelta _ _ (delta _)`, phase(t) = 1 > 0 = phase(lhs). **phase INCREASES!** Then lexicographically lhs < rhs. **FAILS.**
+
+Let me verify: take `t = recDelta b s (delta n)`. Then lhs = `merge void (recDelta b s (delta n))`.
+- phase(lhs): lhs is a `merge`, matches `_` → 0.
+- phase(rhs) = phase(recDelta b s (delta n)) = 1.
+- So phase went from 0 to 1: increased. Lexicographically, (0, ...) < (1, ...), so measure(lhs) < measure(rhs). This is **not** a decrease. ✗
+
+This already breaks soundness. Let me check the others too for completeness.
+
+**R_merge_void_right**: `merge t void → t` — same problem, if `t = recDelta _ _ (delta _)`, phase increases 0 → 1. ✗
+
+**R_merge_cancel**: `merge t t → t` — same problem. ✗
+
+**R_rec_zero**: `recDelta b s void → b`
+- phase(lhs): recDelta with third arg `void`, not `delta`, matches `_` → 0. phase(b): could be 1.
+- If b = `recDelta _ _ (delta _)`, phase increases. ✗
+
+**R_rec_succ**: `recDelta b s (delta n) → app s (recDelta b s n)`
+- phase(lhs) = 1 (matches `recDelta _ _ (delta _)`).
+- phase(rhs): rhs is `app ...` → 0. So phase decreases 1 → 0. ✓ (regardless of cost)
+
+**R_eq_refl**: `eqW a a → void`
+- phase both 0. cost(lhs) = 3 + 2·cost a, cost(void) = 0. Decreases. ✓
+
+**R_eq_diff**: `eqW a b → integrate (merge a b)`
+- phase(lhs) = 0, phase(rhs): integrate → 0. Equal.
+- cost(lhs) = 3 + cost a + cost b. cost(rhs) = 1 + (1 + cost a + cost b) = 2 + cost a + cost b. Decreases. ✓
+
+## Conclusion
+
+**The measure is NOT sound.**
+
+The `phase` function is defined so that it returns `1` only for a term of the exact shape `recDelta _ _ (delta _)`, and `0` otherwise. This creates a fundamental problem: **the phase of a subterm can be higher than the phase of a term containing it**, since phase only inspects the top-level structure.
+
+Because several rules produce a right-hand side that is (or exposes) a subterm which happens to be of shape `recDelta _ _ (delta _)`, the phase can jump from `0` to `1`, causing the lexicographic measure to **increase**.
+
+Concrete counterexamples:
+- **R_merge_void_left** with `t = recDelta b s (delta n)`:
+  `merge void (recDelta b s (delta n)) → recDelta b s (delta n)`.
+  measure(lhs) = (0, cost), measure(rhs) = (1, cost). Since (0, _) < (1, _), the measure increases.
+- **R_merge_void_right**, **R_merge_cancel**, and **R_rec_zero** fail the same way when the relevant subterm has shape `recDelta _ _ (delta _)`.
+
+The intended design—penalizing an "un-reduced successor recursion" with a higher phase to justify **R_rec_succ**—is undermined because `phase` is not monotone with respect to subterm containment. Only **R_rec_succ** genuinely relies on the phase component (its cost actually goes *up*, since `app s (recDelta b s n)` reintroduces `s`), so a repair would need a phase measure that counts *all* `recDelta _ _ (delta _)` occurrences throughout the term rather than only at the root—and even then one must recheck that no rule increases that count.
+
+So as written, this lexicographic termination measure does **not** establish termination.

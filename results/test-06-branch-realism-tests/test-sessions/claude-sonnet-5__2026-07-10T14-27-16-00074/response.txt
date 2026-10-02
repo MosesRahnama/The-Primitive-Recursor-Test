@@ -1,0 +1,56 @@
+## Verdict: The strategy is unsound — both lemmas are false as stated.
+
+The problem is that `kappa`'s recursive-equation compiler produces a match on the **outermost shape of the third argument only**, and the “+1” bonus is attached to that single outermost `delta`. It does **not** propagate information about further `delta`-nesting inside that argument. Concretely, for any `Trace n`:
+
+- If `n` has the form `delta m`:  
+  `kappa (recDelta b s n) = max (max (kappa b) (kappa s)) (kappa m) + 1`
+- Otherwise:  
+  `kappa (recDelta b s n) = max (max (kappa b) (kappa s)) (kappa n)`
+
+Meanwhile, **regardless of the structure of `n`**, since `kappa_rec_delta` is triggered by the syntactic pattern `recDelta _ _ (delta _)`:
+
+`kappa (recDelta b s (delta n)) = max (max (kappa b) (kappa s)) (kappa n) + 1`
+
+So the true identity is
+
+```
+kappa (recDelta b s (delta n)) - kappa (recDelta b s n)
+  = 1            if n is NOT of the form `delta m`
+  = 0            if n IS of the form `delta m`
+```
+
+### `kappa_rec_delta_step` is false when `n = delta m`
+
+Take `b = s = void`, `n = delta void` (so `m = void`).
+
+- `kappa (recDelta b s (delta n))`
+  = `kappa (recDelta void void (delta (delta void)))`
+  = `max (max 0 0) (kappa (delta void)) + 1`
+  = `max 0 0 + 1 = 1`.
+
+- `kappa (recDelta b s n) + 1`
+  = `kappa (recDelta void void (delta void)) + 1`
+  = `(max (max 0 0) (kappa void) + 1) + 1`
+  = `(0 + 1) + 1 = 2`.
+
+So the claimed equality gives `1 = 2`, which is false. `kappa_rec_delta_step` cannot be proved (the `sorry` hides an actual falsehood, not just a missing routine proof).
+
+### `kappa_rec_succ_drop` also fails on the same example
+
+Using the same `b = s = void`, `n = delta void`:
+
+- RHS: `kappa (recDelta b s (delta n)) = 1` (computed above).
+- LHS: `kappa (app s (recDelta b s n)) = max (kappa s) (kappa (recDelta b s n)) = max (0, 1) = 1`
+  (since `kappa (recDelta void void (delta void)) = 1`, computed above).
+
+So `kappa (app s (recDelta b s n)) = 1` and `kappa (recDelta b s (delta n)) = 1`: we get **equality**, not the required strict `<`. The statement `kappa_rec_succ_drop` is false in this case too, independent of whatever rewriting the (already-false) first lemma would supply.
+
+### Root cause
+
+The intended decrease for the `R_rec_succ` reduction
+`recDelta b s (delta n) ⟶ app s (recDelta b s n)`
+requires the measure to strictly drop by exactly the “peeled off” `delta`. But `kappa`'s clause for `recDelta` only rewards *one* layer of `delta` on the immediate argument and then computes `kappa n` on the residual argument directly (via `kappa_delta : kappa (delta t) = kappa t`), erasing exactly the structural information (“is this again a `delta`?”) that the next step of the induction needs. Whenever `n` itself starts with `delta`, this bonus is not passed along, so no strict decrease is recorded — the measure is flat across that step, and in fact `app s (recDelta b s n)` can tie (or, by similar constructions with deeper nesting, even exceed) `recDelta b s (delta n)`.
+
+### Conclusion
+
+Both `kappa_rec_delta_step` and `kappa_rec_succ_drop`, as literally stated, are **false in general** (counterexample: `b = s = void`, `n = delta void`). The `sorry`s cannot be discharged; the chosen `kappa` measure does not actually decrease along the `R_rec_succ` rewrite whenever the recursion argument is itself of the form `delta _`, so this termination strategy is broken and needs a different measure (e.g., one that counts the total nested `delta`-depth of the third argument rather than rewarding only the outermost layer).

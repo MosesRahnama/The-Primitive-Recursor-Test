@@ -1,0 +1,600 @@
+We need to assess whether strong normalization (SN) of the given rewrite system can be established from the presented calculus alone, without importing structural axioms or object-level assumptions beyond what is derivable from the given syntax and rewrite rules. The system is defined in Lean 4 with an inductive type `Trace` and an inductive relation `Step` that defines rewrite rules. The question is: can we prove that every term has no infinite reduction sequence (i.e., the rewrite system is strongly normalizing) using only the rules provided, without adding extra rules, guards, side conditions, or hidden assumptions? We must use standard proof methods (like induction, well-founded orders, etc.) but cannot strengthen the system.
+
+First, let's understand the rewrite system:
+
+Syntax (constructors of Trace):
+- plum : constant (0-ary)
+- grape : unary constructor
+- mango : unary constructor
+- peach : binary constructor
+- pear : binary constructor
+- banana : ternary constructor
+- cherry : binary constructor
+
+Rewrite rules (Step):
+1. R_mango_grape: mango (grape t) → plum
+2. R_peach_plum_left: peach plum t → t
+3. R_peach_plum_right: peach t plum → t
+4. R_peach_cancel: peach t t → t
+5. R_banana_zero: banana b s plum → b
+6. R_apple_orange: banana b s (grape n) → pear s (banana b s n)   [Note: rule name is R_apple_orange but uses banana and pear; probably a naming quirk]
+7. R_cherry_refl: cherry a a → plum
+8. R_cherry_diff: for a ≠ b, cherry a b → mango (peach a b)
+
+Note: The rules are defined as inductive constructors of Step, meaning they are the only allowed rewrite steps. Also note that R_cherry_diff has a premise "a ≠ b", which is a condition on the terms. In rewrite systems, such conditional rules can complicate termination. However, in Lean, the rule is defined with an explicit inequality hypothesis. For the rewrite relation, this means that the step is only applicable when the two arguments are not equal. But in terms of the rewrite system, we must consider whether this condition can be checked syntactically. Since the terms are built from constructors, inequality is decidable (by structural equality), but the rule is only applicable when the two subterms are distinct. This is a conditional rewrite rule.
+
+Strong normalization requires that there is no infinite sequence of rewrites. To prove SN, we typically use a well-founded order (like a reduction order) that decreases with each rewrite step, or use techniques like recursive path orders, interpretation methods, etc. However, the question is whether we can establish SN "from the presented calculus alone", meaning using only the rules and the syntax, without adding extra assumptions. But note: the proof of SN is a meta-theoretic argument about the system. The question is: can we, as a reasoner, prove SN for this system using standard methods, given only the rules? Or is the system inherently non-terminating? Or does the system have some hidden non-termination?
+
+We must check if there is any possibility of infinite reduction. Let's try to find a cycle or an infinite reduction sequence.
+
+First, note that most rules simplify the term: they replace a complex term with a simpler one (in terms of size or structure). However, rule R_apple_orange: banana b s (grape n) → pear s (banana b s n) might increase the size? Let's compare:
+Left: banana b s (grape n) has size: 1 (banana) + size(b) + size(s) + size(grape n) = 1 + |b| + |s| + (1 + |n|) = |b|+|s|+|n|+2
+Right: pear s (banana b s n) has size: 1 (pear) + |s| + size(banana b s n) = 1 + |s| + (1 + |b|+|s|+|n|) = |b|+2|s|+|n|+2
+So if |s| > 0, the right-hand side is larger. This rule can potentially lead to growth. Moreover, the banana on the right has the same b and s, but n instead of grape n. So if we start with banana b s (grape (grape ...)), we might get a chain:
+
+Example: Let’s try with specific terms. Suppose we have banana plum plum (grape plum). Apply R_apple_orange:
+banana plum plum (grape plum) → pear plum (banana plum plum plum)
+Now, banana plum plum plum: can we reduce? Look at rules for banana: R_banana_zero: banana b s plum → b, so banana plum plum plum → plum (by R_banana_zero). So the term becomes pear plum plum. Now, can pear plum plum be reduced? There is no rule for pear. So it stops.
+
+But what if we have a term where the third argument of banana is a nested grape? Let n = grape plum, so start with banana b s (grape (grape plum)). Apply R_apple_orange:
+→ pear s (banana b s (grape plum))
+Now, the inner banana b s (grape plum) can again be reduced by R_apple_orange to pear s (banana b s plum), and then banana b s plum reduces to b by R_banana_zero. So overall:
+banana b s (grape (grape plum)) 
+→ pear s (banana b s (grape plum))
+→ pear s (pear s (banana b s plum))
+→ pear s (pear s b)
+
+So it terminates. But what if we have an infinite chain of grapes? Suppose we have banana b s (grape^n t) where t is not plum and not starting with grape? But note: the rule R_apple_orange only applies when the third argument is of the form grape n. So if we have banana b s (grape (grape (grape ...))), we can keep applying R_apple_orange, each time peeling off one grape and adding a pear s around a banana with one less grape. However, the number of grapes decreases by one each time, and eventually we get to banana b s t where t is not of the form grape n. But what if t is plum? Then R_banana_zero applies. What if t is something else? For example, if t is mango something, then banana b s (mango ...) has no rule? So it would stop. So the banana reductions seem to terminate because the third argument's "grape-depth" decreases.
+
+But wait: in the reduction of banana b s (grape n), we get pear s (banana b s n). Now, the new banana has third argument n, which might itself be a grape term, so we can apply R_apple_orange again. However, the size of the third argument (in terms of number of grape constructors) decreases by one. So if we define a measure: for a term, the maximum number of nested grapes in any subterm? But note: the rule introduces a pear and a banana, but the banana's third argument is n, which has one less grape. So overall, the "grape-height" of the entire term might not decrease monotonically because we add a pear and a banana. However, we can use a lexicographic measure.
+
+Another potential issue: rule R_cherry_diff: cherry a b → mango (peach a b) when a ≠ b. Then, mango (peach a b) might be reducible? For example, if peach a b can be reduced? But peach a b: if a or b is plum, or if a=b, then peach rules apply. But note: in R_cherry_diff, we have a ≠ b, so peach a b is not immediately reducible by R_peach_cancel (which requires a=b). However, if a or b is plum, then R_peach_plum_left or right might apply. For example, cherry plum (grape plum): since plum ≠ grape plum, we can apply R_cherry_diff to get mango (peach plum (grape plum)). Then, peach plum (grape plum) can be reduced by R_peach_plum_left to grape plum. So overall: cherry plum (grape plum) → mango (peach plum (grape plum)) → mango (grape plum) → plum (by R_mango_grape). So it terminates.
+
+But what if we have cherry (grape plum) (grape (grape plum))? They are not equal, so R_cherry_diff applies: → mango (peach (grape plum) (grape (grape plum))). Now, peach (grape plum) (grape (grape plum)): are the arguments equal? No, so no R_peach_cancel. Neither is plum, so no plum rules. So peach (grape plum) (grape (grape plum)) is a normal form? Then the whole term is mango (peach ...), and mango of something that is not grape ... is not reducible (only R_mango_grape requires mango (grape t)). So it stops. So cherry reductions seem to terminate.
+
+Now, is there any rule that can create a term that allows another application of the same rule in a cyclic way? Let's check for cycles.
+
+Consider rule R_peach_cancel: peach t t → t. This reduces size. Similarly, R_peach_plum rules reduce size. R_mango_grape reduces size. R_banana_zero reduces size. R_cherry_refl reduces to plum. R_cherry_diff replaces cherry a b with mango (peach a b), which might be larger, but then mango (peach a b) might be reducible only if peach a b is of the form grape something? But peach a b is a binary constructor, so mango (peach a b) is not of the form mango (grape t) unless peach a b is grape t, which it isn't because peach and grape are different constructors. So mango (peach a b) is irreducible unless peach a b can be reduced. But peach a b can be reduced only if one of the arguments is plum or they are equal. In R_cherry_diff, we have a ≠ b, so peach a b is not reducible by R_peach_cancel. But if one of a or b is plum, then peach a b can be reduced by the plum rules. For example, as above, cherry plum x → mango (peach plum x) → mango x (if x is not plum? Wait: R_peach_plum_left: peach plum t → t, so yes, if first argument is plum, then peach plum x → x. So then mango (peach plum x) → mango x. Then if x is of the form grape t, then mango (grape t) → plum. Otherwise, mango x is irreducible. So no cycle.
+
+Now, the tricky rule is R_apple_orange. Let's see if it can be applied repeatedly without termination. Suppose we have a term where the third argument of banana is an infinite chain of grapes. But in our syntax, terms are finite. However, during reduction, we might generate terms that allow further reductions. Consider:
+
+Start with T0 = banana b s (grape (grape (grape ... (grape t)...))) with k grapes.
+
+After one R_apple_orange: T1 = pear s (banana b s (grape^{k-1} t))
+
+After two: T2 = pear s (pear s (banana b s (grape^{k-2} t)))
+
+...
+
+After k steps: Tk = pear s (pear s (... (pear s (banana b s t))...)) with k pears.
+
+Now, if t is such that banana b s t can be reduced further? For example, if t = plum, then banana b s plum → b by R_banana_zero, so Tk becomes a nest of pears applied to b. But there is no rule for pear, so it stops. If t is not reducible in banana, then banana b s t is in normal form, and the whole term is a nest of pears, which is normal form. So it terminates.
+
+But what if t itself contains a banana that can be reduced? For example, suppose t = banana b' s' (grape u). Then in Tk, we have ... (banana b s (banana b' s' (grape u))). But wait, in the reduction sequence above, when we get to banana b s t, and t is banana b' s' (grape u), then we can apply R_apple_orange to the inner banana? However, note that in Tk, the banana b s t is inside multiple pears. The rewrite rules are applied to any subterm (since Step is defined as a relation on terms, and typically rewrite systems allow reduction at any position; but in the Lean definition, Step is defined only for the top-level? Wait, important: in the Lean code, Step is an inductive relation on Trace → Trace. The rules are given for specific patterns at the top level. However, in rewrite systems, we usually allow reduction in any context. But the Lean definition of Step only includes the top-level rules. How is reduction in context handled? In typical formalizations of rewrite systems in Lean, the reduction relation is often defined as the compatible closure of the rules. However, in this code, Step is defined only with the given rules, and there are no context rules (like congruence rules). This is critical.
+
+Looking at the Lean code:
+
+inductive Step : Trace → Trace → Prop
+| R_mango_grape : ∀ t, Step (mango (grape t)) plum
+| ... (other rules)
+
+This defines Step as a relation that only relates terms that match the left-hand side of a rule at the top level. There are no rules for reduction under constructors. Therefore, this Step relation is only for top-level reduction. But in rewrite systems, we usually consider the reduction relation that allows reduction in any context. However, the problem says "first-order rewrite calculus", and typically such calculi include context closure. But the Lean code does not define a context-closed reduction; it only defines the base steps. Therefore, to have a full rewrite system, we would need to take the compatible closure. But the question is: "can strong normalization of this system be established from the presented calculus alone". The "system" likely refers to the rewrite system generated by these rules, which in standard interpretation would include reduction in any context. However, the Lean code only defines the top-level steps. This is ambiguous.
+
+But note: the problem says "a first-order rewrite calculus with no variable binding, no external memory, and no imported object-level axioms beyond the rules shown there." In such calculi, the reduction relation is usually the smallest congruence containing the rules. However, the Lean code does not define the congruence; it only defines the base rules. Therefore, for the purpose of strong normalization, we must consider the reduction relation that is the reflexive-transitive closure of the compatible closure of Step. But the question is whether we can prove SN for that system.
+
+However, the problem states: "without importing structural axioms or object-level assumptions beyond what is derivable from the given syntax and rewrite rules". This suggests that we cannot assume context closure if it is not explicitly given. But in standard rewrite theory, the rewrite system is defined by the rules, and reduction is allowed at any position. I think we must assume that the intended reduction relation is the one where rules can be applied at any subterm position. Otherwise, if reduction is only top-level, then many terms would be normal forms trivially, and SN would be trivial (since each term has at most one top-level reduction, and after that it might not match any rule). But that seems too trivial, and the rules like R_peach_plum_left suggest that reduction can happen inside larger terms. For example, peach plum t might appear inside a mango, and we would want to reduce the peach part. Therefore, I believe the intended interpretation is that the rewrite system allows reduction in any context. This is standard.
+
+But the Lean code does not define the context closure. However, the problem says "from the presented calculus alone", meaning we have to work with what is given. But to prove SN, we need to consider the full reduction relation. Since the calculus is presented as a rewrite system, it is conventional to assume context closure. Moreover, the rules are given as rewrite rules, so the system is the abstract rewrite system (ARS) generated by these rules with context closure.
+
+Given that, we must check if the system with context closure is strongly normalizing.
+
+Now, back to potential non-termination. The rule R_apple_orange can be applied in context. Consider a term where we have a banana whose third argument is a grape of a term that itself contains a banana that can be reduced to produce more grapes? But the rules do not seem to create new grapes except in the right-hand side of R_cherry_diff? R_cherry_diff produces mango (peach a b), which does not contain grape. R_apple_orange produces pear s (banana b s n), which does not introduce new grapes; it just moves the grape one level up? Actually, it removes one grape from the third argument of banana and wraps the result in pear s. So the total number of grape constructors in the term might decrease? Let's count the number of grape constructors.
+
+Define a measure: the total number of grape constructors in the term. For R_apple_orange: left-hand side has one grape (in grape n) plus whatever is in b, s, n. Right-hand side: pear s (banana b s n) has the grapes in s, b, n. Since the grape in grape n is removed, the total number of grapes decreases by 1. However, note that s and b might contain grapes, but they are the same on both sides. So the measure "total number of grape constructors" decreases by exactly 1 for R_apple_orange. For other rules:
+- R_mango_grape: left has grape t, so at least one grape; right is plum, which has 0 grapes. So decreases.
+- R_peach_plum_left: left has peach plum t; plum has no grapes, t may have grapes; right is t, so the number of grapes is the same as in t. But wait, the left has the grapes in t, and the right has the grapes in t, so the measure does not decrease? However, the term size decreases: we remove the peach and plum. But for termination, we need a measure that decreases. If we use the total number of grapes, this rule does not change it. Similarly, R_peach_plum_right: same. R_peach_cancel: peach t t → t; the number of grapes in t is the same on both sides, so no decrease. R_banana_zero: banana b s plum → b; the grapes in b are preserved, but we remove s and plum; if s contains grapes, then the number of grapes might decrease? Actually, the left has grapes in b, s, and plum (0); right has grapes only in b. So if s has any grapes, the measure decreases; but if s has no grapes, then the measure stays the same. R_cherry_refl: cherry a a → plum; removes all grapes in a, so decreases if a has grapes, but if a has no grapes, then it goes from 0 to 0? But plum has 0 grapes. However, the term size decreases. R_cherry_diff: cherry a b → mango (peach a b); the number of grapes is the sum of grapes in a and b on left, and on right, mango (peach a b) has the same grapes as a and b (since mango and peach don't add grapes). So the measure is preserved.
+
+Therefore, the total number of grapes is not a decreasing measure for all rules. For example, R_peach_cancel preserves the number of grapes and reduces the term size (number of constructors). So we might use a lexicographic combination of measures.
+
+Another idea: use the size of the term (number of constructors). Let's compute the size change for each rule:
+
+Define size(t):
+plum: 1
+grape t: 1 + size(t)
+mango t: 1 + size(t)
+peach t1 t2: 1 + size(t1) + size(t2)
+pear t1 t2: 1 + size(t1) + size(t2)
+banana t1 t2 t3: 1 + size(t1)+size(t2)+size(t3)
+cherry t1 t2: 1 + size(t1)+size(t2)
+
+Now, for each rule:
+1. R_mango_grape: left: mango (grape t) = 1 + (1 + size(t)) = 2 + size(t); right: plum = 1. So size decreases by 1+size(t) ≥ 1.
+2. R_peach_plum_left: left: peach plum t = 1 + 1 + size(t) = 2 + size(t); right: t = size(t). Decrease by 2.
+3. R_peach_plum_right: similar, decrease by 2.
+4. R_peach_cancel: left: peach t t = 1 + 2*size(t); right: t = size(t). Decrease by 1 + size(t) ≥ 1.
+5. R_banana_zero: left: banana b s plum = 1 + size(b)+size(s)+1 = 2 + size(b)+size(s); right: b = size(b). Decrease by 2 + size(s) ≥ 2.
+6. R_apple_orange: left: banana b s (grape n) = 1 + size(b)+size(s)+(1+size(n)) = 2 + size(b)+size(s)+size(n); right: pear s (banana b s n) = 1 + size(s) + (1 + size(b)+size(s)+size(n)) = 2 + size(b) + 2*size(s) + size(n). Compare: left size = 2 + B + S + N (where B=size(b), S=size(s), N=size(n)); right size = 2 + B + 2S + N. So the size increases by S (the size of s). If S > 0, size increases. This is problematic for termination because the size can grow. However, as we saw earlier, the number of grapes decreases. So we need a measure that accounts for the structure.
+
+7. R_cherry_refl: left: cherry a a = 1 + 2*size(a); right: plum = 1. Decrease by 2*size(a) ≥ 0 (if a is plum, size(a)=1, decrease by 2; if a is complex, more).
+8. R_cherry_diff: left: cherry a b = 1 + size(a)+size(b); right: mango (peach a b) = 1 + (1 + size(a)+size(b)) = 2 + size(a)+size(b). So size increases by 1. Again, size increases.
+
+So rules 6 and 8 can increase the size. Therefore, simple size measure does not work.
+
+We need a more sophisticated measure. Common techniques for termination of rewrite systems include:
+- Recursive Path Order (RPO) or Lexicographic Path Order (LPO)
+- Interpretation methods (polynomial interpretations)
+- Dependency pairs
+
+But the question is whether we can establish SN from the calculus alone, meaning without adding extra assumptions. However, proving SN is a meta-proof. The question is: is the system terminating? And can we prove it with standard methods using only the given rules? Or is there a hidden non-termination?
+
+Let's try to find an infinite reduction sequence. Since rules 6 and 8 increase size, we need to see if they can be applied repeatedly in a way that the term grows indefinitely.
+
+Consider rule R_apple_orange: it requires the third argument of banana to be of the form grape n. After reduction, we get pear s (banana b s n). Now, if n itself is of the form grape n', then the inner banana can be reduced again. But as we saw, the number of grapes in the third argument of the banana decreases. However, the reduction introduces a pear s, and s might contain a banana that can be reduced? But s is arbitrary. Suppose s contains a term that, when placed in the context of pear, allows further reductions that eventually recreate a banana with a grape argument. But the rules do not seem to have a way to "recreate" a grape constructor. The only rules that produce grape are none: looking at the right-hand sides of all rules:
+- R_mango_grape: produces plum (no grape)
+- R_peach_plum_left/right: produce t (which may contain grapes, but not introduce new ones)
+- R_peach_cancel: produces t
+- R_banana_zero: produces b
+- R_apple_orange: produces pear s (banana b s n) — no new grape; the grape is consumed.
+- R_cherry_refl: produces plum
+- R_cherry_diff: produces mango (peach a b) — no grape.
+
+So no rule introduces a new grape constructor. Therefore, the total number of grape constructors in the entire term is non-increasing under any rewrite step. In fact, for rules that match a grape (R_mango_grape and R_apple_orange), the number of grapes decreases by at least one. For other rules, the number of grapes remains the same (since they don't remove or add grapes; they just rearrange or remove other constructors). Let's verify:
+
+- R_mango_grape: removes one grape (the one in grape t) and produces plum (0 grapes), so total grapes decrease by 1 (plus any grapes in t are preserved? Wait: left: mango (grape t) has the grapes in t plus one grape (the outer grape). Right: plum has 0 grapes. But t is preserved in the sense that it is not present in the result? No: the rule replaces the whole mango (grape t) with plum, so the subterm t is discarded. Therefore, all grapes inside t are also removed. So the decrease is 1 + (number of grapes in t). So it decreases by at least 1.
+
+But wait: in R_mango_grape, the left-hand side is mango (grape t), and the rewrite replaces it with plum. So the entire subterm grape t is removed, and t is not present in the result. Therefore, the grapes that were in t are lost. So the total number of grapes in the term decreases by (1 + number of grapes in t). Similarly, for R_apple_orange: left: banana b s (grape n) — the subterm grape n contains 1 + (grapes in n) grapes. Right: pear s (banana b s n) — the subterm banana b s n contains the grapes in b, s, n. But note: the grape constructor is removed, so the grapes that were in the grape n part: the outer grape is removed, but the grapes inside n are preserved because n appears in the banana on the right. So the change in total grapes: left has grapes in b, s, and (1 + grapes in n). Right has grapes in s, and in banana b s n which has grapes in b, s, n. So total grapes on left: G(b) + G(s) + 1 + G(n). On right: G(s) + [G(b) + G(s) + G(n)] = G(b) + 2G(s) + G(n). Wait, that can't be right because the banana on the right is a subterm, so its grapes are included. But actually, the entire term's grapes: left term has the grapes from b, s, and the third argument which is grape n (so 1 + G(n)). Right term has grapes from s (in the first argument of pear) and from the second argument which is banana b s n, which has grapes from b, s, n. So total grapes on right: G(s) + G(b) + G(s) + G(n) = G(b) + 2G(s) + G(n). Left: G(b) + G(s) + 1 + G(n). So the difference: right - left = [G(b)+2G(s)+G(n)] - [G(b)+G(s)+1+G(n)] = G(s) - 1. Therefore, if G(s) > 1, the number of grapes increases! But wait, that contradicts our earlier thought. Let's take an example.
+
+Let b = plum (G=0), s = grape plum (G=1), n = plum (G=0). Then left: banana plum (grape plum) (grape plum) — wait, third argument is grape n = grape plum, so G(third)=1+0=1. Total grapes in left: G(b)=0, G(s)=1, G(third)=1, total=2.
+Right: pear s (banana b s n) = pear (grape plum) (banana plum (grape plum) plum). Now, compute grapes: 
+- s = grape plum: 1 grape
+- banana plum (grape plum) plum: G(b)=0, G(s)=1, G(plum)=0, so total grapes in banana = 1 (from s). 
+So the whole term: pear has two arguments: first is s (1 grape), second is banana (1 grape), so total grapes = 1 + 1 = 2. Same as left.
+
+Another example: s = grape (grape plum) (G=2), b=plum, n=plum.
+Left: banana plum (grape (grape plum)) (grape plum): 
+G(b)=0, G(s)=2, G(third)=1 (since grape plum has 1 grape), total=3.
+Right: pear (grape (grape plum)) (banana plum (grape (grape plum)) plum)
+G(first argument of pear)=2
+banana: G(b)=0, G(s)=2, G(plum)=0, so G(banana)=2
+Total grapes in right: 2 (from first arg) + 2 (from banana) = 4. So increased by 1.
+
+Oh no! So R_apple_orange can increase the total number of grapes if s contains grapes. Because the s appears twice on the right: once as the first argument of pear, and once inside the banana. Whereas on the left, s appears only once. So if s has k grapes, the right has an extra k grapes compared to the left? From the formula: right grapes = G(b) + 2G(s) + G(n); left grapes = G(b) + G(s) + 1 + G(n). So difference = G(s) - 1. Therefore, if G(s) >= 2, the number of grapes increases. And since no rule introduces new grapes (wait, but in this case, the rule is not introducing new grapes; it is duplicating the s subterm, which contains grapes. So the total number of grapes can increase due to duplication.
+
+This is a problem for termination. Because if we can have a term where s has many grapes, and we apply R_apple_orange, the number of grapes increases. Then, if the new term has a banana whose third argument is a grape term, we might apply R_apple_orange again, and if the new s (which is the same s) has grapes, it could increase further. But note: in the reduction, the banana on the right has third argument n, which is the inner part of the original grape n. So the "grape-depth" of the banana's third argument decreases, but the duplication of s might allow the creation of more bananas? Let's try to construct an infinite sequence.
+
+Suppose we have a term where s itself contains a banana that can be reduced to produce a term with grapes. But s is duplicated. However, the key is: after applying R_apple_orange, we get a pear s (banana b s n). Now, the banana b s n might be reducible if n is of the form grape n', but n has one less grape than the original third argument. However, the pear s ... might not be reducible directly, but the banana inside might be reducible. But when we reduce the inner banana, we again duplicate s. So if s has grapes, each application of R_apple_orange on a banana whose third argument has a grape will duplicate s, increasing the total grapes by (G(s)-1). If G(s) > 1, this is positive. And if we can keep applying R_apple_orange to bananas that have grape in the third argument, and if the duplication of s introduces more bananas that have grape in their third argument, we might get an infinite loop.
+
+But note: the inner banana after reduction has third argument n, which is the body of the grape. So if we start with a banana whose third argument is grape^k t, then after k applications of R_apple_orange (each time on the innermost banana), we get a term with k pears, each containing s, and finally banana b s t. During these k steps, each step duplicates s. So the total number of occurrences of s becomes k+1? Initially, s appears once. After first reduction: pear s (banana b s n1) — s appears twice: once in pear's first arg, once in banana's second arg. After second reduction on the inner banana: pear s (pear s (banana b s n2)) — s appears three times. After k reductions: s appears k+1 times. So if s contains at least one grape, the total number of grapes increases linearly with k. But k is finite because the initial number of grapes in the third argument is finite. So after k steps, we stop because the third argument is no longer a grape. So it terminates for a single banana chain.
+
+However, what if t (the final third argument after peeling all grapes) is itself a term that contains a banana whose third argument is a grape term? For example, suppose t = banana b' s' (grape u). Then after reducing the outer banana chain, we get a term like pear^k s (banana b s (banana b' s' (grape u))). Now, the inner banana b s (banana b' s' (grape u)) — can this be reduced? The rules for banana require the third argument to be plum or grape n. Here, the third argument is banana b' s' (grape u), which is not plum and not of the form grape n (because it's a banana). So no rule applies to this banana. However, the subterm banana b' s' (grape u) inside might be reducible. Since reduction can happen in any context, we can reduce the inner banana b' s' (grape u) using R_apple_orange. When we reduce that inner banana, we get pear s' (banana b' s' u). This reduction happens inside the context of the outer banana's third argument. After reduction, the term becomes pear^k s (banana b s (pear s' (banana b' s' u))). Now, the outer banana b s (pear s' ...) has third argument pear s' ..., which is not plum or grape, so no rule for outer banana. But the inner part might have more reducible bananas. However, note that the reduction of the inner banana duplicated s', and if s' has grapes, the total grapes increase. But again, the inner banana had a finite number of grapes in its third argument (say m grapes), so after m reductions, that inner chain terminates. Then we might have other bananas.
+
+The critical question: can we have a term where the reduction of one banana creates a new banana that has a grape in its third argument, and this process can continue indefinitely? For that, we would need a rule that, when applied, produces a banana whose third argument is a grape term, and this new banana is in a context where it can be reduced, and the process repeats with increasing "fuel". But looking at the rules, the only rule that produces a banana is R_apple_orange, which produces banana b s n on the right-hand side, but note: in R_apple_orange, the banana produced has third argument n, which is the body of the grape that was consumed. So n is not wrapped in a grape; it is the inner term. Therefore, the new banana's third argument is n, which has one less grape than the original third argument. So it cannot have more grapes than before. Moreover, no other rule produces a banana. Rules that produce other constructors: 
+- R_peach_plum_left/right produce t (which could be anything, but not necessarily a banana with grape)
+- R_peach_cancel produces t
+- etc.
+
+So the only way to get a banana with a grape in its third argument is if it was already present in the term or created by a rule that introduces a grape. But no rule introduces a grape. Therefore, the total number of "grape occurrences" that are in a position to be the third argument of a banana is limited. However, duplication can increase the total number of grapes in the term, but each grape is "consumed" when it is the direct argument of a grape constructor that is matched by a rule. Specifically, a grape constructor can only be eliminated by being part of a mango (grape t) (via R_mango_grape) or being the third argument of a banana in the form grape n (via R_apple_orange). In R_mango_grape, the entire grape t is removed, so all grapes inside t are also removed. In R_apple_orange, the outer grape is removed, but the inner n is preserved, so the grapes inside n remain. However, the duplication of s can introduce additional grapes, but those grapes are in s, and s is not necessarily in a position to be reduced by a rule that consumes grapes. For example, if s contains a grape that is not under a mango or as the third argument of a banana in a reducible position, it might stay forever. But that doesn't cause non-termination; it just means the term has grapes that are not reducible.
+
+The real danger is if the duplication of s creates new reducible redexes. For instance, if s contains a subterm that, when duplicated, forms a new redex with surrounding context. But in this system, the rules are mostly left-linear and do not have overlapping patterns that would create new redexes upon duplication, except possibly for the peach rules or cherry rules.
+
+Let's consider if duplication of s can create a new cherry redex or peach redex. For example, suppose s = cherry a b, and a ≠ b. Then when we duplicate s, we have two copies of cherry a b. Each can be reduced by R_cherry_diff to mango (peach a b). But that reduction does not create new bananas or grapes. It might create peach terms that could be reduced if a or b is plum, but again, finite.
+
+Another idea: use the cherry rules to create a loop. R_cherry_diff: cherry a b → mango (peach a b) when a≠b. Then, if we have a term where peach a b can be reduced to something that eventually becomes cherry a b again? But the rules for peach only reduce to one of the arguments or to t if equal. There's no rule that produces cherry. So no cycle.
+
+What about combining banana and cherry? Suppose we have a term where after some reductions, we get a cherry whose arguments are such that after R_cherry_diff, we get a mango (peach a b), and then if peach a b is reduced to something that contains a banana with a grape, but again, no rule produces banana except R_apple_orange, which requires a banana on the left.
+
+Wait, R_apple_orange is the only rule that has banana on the left and produces banana on the right. So bananas can only be reduced, not created, except that R_apple_orange produces a banana but with a "smaller" third argument (in terms of grape depth). And no other rule produces a banana. Therefore, the number of banana constructors in the term can only decrease or stay the same? Let's see:
+- Rules that remove a banana: R_banana_zero and R_apple_orange (they rewrite a banana term to something else). R_banana_zero replaces banana b s plum with b, so removes one banana. R_apple_orange replaces banana b s (grape n) with pear s (banana b s n), so it removes one banana and introduces one banana. So the number of bananas remains the same in R_apple_orange. Other rules do not involve banana, so they don't change the number of bananas.
+- Rules that introduce banana: only R_apple_orange introduces a banana on the right-hand side. But it consumes one banana on the left, so net change 0.
+- Therefore, the total number of banana constructors in the term is non-increasing? Actually, in R_apple_orange, it stays the same. In other rules, if they don't touch bananas, the count stays the same. Only R_banana_zero decreases the count by 1.
+
+So the number of bananas is bounded by the initial number. Moreover, for each banana, the "grape-depth" of its third argument (defined as the maximum number of nested grapes starting from the third argument) is a natural number that decreases with each application of R_apple_orange to that banana. Since R_apple_orange can only be applied to a banana whose third argument has grape-depth at least 1, and after application, the new banana has third argument with grape-depth decreased by 1. Also, R_banana_zero can be applied when the third argument is plum (grape-depth 0), and it removes the banana.
+
+Therefore, for each banana, the number of times R_apple_orange can be applied to it (directly or to bananas created from it) is finite, bounded by the initial grape-depth of its third argument. However, note that R_apple_orange duplicates the s argument, which might contain other bananas. But those bananas are separate; their reduction is independent. Since the total number of bananas is non-increasing (actually, it can stay the same or decrease), and each banana can be reduced only finitely many times (because its third argument's grape-depth decreases with each R_apple_orange application on it, and eventually it either gets reduced by R_banana_zero or becomes irreducible), the entire system should terminate.
+
+But wait: when we apply R_apple_orange to a banana, we introduce a new banana (with the same b and s, but n instead of grape n). This new banana is a different occurrence. However, the grape-depth of its third argument is less than that of the original. So we can define a measure for each banana occurrence: the pair (number of bananas in the term, grape-depth of this banana's third argument) but that might not be well-founded because the number of bananas can stay the same while grape-depth decreases.
+
+A standard technique is to use a lexicographic measure on the multiset of "sizes" of bananas. Specifically, for each banana subterm, define its "rank" as the grape-depth of its third argument. Then, when we apply R_apple_orange to a banana with rank k>0, it is replaced by a pear s (banana ... ) where the new banana has rank k-1. Additionally, the s is duplicated, which might contain bananas. But the bananas inside s are not affected in rank by this reduction (their ranks remain the same). However, the duplication means that the multiset of ranks might change: we remove one banana of rank k, and add one banana of rank k-1, and also add whatever bananas are in s (but s was already present once, and now it is duplicated, so the bananas inside s are duplicated). Oh no! Duplication of s means that any bananas inside s are duplicated. So the total number of bananas can increase if s contains bananas.
+
+Example: let s = banana b' s' plum. Then G(s) might be 0 if b',s',plum have no grapes, but s contains a banana. Initially, suppose we have a term: banana b (banana b' s' plum) (grape n). Apply R_apple_orange:
+→ pear (banana b' s' plum) (banana b (banana b' s' plum) n)
+Now, the term has two occurrences of the subterm banana b' s' plum: one in the first argument of pear, and one in the second argument of the outer banana. Initially, there was one banana (the outer one) and one banana inside s. After reduction, we have the outer banana replaced, but we have the inner banana duplicated: now there are two copies of banana b' s' plum. Additionally, the new outer banana (banana b (banana b' s' plum) n) is present. So total bananas: initially: 1 (outer) + 1 (inside s) = 2. After reduction: the pear has first arg: banana b' s' plum (1 banana), and the second arg is banana b ... which contains another banana b' s' plum inside its s argument? Wait, the second arg is banana b s_new n, where s_new = banana b' s' plum. So this banana b ... has s_new which is a banana term. So the term has:
+- pear (A) (B), where A = banana b' s' plum, and B = banana b A n.
+So bananas: A is one banana, and B is another banana, and inside B, the s argument is A, which is a banana, but B itself is a banana constructor. So total banana constructors: A is one, B is one, and that's it? Because A is a subterm of B's s argument, but B is a banana term whose arguments include A. So the term has two top-level banana constructors: one is A, and one is B. But initially, we had the outer banana (call it C = banana b s (grape n)) and inside s there was A. So initially, two bananas: C and A. After reduction, we have A (in the pear's first arg) and B = banana b A n. So still two bananas. However, the banana B has third argument n, which may have lower grape-depth. But the banana A is still there, and it might be reducible. In this case, A = banana b' s' plum, which can be reduced by R_banana_zero to b'. So after reducing A (in either occurrence), it disappears. But note: there are two occurrences of A. When we reduce one occurrence of A, it becomes b', so that occurrence is replaced. The other occurrence remains. So the number of bananas can decrease when we reduce A.
+
+But the duplication means that we have two copies of A, so we might need to reduce A twice. However, each reduction of A (by R_banana_zero) removes one banana. So the total number of banana reductions is bounded by the initial number of bananas plus the number of duplications. But duplications happen only when we apply R_apple_orange to a banana whose s argument contains bananas. Each application of R_apple_orange to a banana duplicates its s argument. If s contains m bananas, then after duplication, the number of bananas increases by m (because s is duplicated, so the bananas inside s are duplicated). Initially, suppose we have a banana with s containing m bananas. After one R_apple_orange, the number of bananas becomes: (original total bananas) - 1 (the reduced banana) + 1 (the new banana produced) + m (from duplicating s, but wait: originally, s was present once, containing m bananas. After duplication, s appears twice, so the bananas inside s appear twice, so additional m bananas. But the reduced banana is removed and replaced by a new banana (which has s as its second argument, so that new banana contains the duplicated s). Let T be the total number of banana constructors in the term before reduction. The reduced banana is one occurrence. Its s argument contains, say, k banana constructors (as subterms). After reduction:
+- The reduced banana is removed.
+- A new banana is introduced (the one in the pear's second argument).
+- The s argument is now present in two places: as the first argument of pear, and as the second argument of the new banana. Therefore, the subterms that were in s are now duplicated. So the number of banana constructors that were inside s is now doubled. Additionally, the new banana itself is one banana constructor.
+So the change in total banana count: 
+Before: T = 1 (the reduced banana) + (bananas not in the reduced banana or its s) + k (bananas inside s).
+After: The reduced banana is gone. The new banana is added: +1. The s is duplicated: so the k bananas inside s become 2k. Also, the rest of the term (outside the reduced banana) remains, say R bananas. So total after = R + 2k + 1.
+Before: T = R + 1 + k  (because the reduced banana is 1, and inside it, s has k bananas, and R is outside).
+So after - before = (R + 2k + 1) - (R + 1 + k) = k.
+Therefore, the total number of bananas increases by k, where k is the number of bananas inside the s argument of the reduced banana.
+
+This is problematic because k can be positive, and if we can apply R_apple_orange repeatedly to bananas whose s argument contains bananas, the number of bananas can grow without bound. Moreover, each new banana might have a third argument that is a grape term, allowing further applications of R_apple_orange.
+
+Let's try to construct an infinite reduction sequence.
+
+We need a term where:
+- There is a banana B0 = banana b s (grape n) such that s contains at least one banana, say B1 = banana b1 s1 t1.
+- After reducing B0 with R_apple_orange, we get pear s (banana b s n). Now, s is duplicated, so B1 appears twice.
+- Additionally, the new banana B2 = banana b s n might be reducible if n is of the form grape n', but n is the body of the original grape, so if the original third argument was grape (grape ...), then n might still have grapes. But more importantly, the duplicated s contains B1, and if B1 is reducible (e.g., if t1 is plum or grape something), we can reduce the copies of B1.
+- Suppose that reducing B1 (by R_banana_zero or R_apple_orange) produces a term that contains a banana with a grape in its third argument. But R_banana_zero reduces banana b1 s1 plum to b1, which may not contain a banana. R_apple_orange reduces banana b1 s1 (grape n1) to pear s1 (banana b1 s1 n1), which introduces a new banana B3 = banana b1 s1 n1. If n1 has grapes, B3 might be reducible later.
+
+The key is to have a "generator" banana that, when reduced, duplicates a s that contains a banana which, when reduced, recreates a banana with a grape in its third argument, and this new banana can be used to trigger another duplication.
+
+Let me try to design a specific term.
+
+Let’s define a "counter" banana that has s containing a banana that, when reduced, produces a term that includes a grape. But no rule produces a grape, so we cannot create new grapes. However, we can have a fixed number of grapes initially, and use duplication to spread them.
+
+Suppose we set:
+- Let X be a term that contains a banana whose third argument is a grape term, and whose s argument contains a banana that, when reduced, does not consume all grapes but leaves a grape in a position to be used again.
+
+But since grapes are not created, the total number of grapes is bounded by the initial term. However, duplication can increase the total number of grapes if s contains grapes, as we saw earlier. But grapes themselves are not reducible unless they are in specific contexts (under mango or as third argument of banana). So if we have a term with many grapes, but they are not in reducible positions, they don't cause reduction. The reduction is driven by the presence of redexes.
+
+Let me attempt a concrete infinite sequence.
+
+Start with term T0 = banana plum S (grape plum), where S is chosen carefully.
+
+But S must contain a banana. Let S = banana plum plum plum. Then T0 = banana plum (banana plum plum plum) (grape plum).
+
+Apply R_apple_orange to T0:
+T1 = pear (banana plum plum plum) (banana plum (banana plum plum plum) plum)
+
+Now, in T1, we have two occurrences of banana plum plum plum (call it B). Each B can be reduced by R_banana_zero to plum. Suppose we reduce the first occurrence (in the pear's first argument):
+T2 = pear plum (banana plum (banana plum plum plum) plum)
+
+Now, the second argument of pear is banana plum (banana plum plum plum) plum. This banana has third argument plum, so apply R_banana_zero:
+T3 = pear plum plum
+
+No further reductions. Terminates.
+
+Not infinite.
+
+To keep the bananas reducible, we need the third argument of the duplicated bananas to be reducible. Suppose we set S = banana plum plum (grape plum). Then T0 = banana plum (banana plum plum (grape plum)) (grape plum).
+
+Apply R_apple_orange to the outer banana:
+T1 = pear (banana plum plum (grape plum)) (banana plum (banana plum plum (grape plum)) plum)
+
+Now, the outer banana in the second argument has third argument plum, so it can be reduced by R_banana_zero:
+T2 = pear (banana plum plum (grape plum)) plum
+
+Now, the first argument of pear is banana plum plum (grape plum), which can be reduced by R_apple_orange:
+T3 = pear (pear plum (banana plum plum plum)) plum
+
+Then, the inner banana plum plum plum can be reduced by R_banana_zero to plum:
+T4 = pear (pear plum plum) plum
+
+Terminates.
+
+Still terminates.
+
+What if we make the s argument contain a banana that, when reduced, produces a term that includes a grape in a position that can be used as the third argument of a new banana? But the reduction of a banana either removes it (R_banana_zero) or transforms it (R_apple_orange) but does not produce a new grape. The only way to have a grape in the third argument of a banana is if it was there initially or duplicated.
+
+Suppose we have a term where s = grape (banana b s' plum). But grape is a constructor, so s = grape B, where B is a banana. Then G(s) = 1 + G(B). When we apply R_apple_orange to a banana with this s, the number of grapes increases by G(s)-1 = G(B). But more importantly, after reduction, we have pear (grape B) (banana b (grape B) n). Now, the new banana has s = grape B, which is not a banana, so no immediate duplication of bananas. However, the term has grape B, which might be reducible if it is under a mango? But there's no mango here. Or if it is the third argument of another banana? In this term, the grape B is in the first argument of pear and in the s argument of the new banana. The new banana's third argument is n, which may not be reducible. But the subterm grape B might be part of a redex if there is a mango around it. But initially, there isn't.
+
+To create a loop, we need a rule that can turn the duplicated s into a form that recreates the original redex. For example, if we had a rule that says pear (grape B) X → something that contains banana ... (grape ...), but there is no such rule.
+
+Another idea: use the cherry rules to create a peach, and then use peach rules to manipulate terms. But peach rules only simplify.
+
+Let me consider the possibility of non-termination due to the conditional rule R_cherry_diff. The condition a ≠ b is a side condition. In rewrite systems, conditional rules can sometimes lead to non-termination if the condition can be satisfied in infinitely many ways, but here the condition is on the syntax, and since terms are finite, for a given cherry a b, either a=b or not, and if not, the rule applies once. No issue.
+
+After careful thought, I recall that for rewrite systems, if we can find a well-founded order that is closed under contexts and decreases with each rule, then SN holds. Given that no rule introduces new function symbols that can create new redexes in a cyclic way, and the duplication is controlled by the decrease in grape-depth for the banana being reduced, it might be possible to prove termination using a lexicographic path order or a polynomial interpretation.
+
+However, the duplication in R_apple_orange is a red flag. In termination analysis, duplication can cause non-termination if not controlled. For example, the rule f(x) -> f(x,x) is non-terminating. Here, R_apple_orange is similar to: banana(b, s, grape(n)) -> pear(s, banana(b, s, n)). This duplicates s. If s contains a subterm that can be used to recreate the left-hand side pattern, it could loop. But in this case, the left-hand side requires the third argument to be grape(n), and after reduction, the new banana has third argument n, which is not wrapped in grape. So to recreate a banana with grape in the third argument, we would need n to be of the form grape(n'), but n is the body of the original grape, so it has one less grape. Therefore, the "grape-height" of the banana's third argument decreases. Even though s is duplicated, the new bananas created from s (if any) have their own third arguments, which may have their own grape-heights. But the grape-height of the specific banana that was reduced decreases, and for the duplicated s, the bananas inside s have the same grape-heights as before. However, since the total number of "grape occurrences" that are in reducible positions might be bounded, and each reduction consumes one grape occurrence (in the sense that the grape constructor matched is removed), and no new grapes are created, the total number of times R_apple_orange can be applied globally is bounded by the initial number of grape constructors in the term. Is that true?
+
+Let's define a measure: the total number of grape constructors that are either:
+- the direct argument of a mango (i.e., in a subterm mango (grape t)), or
+- the third argument of a banana (i.e., in a subterm banana b s (grape t)).
+
+Call these "active grapes". Because only these grapes can be consumed by rules (R_mango_grape consumes the first type, R_apple_orange consumes the second type). Other grapes (e.g., inside s of a banana, or inside t of mango (grape t) but not the outer grape) are not directly consumable by these rules. However, when a rule consumes an active grape, it may expose inner grapes to become active. For example, in R_mango_grape: mango (grape t) -> plum. This consumes the outer grape, and any grapes inside t are discarded, so they are not exposed. In R_apple_orange: banana b s (grape n) -> pear s (banana b s n). This consumes the outer grape of the third argument, and n is now the third argument of the new banana. If n itself starts with grape, then the new banana has an active grape (because its third argument is grape ...). So the active grape count: before, we had one active grape (the one in grape n). After, if n = grape n', then the new banana has an active grape (in its third argument), so the active grape count remains the same. Additionally, the duplication of s might introduce new active grapes if s contains active grapes. For example, if s contains a subterm banana b' s' (grape n'), then before reduction, that was an active grape inside s. After duplication, there are two copies, so the active grape count increases by the number of active grapes in s.
+
+Therefore, the active grape count can increase due to duplication. This is similar to the earlier issue.
+
+However, note that when we consume an active grape via R_apple_orange, we are "using up" one grape constructor that was active, but we may expose the grapes inside n to become active if n starts with grape. But the key is that the grape constructor that was consumed is gone, and the grapes inside n were already present; they were not active before because they were inside the grape n. After reduction, if n starts with grape, then the outer grape of n becomes active in the new banana's third argument. So the number of active grapes might stay the same or change.
+
+Let G_active be the number of grape constructors that are in a position to be the direct argument of a mango or the third argument of a banana. Initially, this is some number. When we apply R_apple_orange to a banana with third argument grape n:
+- We remove one active grape (the one in grape n).
+- We add: if n is of the form grape n', then the new banana has third argument grape n', so we add one active grape. Additionally, the duplication of s: if s contains k active grapes, then after duplication, we have 2k active grapes from the two copies of s, whereas before we had k active grapes from the single s. So net change in active grapes: -1 (consumed) + (1 if n starts with grape else 0) + k (because duplication adds k active grapes).
+
+If n starts with grape, then net change = -1 + 1 + k = k. If n does not start with grape, net change = -1 + 0 + k = k-1.
+
+Since k >= 0, if k >= 1, the active grape count can increase. And if we can have a situation where k >= 1 and n starts with grape, then active grape count increases by k >=1. This could lead to unbounded growth of active grapes, and thus potentially infinite reductions.
+
+Can we arrange for k >=1 and n starts with grape repeatedly? For example, suppose we have a term where s contains a banana whose third argument is a grape term (so k>=1), and n is also a grape term. Then after one R_apple_orange, active grapes increase by k. The new term has two copies of s, each containing a banana with a grape in its third argument, so now there are more active grapes. Additionally, the new banana has third argument n, which is a grape term, so it is active. So we can apply R_apple_orange to the new banana, and also to the bananas inside the duplicated s.
+
+Let's try to construct such a term.
+
+Let B(x) = banana plum x (grape plum)  [so third argument is grape plum, which is active]
+Let S = B(plum) = banana plum plum (grape plum)  [this has one active grape in its third argument]
+But we want s to contain a banana with active grape. So let s = B(plum) = banana plum plum (grape plum). Then k = number of active grapes in s: in s, there is one active grape (the third argument of the banana). So k=1.
+
+Now, let the outer banana be T0 = banana plum s (grape (grape plum)). Here, the third argument is grape (grape plum), so n = grape plum, which starts with grape, so n starts with grape.
+
+Apply R_apple_orange to T0:
+T1 = pear s (banana plum s (grape plum))   [because n = grape plum]
+
+Now, compute active grapes in T1:
+- s appears twice. Each s = banana plum plum (grape plum), which has one active grape (its third argument). So from the two s's, we have 2 active grapes.
+- The new banana: banana plum s (grape plum) has third argument grape plum, which is active, so +1 active grape.
+Total active grapes in T1: 3.
+
+Initially in T0: 
+- s has 1 active grape.
+- The outer banana has third argument grape (grape plum), which is active (because it's grape of something), so +1.
+Total: 2.
+
+So increased from 2 to 3.
+
+Now, in T1, we can reduce the new banana (banana plum s (grape plum)) using R_apple_orange, since its third argument is grape plum.
+Apply to that banana:
+T2 = pear s (pear s (banana plum s plum))
+
+Now, active grapes in T2:
+- First s: 1 active grape
+- Second s (inside the inner pear): 1 active grape
+- The new banana: banana plum s plum has third argument plum, not active.
+Total active grapes: 2.
+
+But we also have the two s's, each can be reduced. Reduce one s (say the first one) using R_apple_orange on its banana:
+s = banana plum plum (grape plum) -> pear plum (banana plum plum plum)
+So after reducing the first s in T2:
+T3 = pear (pear plum (banana plum plum plum)) (pear s (banana plum s plum))
+
+This is getting messy, but let's count active grapes after reducing one s:
+- The reduced s becomes pear plum (banana plum plum plum). In this term, banana plum plum plum has third argument plum, not active. So this subterm has 0 active grapes.
+- The other s is still there: banana plum plum (grape plum), which has 1 active grape.
+- The banana in the second pear: banana plum s plum has third argument plum, not active.
+So total active grapes: 1.
+
+Then we can reduce the remaining s, and so on. It seems to terminate.
+
+But in T1, instead of reducing the new banana first, we could reduce one of the s's. Reduce one occurrence of s in T1:
+T1 = pear s (banana plum s (grape plum))
+Reduce the first s (which is banana plum plum (grape plum)) to pear plum (banana plum plum plum) [by R_apple_orange]:
+T1a = pear (pear plum (banana plum plum plum)) (banana plum s (grape plum))
+
+Now, active grapes:
+- The first part: pear plum (banana plum plum plum) has banana with third argument plum, not active.
+- The second part: banana plum s (grape plum) has third argument grape plum, active. Also, s is still banana plum plum (grape plum), which has an active grape. But s is inside the banana's s argument, and is it active? The active grape in s is in its third argument, and s is the second argument of the outer banana, not the third argument. For a grape to be active as the third argument of a banana, it must be the direct third argument of some banana. In the term banana plum s (grape plum), the third argument is grape plum, which is active. The s contains a banana whose third argument is grape plum, but that banana is not at the top level of the term; it is inside s. However, reduction can happen in any context, so the banana inside s is a subterm and can be reduced. The active grape count should count all grapes that are in a position to be reduced, regardless of context. So in T1a, the subterm s = banana plum plum (grape plum) has an active grape (its third argument). So total active grapes: 
+- From the outer banana's third argument: 1 (grape plum)
+- From the s inside the outer banana's s argument: 1 (because s has a banana with active grape)
+Total: 2.
+
+Initially in T1, we had 3 active grapes. After reducing one s, we have 2. Then we can reduce the outer banana's third argument or the s inside.
+
+Reduce the outer banana in T1a: banana plum s (grape plum) -> pear s (banana plum s plum) [by R_apple_orange]
+T1b = pear (pear plum (banana plum plum plum)) (pear s (banana plum s plum))
+
+Active grapes:
+- First part: 0
+- Second part: pear s (banana plum s plum): s has an active grape (1), and the banana has third argument plum, not active. So total active grapes: 1 (from s).
+
+Then reduce s in the second part: s -> pear plum (banana plum plum plum), so T1c = pear (pear plum (banana plum plum plum)) (pear (pear plum (banana plum plum plum)) (banana plum s plum)) wait, no: after reducing s in the context pear s X, it becomes pear (reduced s) X. So:
+T1c = pear (pear plum (banana plum plum plum)) (pear (pear plum (banana plum plum plum)) (banana plum s plum)) but s is reduced, so the second pear's first argument is the reduced s, and the second argument is banana plum s plum, but s is now reduced? This is complicated.
+
+The point is, the active grape count is decreasing over time. In the first reduction from T0 to T1, it increased from 2 to 3, but then subsequent reductions decrease it. Since the total number of grape constructors in the term is bounded (because although duplication can increase the count, the initial number of grapes is finite, and no new grapes are created, wait no: duplication can increase the total number of grapes if s contains grapes. In our example, s = banana plum plum (grape plum) has one grape (in grape plum). When duplicated, the total number of grapes doubles. In T0: total grapes = grapes in s (1) + grapes in third argument (grape (grape plum) has 2 grapes) = 3. In T1: s appears twice, each has 1 grape, and the new banana's third argument is grape plum (1 grape), so total grapes = 1+1+1=3. Same. In the earlier calculation with s having more grapes, it can increase. But in this specific s, total grapes remain the same.
+
+However, the active grape count can fluctuate, but the key insight is that each application of R_apple_orange consumes one grape constructor that was active (the one matched), and may expose inner grapes to become active, but the total number of grape constructors in the term is non-increasing? No, as we saw, if s contains grapes, duplication can increase the total number of grapes. In the example where s = grape (grape plum) (2 grapes), and we apply R_apple_orange, total grapes increased from 3 to 4. So the total number of grapes can increase.
+
+This is a serious issue. If we can have a term where s contains many grapes, and we apply R_apple_orange repeatedly to bananas whose third argument has grapes, each application duplicates s, increasing the total grapes. If the duplicated s contains a banana whose third argument is a grape term, then after duplication, we have more such bananas, each of which can be reduced, duplicating s again, and so on. This could lead to exponential growth and potentially infinite reduction if we can keep finding reducible bananas.
+
+Let me try to create a term that loops.
+
+Let F = banana plum S (grape plum), where S is a term that contains F itself? But terms are finite, so we cannot have direct recursion. However, we can have S contain a banana that, when reduced, produces a term that includes F. But reduction rules do not produce the exact term F; they produce transformed terms.
+
+Suppose we set S = pear plum F. But F is banana plum S (grape plum), which is circular. Not possible in finite terms.
+
+Since the syntax is inductive and terms are finite, we cannot have infinite terms. Therefore, any reduction sequence must be finite if we can show that some measure decreases. The challenge is to find a measure that decreases with each reduction step, despite the duplication.
+
+In termination analysis, for systems with duplication, we often use a well-founded order that is monotonic and has the subterm property, like a recursive path order with status. Let's try to see if the system is simply terminating.
+
+Another idea: use the interpretation method. Assign to each constructor a function over the natural numbers, and show that each rule decreases the interpretation.
+
+For example, assign:
+plum -> 0
+grape(x) -> x + 1  (or something)
+mango(x) -> x
+peach(x,y) -> max(x,y) + c
+etc.
+
+But for R_apple_orange: left: banana(b,s,grape(n)) should be > right: pear(s, banana(b,s,n))
+
+Suppose we try:
+Let the interpretation be the size of the term, but we know size can increase.
+
+Or use a polynomial interpretation. Suppose we assign:
+plum = 0
+grape(x) = x + 1
+mango(x) = x
+peach(x,y) = x + y + 1
+pear(x,y) = x + y + 1
+banana(x,y,z) = x + y + z + 1
+cherry(x,y) = x + y + 1
+
+Then for R_apple_orange:
+Left: banana(b,s,grape(n)) = b + s + (n+1) + 1 = b+s+n+2
+Right: pear(s, banana(b,s,n)) = s + (b+s+n+1) + 1 = b + 2s + n + 2
+So left - right = (b+s+n+2) - (b+2s+n+2) = -s ≤ 0, and equal only if s=0. But s is a term, and its interpretation is at least 0. If s>0, left < right, which is bad for termination (we need left > right). So this interpretation does not work.
+
+Try a different interpretation. Suppose we make banana have a higher weight for the third argument. For example:
+banana(x,y,z) = x + y + 2*z + 1
+grape(x) = x + 1
+pear(x,y) = x + y + 1
+
+Left: banana(b,s,grape(n)) = b + s + 2*(n+1) + 1 = b+s+2n+3
+Right: pear(s, banana(b,s,n)) = s + (b + s + 2*n + 1) + 1 = b + 2s + 2n + 2
+Left - right = (b+s+2n+3) - (b+2s+2n+2) = 1 - s
+So if s >= 2, left < right. Not good.
+
+To handle the duplication, we might need an interpretation where s is interpreted as 0, but that's not possible for all terms.
+
+Another idea: use a lexicographic combination of the number of bananas and the sum of the grape-depths of their third arguments. But duplication increases the number of bananas.
+
+Define for a term t, a measure M(t) = (total number of grape constructors in t, total number of banana constructors in t) with lexicographic order, but we saw that the number of grapes can increase.
+
+Perhaps use the multiset of the "sizes" of the third arguments of all bananas, ordered by the grape-depth. But duplication complicates it.
+
+After research in my mind, I recall that the rule R_apple_orange is similar to the rule for the Ackermann function or other terminating systems with duplication. In fact, this system might be terminating because the duplication is of a subterm that is "smaller" in some sense.
+
+Let's consider the following measure for a term t: the pair (G(t), B(t)) where G(t) is the total number of grape constructors in t, and B(t) is the total number of banana constructors in t, ordered lexicographically with G first. But we saw that G can increase when B is large.
+
+Order with B first: (B(t), G(t)). When we apply R_apple_orange, B(t) may increase (by k, the number of bananas in s), and G(t) may increase. So not decreasing.
+
+Use a measure that is the sum over all bananas of 2^{d} where d is the grape-depth of its third argument. When we apply R_apple_orange to a banana with depth d>0, it is replaced by a new banana with depth d-1, and s is duplicated. If s contains bananas with depths d1, d2, ..., then the measure change: remove 2^d, add 2^{d-1} for the new banana, and add the measure of s twice instead of once. So net change = -2^d + 2^{d-1} + M(s) = -2^{d-1} + M(s). If M(s) < 2^{d-1}, then the measure decreases. But M(s) could be large.
+
+This is not guaranteed.
+
+Given the time, I recall that in rewrite systems, if the system is orthogonal and left-linear, and has no infinite reduction sequences, but this system is not left-linear because of R_peach_cancel (peach t t) and R_cherry_refl (cherry a a), which have repeated variables. However, orthogonality is not required for termination.
+
+After careful analysis, I think the system is actually strongly normalizing. Why? Because although duplication occurs, the "fuel" for reduction is the initial number of grape constructors that are in reducible positions, and each reduction consumes one such grape constructor (in the sense that the matched grape is removed), and the duplication does not create new reducible grapes beyond what was already there in s. But wait, it does create new occurrences of reducible grapes if s contains them.
+
+However, each grape constructor can be "used" only once as the direct argument of a mango or as the third argument of a banana in a reduction step. Because when a grape is matched by a rule, it is removed (in R_mango_grape, the entire grape t is removed; in R_apple_orange, the grape constructor is removed, though t is preserved). In R_apple_orange, the grape constructor is removed, so that specific grape instance is consumed. The grapes inside n are preserved, but they were not the matched grape; they were inside. So each grape constructor can be the matched grape in at most one reduction step. Therefore, the total number of times rules that match a grape can be applied is bounded by the initial number of grape constructors in the term. Rules that do not match a grape (like R_peach_plum, R_peach_cancel, R_banana_zero when third argument is plum, R_cherry_refl, R_cherry_diff) do not consume a grape, but they reduce the term size or simplify it, and there are only finitely many such rules that can be applied between grape-consuming steps.
+
+Let's verify:
+- R_mango_grape: matches a grape constructor (the one in grape t), and removes it. So consumes one grape instance.
+- R_apple_orange: matches a grape constructor (the one in grape n), and removes it. Consumes one grape instance.
+- Other rules: do not match any grape constructor; they match other patterns. For example, R_peach_plum_left matches peach plum t, which does not require a grape. R_banana_zero matches banana b s plum, no grape. R_cherry_refl matches cherry a a, no grape. R_cherry_diff matches cherry a b with a≠b, no grape.
+
+Therefore, the number of times R_mango_grape or R_apple_orange can be applied in any reduction sequence is at most the initial number of grape constructors in the term. Because each application consumes one distinct grape constructor instance (the one that is matched and removed). Even though duplication can create new occurrences of grape constructors (if s contains grapes), those new occurrences are copies of existing grape constructors, but each copy is a distinct instance. However, when a grape constructor is duplicated, it is not consumed; it is copied. So the total number of grape constructor instances can increase, and each instance can be consumed later. Therefore, the bound is not the initial number, but the total number of grape instances that ever appear, which can grow.
+
+For example, if s contains a grape instance, and we duplicate s, we now have two instances of that grape. Each can be consumed by a reduction step. So the total number of grape-consuming steps can exceed the initial number.
+
+In the earlier example where s = grape plum (one grape instance), and we apply R_apple_orange to a banana with third argument grape plum, then after reduction, we have two instances of grape plum (one in each s). Each can be consumed if they are in reducible positions. For instance, if each s is under a mango, then R_mango_grape can be applied twice. So the number of grape-consuming steps can be up to the total number of grape instances created, which can be exponential in the number of duplications.
+
+However, to have a grape instance be in a reducible position, it must be the direct argument of a mango or the third argument of a banana. In the duplication, the copied s may not be in a reducible position immediately. For example, if s = grape plum, and it is duplicated as part of pear s X, then the grape plum is not under a mango nor is it the third argument of a banana; it is the first argument of pear. So it is not reducible. To make it reducible, we would need additional context. For instance, if we have mango (grape plum), then it is reducible. But in our system, the only way to have a grape in a reducible position is if it is placed there by the initial term or by a reduction step. Reduction steps do not place grapes in reducible positions except in the right-hand side of R_apple_orange, where the new banana has third argument n, which may start with grape, making it reducible. But in that case, the grape instance in n was already present; it is not a new instance created by duplication. The duplication creates copies of s, which may contain grapes, but those copies are not necessarily in reducible positions.
+
+In the term after R_apple_orange: pear s (banana b s n), the s is in the first argument of pear and in the second argument of banana. For a grape inside s to be in a reducible position, it would need to be, for example, the third argument of a banana. But in this term, the only banana is the one with third argument n. The s is not the third argument of any banana in this term; it is the second argument. So the grapes inside s are not in reducible positions unless s itself contains a banana whose third argument is a grape, and that banana is a subterm. In that case, the banana inside s has its third argument as a grape, so that grape is in a reducible position (as the third argument of that inner banana). And since s is duplicated, there are two copies of that inner banana, each with its third argument grape in reducible position. Therefore, each copy can be reduced independently, consuming the grape instance in its third argument.
+
+So yes, duplication can create new reducible grape instances. Specifically, if s contains a banana whose third argument is a grape term, then after duplication, there are two such bananas, each with a reducible grape in its third argument. Each can be reduced by R_apple_orange, consuming that grape instance and potentially duplicating further.
+
+This can lead to a tree of reductions. For example, start with a term that has a banana whose s contains a banana whose s contains ... and so on, with each having a grape in the third argument. But since the term is finite, the depth is finite. However, the duplication can cause the number of reducible bananas to grow exponentially. But each reduction of a banana consumes one grape instance (the one in its third argument), and the number of grape instances consumed is equal to the number of times R_apple_orange is applied. Since each application consumes one grape instance, and the total number of grape instances ever created is finite (because the initial term is finite, and each duplication copies existing subterms, but the total number of grape instances is bounded by the initial number times 2^d where d is the number of duplications, but d is not bounded a priori).
+
+However, in a reduction sequence, the number of duplication steps is limited by the structure. In fact, this system might be terminating because the "depth" of the term decreases in a well-founded order.
+
+I recall that this system resembles the rewrite system for the Hydra game or the Goodstein sequences, which are terminating but not primitive recursive. In particular, the rule R_apple_orange is similar to the rule in the Hydra game where cutting a head causes duplication of a subtree. The Hydra game is known to be terminating (by Kirby-Paris), but the proof requires ordinal analysis, not a simple measure. However, the question is whether strong normalization can be established "from the presented calculus alone, without importing structural axioms or object-level assumptions beyond what is derivable from the given syntax and rewrite rules". This might mean: can we prove SN within a weak meta-theory using only the rules, or is the system complex enough that proving SN requires stronger assumptions (like induction up to epsilon_0)?
+
+But the question is not about the strength of the meta-theory; it is about whether SN holds for the system, and whether we can prove it with standard methods without adding extra rules or assumptions to the system itself. The phrase "established from the presented calculus alone" might mean: can we prove SN using only the information in the Lean file, i.e., the syntax and rules, without needing to assume additional properties of the terms (like well-foundedness of some order that is not evident from the rules).
+
+In other words, is the termination obvious from the rules, or does it require a non-trivial proof that might rely on external mathematics?
+
+Given that the system has a rule that duplicates subterms (R_apple_orange), and the duplication can cascade, it is not obvious that the system is terminating. In fact, it might be non-terminating. Let me try harder to find an infinite sequence.
+
+Suppose we have a term where s = banana plum s (grape plum). But this is not a finite term because s is defined recursively. In the inductive type Trace, terms are finite, so we cannot have infinite terms. Therefore, s must be a finite term. So we cannot have s contain itself.
+
+However, we can have s contain a banana that has s' as its s argument, and s' contains another banana, etc., up to a fixed depth. For example, let s0 = plum
+s1 = banana plum s0 (grape plum) = banana plum plum (grape plum)
+s2 = banana plum s1 (grape plum) = banana plum (banana plum plum (grape plum)) (grape plum)
+s3 = banana plum s2 (grape plum)
+and so on.
+
+Now, consider the term T = s_k for some k. This term has a nested structure. When we reduce the outermost banana in s_k using R_apple_orange:
+s_k = banana plum s_{k-1} (grape plum) -> pear s_{k-1} (banana plum s_{k-1} plum)
+Then, the new banana has third argument plum, so it reduces by R_banana_zero to plum, so we get pear s_{k-1} plum.
+Then, s_{k-1} can be reduced similarly. This will terminate after k steps.
+
+Not infinite.
+
+To get duplication of the inner structure, we need the third argument to have more than one grape. Let's set the third argument to have depth m. For example, let T = banana plum s (grape^m plum), where s = banana plum s' (grape plum), and s' is something.
+
+But still, the number of grapes in the third argument is m, so after m applications of R_apple_orange to the outer banana chain, it terminates, and during this, s is duplicated m times. If s contains a banana with a grape in its third argument, then after duplication, we have m copies of that banana, each of which can be reduced. Each reduction of such a banana will duplicate its s' argument, and so on. This is exactly like the Hydra game. In the Hydra game, cutting a head (reducing a banana) causes duplication of a subtree (s), and the game terminates but the number of steps can be very large. However, it is known to terminate for any finite initial Hydra.
+
+In this system, the "Hydra" is represented by the term, and the reduction rules correspond to cutting heads. Specifically, the rule R_apple_orange corresponds to cutting a head at a certain node, which causes duplication of a subtree. The system is likely terminating, as it is a variant of the Hydra game.
+
+In fact, this system might be encoding the Hydra game. The banana constructor might represent a node, with b as the "body", s as the "subtree to duplicate", and the third argument as the "head". The rule R_apple_orange: when the head is a grape (indicating a head to cut), it cuts it, and duplicates the s subtree. The rule R_banana_zero: when the head is plum (indicating no head), it removes the node.
+
+The other rules (peach, cherry, etc.) might be red herrings or used for other purposes, but they also terminate.
+
+Since the Hydra game is known to be terminating (though the proof requires ordinal analysis up to epsilon_0), strong normalization does hold for this system. However, the question is: can it be established "from the presented calculus alone, without importing structural axioms or object-level assumptions beyond what is derivable from the given syntax and rewrite rules"?
+
+The phrase "established from the presented calculus alone" might mean: can we prove SN using only the rules and syntax, without needing to appeal to external mathematics like ordinal analysis. In other words, is there a simple proof of termination that is evident from the rules, such as a polynomial interpretation or a simple well-founded order.
+
+Given that the system includes a rule that duplicates subterms in a way that corresponds to the Hydra game, which is not primitive recursively terminating, there is no proof of termination in weak systems like PRA. However, the question is not about the meta-theoretic strength, but whether we can establish SN (i.e., prove it) using standard proof methods without strengthening the system. "Standard proof methods" might include ordinal analysis, which is a standard method in rewrite theory.
+
+But the problem says: "without importing structural axioms or object-level assumptions beyond what is derivable from the given syntax and rewrite rules". This might mean that we cannot assume properties of the terms that are not directly given by the inductive definition. For example, we cannot assume that the less-than relation on natural numbers is well-founded, because that is an external axiom. However, in the meta-theory, when proving SN, we are allowed to use mathematics. The question is a bit ambiguous.
+
+Re-reading the question: "can strong normalization of this system be established from the presented calculus alone, without importing structural axioms or object-level assumptions beyond what is derivable from the given syntax and rewrite rules?"
+
+I think "established from the presented calculus alone" means: can we prove SN using only the information contained in the Lean file, i.e., the inductive definitions of Trace and Step, without needing to add extra rewrite rules, guards, etc., to the system itself. In other words, is the system as given strongly normalizing, and can we prove it with standard methods (which may use external mathematics) without modifying the system.
+
+Since the system is a terminating rewrite system (as it is a variant of the Hydra game), the answer should be yes, SN can be established. However, the proof might be non-trivial and require ordinal analysis. But the question is not whether the proof is simple, but whether it can be done.
+
+However, the system might not be exactly the Hydra game. Let's see if there is a way to have non-termination.
+
+Suppose we have a term where after reduction, we get back a term that is identical to the original or has a subterm that allows the same reduction sequence. For non-termination, we need a cycle or an infinite chain.
+
+Assume that there is an infinite reduction sequence. Since each reduction step either consumes a grape instance (in R_mango_grape or R_apple_orange) or simplifies the term without consuming a grape (other rules), and the number of grape-consuming steps is limited by the total number of grape instances ever created, which is finite if the reduction sequence is finite, but in an infinite sequence, the number of grape instances must grow without bound. However, each grape instance is created by duplication from existing instances. The only way to create new grape instances is by duplicating a subterm that contains grapes. But duplication happens only when R_apple_orange is applied, and each application of R_apple_orange consumes one grape instance (the matched one). So the net change in the number of grape instances is: -1 (consumed) + (number of grape instances in s) (because s is duplicated, so the grapes in s are duplicated). Let G_s be the number of grape instances in s. Then net change = G_s - 1. For the number of grape instances to increase, we need G_s > 1. If G_s <= 1, the number of grape instances does not increase (if G_s=1, net change 0; if G_s=0, net change -1).
+
+Therefore, to have the number of grape instances grow, we need to apply R_apple_orange to a banana whose s argument contains at least 2 grape instances. Moreover, after duplication, the new term has more grape instances, and if among the duplicated s there is a banana whose s argument also has many grapes, we can apply R_apple_orange again to that banana, and so on.
+
+However, each application of R_apple_orange also consumes one grape instance (the matched one), so the growth is not unbounded if the "density" of grapes in s is not sufficient. In fact, the process is similar to a branching process. For the number of grape instances to grow indefinitely, we would need that on average, each application of R_apple_orange creates more than one new grape instance that can be used for future R_apple_orange applications. But each new grape instance must be in a reducible position (i.e., as the third argument of a banana) to be consumed. When we duplicate s, the new copies of s may contain bananas whose third argument is a grape instance, so those grape instances are in reducible positions. Let k be the number of bananas in s whose third argument is a grape instance (i.e., the number of "active" bananas in s). When we duplicate s, we get 2k active bananas. Each active banana can be reduced by R_apple_orange, consuming one grape instance and potentially creating more.
+
+This is exactly the Hydra game where each "head" (active banana) when cut (reduced) causes duplication of a subtree (s), and the number of heads can grow. It is known that for any finite initial Hydra, the game terminates, though the number of steps can be very large. Therefore, the system is strongly normalizing.
+
+So the answer should be yes, strong normalization can be established. The proof would involve mapping the reduction sequences to decreasing sequences of ordinals below epsilon_0, which is a standard method.
+
+However, the question might be tricking us with the other rules. For example, the rule R_cherry_diff has a side condition a ≠ b. In rewrite systems, conditional rules can sometimes cause non-termination if the condition is not decidable or if it can be satisfied in infinitely many ways, but here the condition is on the syntax, and for ground terms, it is decidable. Since the system is ground (no variables in the rules? Wait, the rules have variables like t, a, b, so it is a rewrite system with variables, but the reduction is on ground terms. In the Lean code, the rules are defined with forall t, etc., so it is a rewrite system where rules can be applied to any subterm matching the pattern. For ground terms, the condition a ≠ b is checkable. And since terms are finite, for a given cherry a b, either a=b or not, and if not, the rule applies once. No issue for termination.
+
+Therefore, the entire system is strongly normalizing.
+
+But wait, is there any rule that can be applied infinitely often without consuming a grape? For example, R_peach_cancel: peach t t -> t. If we have a term like peach (peach (peach ...)) with the same argument, but after one application, it reduces to t, so it terminates. No loop.
+
+R_cherry_diff: cherry a b -> mango (peach a b) when a≠b. Then if a and b are such that peach a b reduces to something that eventually becomes cherry a b again, but there's no rule that produces cherry, so no.
+
+Thus, the only potential source of non-termination is the banana rules with duplication, which is terminating as per the Hydra game analogy.
+
+Therefore, strong normalization can be established.
+
+But the question is: "can strong normalization of this system be established from the presented calculus alone, without importing structural axioms or object-level assumptions beyond what is derivable from the given syntax and rewrite rules?"
+
+The phrase "from the presented calculus alone" might mean: can we prove SN using only the rules and syntax, without needing to assume that the natural numbers are well-ordered or other external mathematics. In other words, is there a proof of SN that is formalizable in a very weak system, using only the inductive definitions given.
+
+In the Lean file, Trace is an inductive type, and Step is an inductive relation. To prove that there is no infinite sequence of Step steps, we would need to prove that the relation Step is well-founded. In Lean, this would require defining a measure and proving it decreases. However, for this system, the natural measure would involve ordinals, which are not part of the presented calculus. The presented calculus only has the syntax and rules; it does not include any ordinal notation or well-founded relations.
+
+Therefore, to prove SN, we would need to import additional mathematics (like the well-foundedness of ordinals up to epsilon_0), which are "structural axioms or object-level assumptions beyond what is derivable from the given syntax and rewrite rules".
+
+In contrast, for a system that is simply terminating (e.g., all rules reduce size), we can prove SN by induction on size, using the well-foundedness of natural numbers, which might be considered derivable from the syntax (since size is a natural number). But in this case, the termination proof requires transfinite induction.
+
+The question is whether the proof can be done "without importing structural axioms or object-level assumptions beyond what is derivable from the given syntax and rewrite rules". This suggests that if the proof requires external mathematics not evident from the rules, then it cannot be established "from the calculus alone".
+
+In rewrite theory, a system is said to be "simply terminating" if termination can be shown by a reduction order that is primitive recursive, but this system is not simply terminating.
+
+Given that the system encodes the Hydra game, which is known to have termination proof requiring induction up to epsilon_0, and epsilon_0 is not provably well-founded in Peano Arithmetic, it means that the termination cannot be proven in PA. Therefore, to establish SN, we need to import stronger axioms (like the well-foundedness of epsilon_0).
+
+However, the question is not about the strength of the meta-theory, but whether we can establish SN using standard proof methods without strengthening the system itself. "Standard proof methods" include ordinal analysis, which is standard in termination proofs. So in that sense, yes, we can establish SN.
+
+But the phrase "from the presented calculus alone" might mean: can we see from the rules that the system is terminating, without needing a complex proof. For example, if all rules reduced a simple size measure, then yes. Here, it is not obvious.
+
+Given the context of the problem (it's a prompt for an AI to assess), and the fact that the system has a rule that duplicates subterms in a way that is known to be terminating but with a non-trivial proof, I think the intended answer might be that strong normalization cannot be established from the calculus alone because the termination proof requires external ordinal analysis, which is not derivable from the syntax and rules alone.
+
+However, the question says: "without importing structural axioms or object-level assumptions beyond what is derivable from the given syntax and rewrite rules". The syntax and rewrite rules allow us to define the reduction relation. To prove SN, we need to prove that this relation is well-founded. In the meta-theory, we can do that using ordinals. But the "presented calculus" is the object-level system; the proof is meta. The question is whether the proof can be carried out using only information from the calculus, meaning that the termination is evident from the rules without needing additional mathematical machinery.
+
+In many contexts, "established from the calculus alone" means that there is a straightforward proof, such as by a monotone interpretation or a simple well-founded order that is obvious from the rules.
+
+Given that the rule R_apple_orange increases size and duplicates subterms, and there is no obvious decreasing measure, and in fact the system is designed to be a Hydra-like system, I think the intended answer is that strong normalization cannot be established from the calculus alone; it requires additional mathematical insight (ordinal analysis) that is not contained in the syntax and rules.
+
+Moreover, the problem mentions "no imported object-level axioms beyond the rules shown there", which might imply that we cannot assume properties like "the less-than relation on natural numbers is well-founded" because that is an external axiom. In the proof of SN, we would need to use well-founded induction on some order, which requires assuming that order is well-founded. If that order is not derivable from the syntax (like the size order is, because size is a natural number and we can use induction on size), but for this system, the natural order is not on natural numbers but on ordinals.
+
+For the size measure, we saw that size can increase, so induction on size does not work. Any measure that works would require ordinals.
+
+Therefore, I think the assessment is that strong normalization cannot be established from the presented calculus alone; it requires importing structural axioms (like the well-foundedness of ordinals up to epsilon_0) that are not derivable from the given syntax and rewrite rules.
+
+So the answer is no.
+
+Let me confirm with a smaller example. Suppose we have only the banana rules:
+banana b s plum -> b
+banana b s (grape n) -> pear s (banana b s n)
+
+And no other rules. Is this subsystem terminating? Yes, as it is the Hydra game. But can we prove it without ordinal analysis? In a weak meta-theory, no. For the purpose of this problem, since the calculus does not provide any ordinal notation or well-founded relation, we cannot prove SN within the calculus itself. The proof requires external mathematics.
+
+Therefore, for the entire system, strong normalization cannot be established from the presented calculus alone.
+
+Additionally, the conditional rule R_cherry_diff might require handling the inequality, but that is minor.
+
+So my final assessment is that strong normalization cannot be established from the presented calculus alone.
+
+Answer: No.
+
+Reasoning: The rewrite system includes a rule (R_apple_orange) that duplicates subterms in a manner analogous to the Hydra game, which is known to be terminating but whose termination proof requires ordinal analysis up to ε₀. This proof relies on structural axioms (well-foundedness of ordinals) that are not derivable from the given syntax and rewrite rules alone. No simpler termination proof (e.g., via a polynomial interpretation or size-based measure) is evident, as the rule can increase term size and duplicate subterms containing reducible patterns. While the system is strongly normalizing, establishing this fact necessitates importing mathematical assumptions beyond the presented calculus.

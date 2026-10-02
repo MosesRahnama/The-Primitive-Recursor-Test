@@ -1,0 +1,1189 @@
+This is an interesting question about a rewrite system defined in Lean 4. Let me analyze the system to see if it strongly normalizes.
+
+First, let me understand the syntax:
+- `void` is a base value
+- `delta t` is some constructor (maybe represents successor or step)
+- `integrate t` is another constructor
+- `merge t1 t2` combines two traces
+- `app t1 t2` applies one trace to another
+- `recΔ b s n` is a recursion operator with base `b`, step `s`, and argument `n`
+- `eqW a b` is an equality witness
+
+Now the rewrite rules:
+1. `R_int_delta`: integrate (delta t) → void
+2. `R_merge_void_left`: merge void t → t
+3. `R_merge_void_right`: merge t void → t
+4. `R_merge_cancel`: merge t t → t
+5. `R_rec_zero`: recΔ b s void → b
+6. `R_rec_succ`: recΔ b s (delta n) → app s (recΔ b s n)
+7. `R_eq_refl`: eqW a a → void
+8. `R_eq_diff`: eqW a b → integrate (merge a b)
+
+Wait, let me look at rule 8 more carefully: `R_eq_diff : ∀ a b, Step (eqW a b) (integrate (merge a b))`
+
+This says that if we have `eqW a b` where a and b are arbitrary, it reduces to `integrate (merge a b)`.
+
+But what if a = b? Then we have both:
+- `R_eq_refl`: eqW a a → void
+- `R_eq_diff`: eqW a a → integrate (merge a a)
+
+This gives us a critical pair! When a = b, we can reduce `eqW a a` to either `void` or `integrate (merge a a)`.
+
+For confluence, we'd need these to be joinable. Let's see:
+- `void` is normal (assuming no rules apply to void)
+- `integrate (merge a a)` can reduce via `R_merge_cancel` to `integrate a`, and then... well, can `integrate a` reduce?
+
+Looking at the rules, `integrate` can only reduce when its argument is `delta t` (rule 1). So `integrate a` is normal unless a is of the form `delta t`.
+
+But if a is arbitrary, `integrate a` might be normal.
+
+So we have:
+`eqW a a` →* `void`
+`eqW a a` →* `integrate (merge a a)` →* `integrate a`
+
+For these to be equal (or joinable), we'd need `integrate a` to reduce to `void` somehow, or have some other relation.
+
+But unless a is `delta t`, `integrate a` doesn't reduce.
+
+Actually, looking more carefully at the problem - this is about strong normalization, not confluence. 
+
+The question is: does every reduction sequence terminate?
+
+Let me think about potential infinite loops.
+
+One thing to look for is whether any rule increases the "size" of terms in a way that could lead to infinite reduction.
+
+But actually, looking at rule 8: `eqW a b` reduces to `integrate (merge a b)`.
+
+If a and b are distinct, this is fine. But we need to check if this can create cycles.
+
+Wait, actually, looking at the structure, let me try to define a measure that decreases.
+
+However, there's a subtlety with `recΔ`. Let's look at `R_rec_succ`:
+`recΔ b s (delta n) → app s (recΔ b s n)`
+
+This is standard recursion - it reduces the argument from `delta n` to `n`, so if we think of `delta` as successor, this is peeling off one constructor.
+
+But the issue is: what is the relationship between `delta n` and `n` in terms of complexity?
+
+Actually, let me look at the constructors again. The grammar is:
+
+```
+inductive Trace : Type
+| void : Trace
+| delta : Trace → Trace
+| integrate : Trace → Trace
+| merge : Trace → Trace → Trace
+| app : Trace → Trace → Trace
+| recΔ : Trace → Trace → Trace → Trace
+| eqW : Trace → Trace → Trace
+```
+
+This looks like all constructors take `Trace` arguments. So this is a tree-like structure.
+
+Now, for strong normalization, I need to check if there are any infinite reduction sequences.
+
+Let me analyze each rule:
+
+1. `integrate (delta t) → void`: The LHS has size 1 + (1 + size(t)) = 2 + size(t). The RHS has size 0. This decreases size significantly.
+
+2. `merge void t → t`: LHS size is 1 + 0 + size(t) = 1 + size(t). RHS is size(t). Decreases by 1.
+
+3. `merge t void → t`: Similarly decreases.
+
+4. `merge t t → t`: LHS size is 1 + size(t) + size(t) = 1 + 2*size(t). RHS is size(t). Decreases.
+
+5. `recΔ b s void → b`: LHS has recΔ with 3 args. RHS is just b. Decreases.
+
+6. `recΔ b s (delta n) → app s (recΔ b s n)`: 
+   LHS: recΔ b s (delta n). The third argument is delta n.
+   RHS: app s (recΔ b s n)
+   
+   Let's compare sizes. If we define size roughly:
+   - size(void) = 1
+   - size(delta t) = 1 + size(t)
+   - size(integrate t) = 1 + size(t)
+   - size(merge t1 t2) = 1 + size(t1) + size(t2)
+   - size(app t1 t2) = 1 + size(t1) + size(t2)
+   - size(recΔ t1 t2 t3) = 1 + size(t1) + size(t2) + size(t3)
+   - size(eqW t1 t2) = 1 + size(t1) + size(t2)
+   
+   LHS: 1 + size(b) + size(s) + size(delta n) = 1 + size(b) + size(s) + 1 + size(n) = 2 + size(b) + size(s) + size(n)
+   RHS: 1 + size(s) + size(recΔ b s n) = 1 + size(s) + 1 + size(b) + size(s) + size(n) = 2 + size(b) + 2*size(s) + size(n)
+   
+   So the size increases by size(s)!
+   
+   This is a problem. The rec_succ rule actually increases the size if size(s) > 0.
+   
+   For example, if s = delta void, then size(s) = 2.
+   LHS: 2 + size(b) + 2 + size(n) = 4 + size(b) + size(n)
+   RHS: 2 + size(b) + 2*2 + size(n) = 6 + size(b) + size(n)
+   
+   Wait, actually, let me recalculate more carefully.
+   
+   Actually, the issue is that in the RHS, we have `app s (recΔ b s n)`.
+   
+   Standard size measure:
+   size(recΔ b s (delta n)) = 1 + size(b) + size(s) + size(delta n)
+                            = 1 + size(b) + size(s) + 1 + size(n)
+                            = 2 + size(b) + size(s) + size(n)
+   
+   size(app s (recΔ b s n)) = 1 + size(s) + size(recΔ b s n)
+                             = 1 + size(s) + (1 + size(b) + size(s) + size(n))
+                             = 2 + size(b) + 2*size(s) + size(n)
+   
+   So size(RHS) - size(LHS) = size(s).
+   
+   If s is non-trivial, the term gets BIGGER.
+   
+   However, note that in the recursive call, the THIRD argument decreases: we go from `delta n` to `n`.
+   
+   But now we have an extra copy of the step function s wrapped in an app.
+   
+   This looks like it could cause problems. For strong normalization, we need to ensure that recursion terminates.
+   
+   In standard primitive recursion, we have something like:
+   rec b s 0 = b
+   rec b s (n+1) = s (rec b s n)
+   
+   And this terminates because n decreases.
+   
+   But here, the step function s is applied via `app s (recΔ b s n)`.
+   
+   Now, what can `app` do? Looking at the rewrite rules, I don't see any rules for `app`!
+   
+   That's right - there are no reduction rules for `app`. So `app` is just a constructor that doesn't reduce.
+   
+   Similarly, looking at all the rules, none of them apply to `app` as a top-level construct.
+   
+   Wait, looking at the rules again:
+   - R_int_delta: integrate (delta t)
+   - R_merge_*: merge ...
+   - R_rec_zero/succ: recΔ ...
+   - R_eq_refl/diff: eqW ...
+   
+   There are NO rules for `app`!
+   
+   That means `app s (recΔ b s n)` is a normal form if `s` and `recΔ b s n` are normal forms.
+   
+   But actually, `recΔ b s n` might reduce further if n is not void.
+   
+   Let's trace through an example:
+   
+   Let n = delta (delta void).
+   recΔ b s (delta (delta void)) 
+   → app s (recΔ b s (delta void))
+   → app s (app s (recΔ b s void))
+   → app s (app s b)
+   
+   This terminates! Because each time we peel off a delta, and eventually we hit void and stop.
+   
+   But wait, what if n is something that doesn't reduce to void?
+   
+   Actually, looking at the recursor rules:
+   - R_rec_zero applies when third argument is void
+   - R_rec_succ applies when third argument is delta n
+   
+   What if the third argument is something else, like integrate t, or merge t1 t2, etc.?
+   
+   The rules don't say! So recΔ b s t where t is not void and not delta n is stuck (normal form).
+   
+   Similarly, for the recursor to reduce, the third argument must be either void or delta of something.
+   
+   So a term like `recΔ b s (merge void void)` is a normal form.
+   
+   Now, back to strong normalization.
+   
+   The concerning rule is R_eq_diff: eqW a b → integrate (merge a b).
+   
+   This replaces eqW with integrate of merge.
+   
+   Then merge can reduce:
+   - merge void t → t
+   - merge t void → t
+   - merge t t → t
+   
+   And integrate can reduce only if its argument is delta t: integrate (delta t) → void.
+   
+   Now, is there any cycle?
+   
+   Let's see... can we create a loop?
+   
+   Consider: if we have eqW a b, it becomes integrate (merge a b).
+   
+   If merge a b reduces to c, then we have integrate c.
+   If c = delta d, then integrate (delta d) → void.
+   
+   But eqW never appears on the right-hand side of any rule. So once we eliminate eqW, we never create it again.
+   
+   Similarly, let's trace all constructors that appear on LHS but not RHS (or check for cycles).
+   
+   Actually, looking at the rewrite system as a whole, I need to check if there's any way to have infinite reductions.
+   
+   The dangerous rules are those that might create larger terms or duplicate subterms.
+   
+   Rule R_rec_succ duplicates s: 
+   recΔ b s (delta n) → app s (recΔ b s n)
+   
+   Here, s appears in the result, and also inside the recursive call.
+   Wait, actually: app s (recΔ b s n)
+   The s is outside, and recΔ b s n contains s inside.
+   So s is not duplicated - it's just that the outer s is now explicit in the app, and the inner recΔ still has s.
+   
+   Actually, the number of occurrences of s remains the same: one in the input, and one in each of the two components of the output.
+   Wait: input has one s.
+   Output has s as first arg of app, and s inside recΔ.
+   So s appears twice!
+   
+   Let me verify:
+   Input: recΔ b s (delta n) - contains one s
+   Output: app s (recΔ b s n) - contains s once explicitly, and recΔ b s n contains s again.
+   So yes, s is duplicated.
+   
+   This is concerning for strong normalization.
+   
+   However, note that the third argument is getting smaller in some sense.
+   We go from delta n to n.
+   
+   But "smaller" in what sense? 
+   If n is arbitrary, we need a well-founded measure.
+   
+   Actually, the third argument is syntactically smaller: delta n has n as a subterm.
+   But in terms of the number of constructors, if we define depth:
+   depth(delta n) = 1 + depth(n)
+   
+   So depth decreases by 1.
+   
+   But the duplication of s means that the total size might increase.
+   
+   Let's look at what happens with the full reduction.
+   
+   Example:
+   recΔ void (delta void) (delta^n void)
+   where delta^n means n applications of delta.
+   
+   After one step (if n > 0):
+   app (delta void) (recΔ void (delta void) (delta^{n-1} void))
+   
+   After another step (reducing the recΔ inside):
+   app (delta void) (app (delta void) (recΔ void (delta void) (delta^{n-2} void)))
+   
+   Eventually:
+   app (delta void) (app (delta void) (... (app (delta void) void)...))
+   with n copies of (delta void).
+   
+   This terminates after n steps.
+   
+   But wait - are there any redexes created?
+   The app constructor doesn't have any reduction rules.
+   So the result is a normal form.
+   
+   So far so good.
+   
+   But is there a way to have the recursion "loop"?
+   
+   For that, we'd need to create a delta from somewhere.
+   
+   Let's look at R_eq_diff: eqW a b → integrate (merge a b)
+   
+   Can integrate (merge a b) create a delta?
+   Only if merge a b reduces to something involving delta.
+   
+   Actually, merge a b reduces to:
+   - b if a is void
+   - a if b is void
+   - t if a = b = t
+   
+   So merge preserves the "delta-ness" in some sense, or removes constructors.
+   
+   Actually, looking at merge rules, they all decrease size.
+   
+   integrate only reduces when applied to delta t.
+   
+   So to get a delta, we need to start with one.
+   
+   The only way to create new structure seems to be... actually, looking at all RHS:
+   1. void - atomic
+   2. t - subterm
+   3. t - subterm
+   4. t - subterm
+   5. b - subterm
+   6. app s (recΔ b s n) - builds new app, but recΔ is smaller in 3rd arg
+   7. void - atomic
+   8. integrate (merge a b) - builds integrate and merge
+   
+   For rule 8: eqW a b → integrate (merge a b)
+   This builds integrate and merge.
+   Then merge reduces to one of its arguments (or themself if equal).
+   So we get integrate c where c is a subterm of the original.
+   Then if c is delta t, we get void.
+   Otherwise integrate c is normal.
+   
+   So eqW reduces to something that is "smaller" in some sense.
+   
+   Let me try to define a weight function that decreases.
+   
+   Actually, looking more carefully at R_rec_succ:
+   recΔ b s (delta n) → app s (recΔ b s n)
+   
+   The issue is that we can have n itself contain recΔ or other constructs.
+   
+   But the key insight is that (delta n) is being "unwrapped" to n.
+   And we don't have any rules that wrap things back up in delta in a way that could loop.
+   
+   Wait, is there any rule that creates a delta?
+   Looking at all RHS:
+   - void
+   - t
+   - t
+   - t
+   - b
+   - app s (recΔ b s n)
+   - void
+   - integrate (merge a b)
+   
+   None of these create a delta constructor explicitly.
+   The only way delta appears is if it's in a subterm.
+   
+   So delta constructors are never created, only consumed (by R_rec_succ and R_int_delta).
+   
+   Similarly, let's check other constructors:
+   - void: created by R_int_delta, R_eq_refl. Never consumed except as argument to other things.
+   - delta: consumed by R_int_delta (needs delta), R_rec_succ (needs delta). Never created.
+   - integrate: created by R_eq_diff. Consumed by R_int_delta.
+   - merge: created by R_eq_diff. Consumed by R_merge_*.
+   - app: created by R_rec_succ. Never consumed by any rule.
+   - recΔ: created by ... wait, is recΔ ever created?
+     Looking at RHS of all rules: no recΔ appears on the right!
+     So recΔ is only in the initial term or created by... actually, looking at RHS of R_rec_succ: 
+     app s (recΔ b s n) - yes, recΔ appears on the RHS!
+     So recΔ persists in the recursive call.
+   - eqW: created by... no rule creates eqW. Only consumed by R_eq_refl and R_eq_diff.
+   
+   So eqW is eliminated and never introduced.
+   delta is eliminated and never introduced.
+   
+   Since delta is only consumed and never produced, and R_rec_succ reduces the number of deltas in the third argument by one each time, the recursion terminates.
+   
+   For R_int_delta: consume one delta.
+   
+   So the number of delta constructors strictly decreases with each application of R_int_delta or R_rec_succ.
+   
+   Other rules:
+   - R_merge_*: reduce size but don't affect delta count directly.
+   - R_eq_diff: eliminates eqW, introduces merge and integrate.
+   
+   Actually, let's think about this more systematically.
+   
+   Define a measure:
+   Let |t|_delta = number of delta constructors in t.
+   
+   - R_int_delta: LHS has 1 + |t|_delta, RHS has 0. Decreases by at least 1.
+   - R_merge_void_left: |merge void t|_delta = |t|_delta (since void has 0). So measure unchanged? 
+     Actually: |merge void t| = 1 + |void| + |t|, but for delta count:
+     |merge void t|_delta = |void|_delta + |t|_delta = 0 + |t|_delta = |t|_delta.
+     RHS is t, so |t|_delta.
+     So delta count unchanged.
+   - Similarly for other merge rules: they preserve the delta count (or reduce it if the cancellation happens, but actually merge t t → t reduces delta count from 2|t|_delta to |t|_delta).
+   
+   Wait, R_merge_cancel: merge t t → t.
+   LHS has |t|_delta + |t|_delta = 2|t|_delta.
+   RHS has |t|_delta.
+   So delta count reduces.
+   
+   R_rec_zero: recΔ b s void → b.
+   |recΔ b s void|_delta = |b|_delta + |s|_delta + |void|_delta = |b|_delta + |s|_delta.
+   RHS is b, so |b|_delta.
+   Decrease by |s|_delta ≥ 0.
+   
+   R_rec_succ: recΔ b s (delta n) → app s (recΔ b s n).
+   LHS: |b|_delta + |s|_delta + |delta n|_delta = |b|_delta + |s|_delta + 1 + |n|_delta.
+   RHS: |s|_delta + |recΔ b s n|_delta = |s|_delta + |b|_delta + |s|_delta + |n|_delta = |b|_delta + 2|s|_delta + |n|_delta.
+   
+   Change: (|b|_delta + 2|s|_delta + |n|_delta) - (|b|_delta + |s|_delta + 1 + |n|_delta) = |s|_delta - 1.
+   
+   If |s|_delta > 1, this increases!
+   If |s|_delta = 0, this decreases by 1.
+   If |s|_delta = 1, this stays same.
+   
+   So delta count is not a good measure for R_rec_succ.
+   
+   But note: in R_rec_succ, we strip one delta from the third argument.
+   Even though we duplicate s, we consume one delta.
+   
+   Since delta is never created (no rule has delta on the RHS), the total number of deltas in the entire term is a decreasing measure for R_rec_succ.
+   
+   Wait, is delta ever created?
+   RHS of all rules:
+   1. void - no delta
+   2. t - whatever t has
+   3. t - whatever t has
+   4. t - whatever t has
+   5. b - whatever b has
+   6. app s (recΔ b s n) - deltas from s, b, s, n. That's |s| + |b| + |s| + |n| = |b| + 2|s| + |n|.
+      LHS is recΔ b s (delta n): |b| + |s| + 1 + |n|.
+      So we add |s| deltas.
+   7. void - no delta
+   8. integrate (merge a b) - has deltas from a and b.
+   
+   Actually, looking at it this way:
+   R_rec_succ can increase the number of deltas if s contains deltas.
+   
+   Example: s = delta void.
+   recΔ b (delta void) (delta n) 
+   → app (delta void) (recΔ b (delta void) n)
+   
+   LHS deltas: |b| + 1 + 1 + |n| = |b| + |n| + 2.
+   RHS deltas: 1 + (|b| + 1 + |n|) = |b| + |n| + 2.
+   Same number.
+   
+   Wait: 
+   app s (recΔ b s n)
+   - s contributes |s|_delta
+   - recΔ b s n contributes |b|_delta + |s|_delta + |n|_delta
+   Total: |s|_delta + |b|_delta + |s|_delta + |n|_delta = |b|_delta + 2|s|_delta + |n|_delta.
+   
+   LHS recΔ b s (delta n): |b|_delta + |s|_delta + (1 + |n|_delta).
+   
+   Difference: (|b| + 2|s| + |n|) - (|b| + |s| + 1 + |n|) = |s| - 1.
+   
+   So if |s| > 1, total delta count increases.
+   If |s| = 1, unchanged.
+   If |s| = 0, decreases by 1.
+   
+   But there's no rule that creates delta... wait, s is preserved, and we add an extra copy.
+   So yes, deltas in s are duplicated.
+   
+   However, the recursion is on the third argument.
+   We go from recΔ b s (delta n) to recΔ b s n (embedded in app).
+   The third argument loses one delta wrapper.
+   
+   So we can define a lexicographic measure:
+   1. Number of eqW (decreases with R_eq_*)
+   2. Number of recΔ with non-void/non-delta third argument? No.
+   
+   Actually, let's think about the structure.
+   
+   For recΔ: the third argument is being "stripped" of its deltas one by one.
+   Each time we apply R_rec_succ, we turn one delta in the third position into an app wrapping.
+   Eventually, the third argument becomes void (or something else), and we apply R_rec_zero or get stuck.
+   
+   But the "something else" case: if the third argument is neither void nor delta, then recΔ is stuck and is a normal form.
+   
+   For strong normalization, we need every reduction sequence to terminate.
+   
+   The only potential issue is if we can expand the term forever using R_eq_diff or R_rec_succ.
+   
+   R_eq_diff: eqW a b → integrate (merge a b)
+   This eliminates eqW. Since eqW is never created, we can only apply this finitely many times.
+   
+   R_rec_succ: increases the size but reduces the "structural complexity" of the third argument.
+   
+   Let's define a well-founded measure.
+   
+   Define the "potential" of a term:
+   We need to handle recΔ carefully.
+   
+   Actually, let's look at whether there can be infinite sequences involving R_rec_succ.
+   
+   Suppose we have recΔ b s n.
+   If n = void → reduces to b.
+   If n = delta n' → reduces to app s (recΔ b s n').
+   If n = integrate t, merge t1 t2, app t1 t2, eqW t1 t2, recΔ t1 t2 t3 - stuck.
+   
+   So recΔ reduces only when the third arg is void or delta.
+   When it's delta, we unwrap one delta and recurse.
+   
+   This is well-founded because the third argument is getting structurally smaller in terms of "delta-height".
+   
+   Define depth(t) as:
+   - depth(void) = 0
+   - depth(delta t) = 1 + depth(t)
+   - depth(integrate t) = depth(t)
+   - depth(merge t1 t2) = max(depth(t1), depth(t2))
+   - depth(app t1 t2) = max(depth(t1), depth(t2))
+   - depth(recΔ b s n) = depth(n)
+   - depth(eqW t1 t2) = max(depth(t1), depth(t2))
+   
+   Wait, that's not good because depth doesn't see inside other constructors.
+   
+   Better: the "third argument of recΔ" measure.
+   
+   Actually, let's use a multiset measure or a polynomial interpretation.
+   
+   Or simpler: since eqW is only eliminated, and delta is only consumed (in the sense that when we use R_int_delta or R_rec_succ, we consume a delta that is the top constructor of the specific position), and no rule creates new delta, eqW, recΔ, or other "active" constructors.
+   
+   Wait, R_rec_succ creates a new recΔ with a smaller third argument.
+   The third argument goes from delta n to n.
+   The "size" (number of constructors) of the third argument decreases by 1 (removing the outer delta).
+   
+   Even though we duplicate s, the recursion is well-founded because it's guarded by the third argument.
+   
+   This is similar to primitive recursion: we recurse on a structurally decreasing argument.
+   
+   Specifically, define a measure on traces that makes recΔ b s n have measure depending on n.
+   
+   Define |t| as:
+   |void| = 1
+   |delta t| = 1 + |t|
+   |integrate t| = 1 + |t|
+   |merge t1 t2| = 1 + |t1| + |t2|
+   |app t1 t2| = 1 + |t1| + |t2|
+   |recΔ b s n| = omega^{|n|} * (something) ... this is getting complicated.
+   
+   Actually, since recΔ is not nested in its own definition in a dangerous way, we can think of it as:
+   recΔ b s n computes by cases on n.
+   
+   The standard way to prove SN for such systems is to show that each redex reduces to something "smaller".
+   
+   Let's check all critical pairs and see if the system is orthogonal or at least confluent and terminating.
+   
+   But the question is just about strong normalization.
+   
+   Actually, there is a potential issue: R_eq_diff applies to any eqW a b.
+   If a = b, both R_eq_refl and R_eq_diff apply.
+   R_eq_refl: eqW a a → void
+   R_eq_diff: eqW a a → integrate (merge a a) → integrate a (if merge a a → a)
+   
+   So we have two different reducts: void and integrate a.
+   For SN, we don't care about confluence, just that every reduction terminates.
+   
+   So from eqW a a, we can go to void (done) or to integrate a.
+   If integrate a is reducible (i.e., a = delta t), we get void.
+   If not, integrate a is normal.
+   
+   But eqW never reappears.
+   
+   Now, is there any infinite chain?
+   
+   Let's try to construct one.
+   
+   Start with C[eqW a b].
+   Reduce using R_eq_diff: C[integrate (merge a b)].
+   merge reduces to some c (which is a or b or subterm).
+   Then we have C[integrate c].
+   If c = delta d, reduce to C[void].
+   Done.
+   
+   Start with C[recΔ b s (delta^n void)].
+   This reduces in n steps to C[app s (app s (... (app s b)...))].
+   Normal form (assuming b, s normal).
+   
+   Can we have interaction between recΔ and eqW?
+   recΔ b s (eqW t1 t2) is stuck (third arg is eqW, not void or delta).
+   
+   Can eqW appear inside the third argument of recΔ? Yes.
+   recΔ b s (eqW t1 t2) is a normal form for recΔ.
+   
+   So the system is not complete - many terms are normal forms.
+   
+   The question is whether there exists any infinite reduction sequence.
+   
+   Let me try to find one.
+   
+   Suppose we have: recΔ b s (delta (eqW u v)).
+   This reduces to: app s (recΔ b s (eqW u v)).
+   Now recΔ b s (eqW u v) is stuck, so we have app s (recΔ b s (eqW u v)).
+   If s has a redex, we could reduce s.
+   But eventually, we run out of redexes.
+   
+   Actually, can s have a redex? s is arbitrary.
+   So we need to see if the whole term can keep reducing forever.
+   
+   The only way to have infinite reduction is if we can keep creating redexes or if some reduction sequence doesn't terminate.
+   
+   Looking at the rules, the only one that "expands" is R_eq_diff, but it consumes eqW.
+   The only one that duplicates is R_rec_succ, but it consumes a delta.
+   
+   Since eqW and delta are never created (no rule introduces them fresh), and they are consumed by these rules, we have a limited supply.
+   
+   Actually, that's the key insight!
+   
+   Theorem: In any reduction sequence, eqW and delta steps are taken only finitely many times.
+   
+   Proof: 
+   - eqW appears in LHS of R_eq_refl and R_eq_diff.
+     These rules replace eqW with something that is not eqW.
+     No rule creates eqW.
+     So number of eqW strictly decreases.
+   
+   - delta appears in LHS of R_int_delta and R_rec_succ.
+     R_int_delta: replaces delta t with something not involving that delta.
+     R_rec_succ: replaces recΔ b s (delta n) with app s (recΔ b s n).
+       The delta is removed from the third argument.
+       Could new deltas be created? The RHS has s and recΔ b s n.
+       s is unchanged, so has its original deltas.
+       recΔ b s n has whatever deltas n has, plus deltas in b and s.
+       So the delta that was on n is gone, but n itself might have deltas inside.
+       Actually, delta n has 1 + |n|_delta.
+       In the RHS, the recursive call has |n|_delta in the third arg.
+       PLUS, we have an extra copy of s in the app.
+       So we add |s|_delta to the total count.
+       
+     Wait, this means R_rec_succ can increase the total number of deltas!
+     Example: s = delta void.
+     recΔ b (delta void) (delta n)
+     → app (delta void) (recΔ b (delta void) n)
+     
+     LHS has 1 (from delta n) + |s|_delta = 1 + 1 = 2 deltas minimum.
+     Actually: recΔ b s (delta n) contains the deltas in b, in s, and 1 + deltas in n.
+     
+     RHS: app s (recΔ b s n) contains deltas in s, plus deltas in b, s, and n.
+     Total: |s| + |b| + |s| + |n| = |b| + 2|s| + |n|.
+     
+     LHS: |b| + |s| + 1 + |n|.
+     
+     Change: |s| - 1.
+     
+     So if |s| >= 1, the number of deltas doesn't decrease!
+     
+     But the point is: the third argument is getting smaller.
+     Even though we duplicate s, the recursion is on a structurally smaller term.
+     
+     We can define a measure:
+     For a term t, define M(t) as the multiset of depths of all delta constructors in t.
+     
+     Or better: the lexicographic measure where we look at the "delta-depth" of recΔ third arguments.
+     
+     Actually, let's use the concept of "structural ordering".
+     
+     For any recΔ b s n, define the measure as the size of n (number of constructors).
+     When we apply R_rec_succ, n is delta n', so size(n) = 1 + size(n').
+     The result has recΔ b s n', with third argument size(n') < size(n).
+     Even though we wrap it in app s ..., the recursive call is on a strictly smaller n.
+     
+     The potential issue is that s is duplicated, but s is fixed.
+     This is primitive recursion - it terminates.
+     
+     To formalize: define a weight function w(t) that is an ordinal.
+     
+     w(void) = 1
+     w(delta t) = w(t) + 1
+     w(integrate t) = w(t) + 1
+     w(merge t1 t2) = w(t1) + w(t2) + 1
+     w(app t1 t2) = w(t1) + w(t2) + 1
+     w(recΔ b s n) = w(n) * omega + w(b) + w(s) + 1  ... or something.
+     
+     Actually, for primitive recursion, we need the measure to handle the fact that the recursive calls are on smaller arguments.
+     
+     Define |t| = size of t (number of constructors).
+     
+     For recΔ b s n:
+     - If n = void: reduces to b, and |b| < |recΔ b s void| = 1+|b|+|s|+1 = 2+|b|+|s|.
+     - If n = delta n': 
+       LHS size: 1+|b|+|s|+1+|n'| = 2+|b|+|s|+|n'|.
+       RHS size: 1+|s|+(1+|b|+|s|+|n'|) = 2+|b|+2|s|+|n'|.
+       This is larger if |s| > 0.
+     
+     So size doesn't work.
+     
+     But we can use a nested measure:
+     First, count the number of recΔ constructors that have a third argument not in normal form.
+     Actually, that's complicated.
+     
+     Let's think about the reduction strategy.
+     The only rules that can apply recursively are those that don't eliminate the main constructor.
+     
+     Actually, looking at the system fresh:
+     1. R_int_delta - eliminates integrate and delta
+     2. R_merge_* - eliminates merge
+     3. R_rec_* - eliminates recΔ or reduces its third arg
+     4. R_eq_* - eliminates eqW
+     
+     All rules eliminate the main constructor (integrate, merge, recΔ, eqW) or simplify it.
+     
+     The only "recursive" rule is R_rec_succ which keeps recΔ but changes its third argument.
+     
+     This is similar to: f(succ(n)) -> g(f(n)).
+     This terminates because n is decreasing.
+     
+     In our case: recΔ b s (delta n) -> app s (recΔ b s n).
+     The "n" is the third argument stripped of one delta.
+     
+     Since delta is inductive, and we're recursing on it, and we never create delta (no rule produces delta as new), the recursion depth is bounded by the initial number of delta constructors in the third argument.
+     
+     Wait - but the third argument could be something like recΔ b' s' (delta m).
+     Then we have recΔ b s (delta (recΔ b' s' (delta m))).
+     This reduces to app s (recΔ b s (recΔ b' s' (delta m))).
+     Now the third argument is recΔ b' s' (delta m), which can reduce!
+     
+     Oh! This is important.
+     The third argument of recΔ can itself reduce.
+     
+     So we could have:
+     recΔ b s (delta (eqW a b))
+     → app s (recΔ b s (eqW a b))  [using R_rec_succ]
+     
+     Now, eqW a b might reduce.
+     If we have eqW a b → integrate (merge a b) (using R_eq_diff).
+     So we get: app s (recΔ b s (integrate (merge a b))).
+     
+     Now recΔ b s (integrate ...) is stuck, since third arg is integrate, not void or delta.
+     
+     But if we had chosen different reduction order:
+     recΔ b s (delta (eqW a a))
+     First reduce eqW a a → void: recΔ b s (delta void)
+     Then R_rec_succ: app s (recΔ b s void)
+     Then R_rec_zero: app s b.
+     
+     So confluence is an issue, but for SN?
+     
+     Can we have infinite reduction?
+     
+     Consider: recΔ b s (delta t) where t can reduce to something involving delta?
+     
+     No - delta is never created. So t reduces to t', and |t'|_delta <= |t|_delta.
+     
+     Actually, we need to be careful.
+     Suppose we have recΔ b s (delta C[eqW a b]).
+     We have two choices:
+     1. Apply R_rec_succ: get app s (recΔ b s C[eqW a b]).
+        Then reduce inside: app s (recΔ b s C[integrate (merge a b)]).
+        If C[integrate (merge a b)] = delta t, then we can apply R_rec_succ again.
+        
+     Can C[integrate (merge a b)] be a delta?
+     Only if integrate (merge a b) = delta t.
+     But integrate and delta are different constructors.
+     So no.
+     
+     C[integrate (merge a b)] is an integrate.
+     recΔ b s (integrate ...) is stuck.
+     
+     So the reduction stops.
+     
+     Let's try to be systematic.
+     Claim: The system is strongly normalizing.
+     
+     Proof sketch:
+     We use a measure based on:
+     1. Number of eqW constructors (decreases with R_eq_*)
+     2. Number of recΔ with third argument "active"
+     3. Number of delta constructors accessible to recΔ or integrate
+     
+     Actually, a cleaner argument:
+     - eqW never appears in RHS of any rule. So after finite steps, all eqW are gone.
+     - Once eqW are gone, look at recΔ.
+     - recΔ reduces when third arg is void or delta.
+     - For recΔ b s n with n containing no eqW:
+       - If n is void: reduces to b.
+       - If n is delta n': reduces to app s (recΔ b s n').
+       - Otherwise: stuck.
+     - The recursion follows the structure of n.
+     - Since n has no eqW, and delta is never created, the "path" of delta constructors in n can only decrease.
+     - Specifically, define the measure of recΔ b s n as the length of the longest delta-chain in n.
+     - Actually, when we do recΔ b s (delta n) → app s (recΔ b s n), 
+       the new recΔ has third argument n, which is inside delta n.
+       So the delta-depth decreases by 1.
+     - Other reductions inside n don't increase the delta-depth.
+     
+     Wait, if n reduces to n', the depth might change.
+     But n' cannot have more deltas than n, and cannot create new delta-at-the-top.
+     
+     Since delta is never created by any rule, the set of positions where delta occurs can only shrink or move, but actually, subterms can be duplicated.
+     
+     Let's try: 
+     recΔ b s (delta (merge void (delta t)))
+     → app s (recΔ b s (merge void (delta t)))
+     → app s (recΔ b s (delta t))   [R_merge_void_left]
+     → app s (app s (recΔ b s t))
+     
+     This terminates.
+     
+     The key is: R_rec_succ consumes one delta from the third argument.
+     No rule can introduce a new delta at a specific position.
+     The only way to have infinite reductions would be to have infinite sequence of R_rec_succ steps.
+     But each R_rec_succ requires the third argument to be of the form delta n.
+     And it replaces it with n (embedded in a context).
+     Since the third argument is getting structurally smaller (removing deltas from the outside), and we can't add deltas back, eventually the third argument is no longer of the form delta n (either void or something else), and R_rec_succ no longer applies.
+     
+     However, there is a subtlety: could the third argument reduce to a delta?
+     Example: recΔ b s (eqW (delta t) (delta t))
+     First, R_eq_diff: recΔ b s (integrate (merge (delta t) (delta t)))
+     Then merge might reduce... merge (delta t) (delta t) → delta t (if rule 4 applies when both args equal).
+     So we get: recΔ b s (integrate (delta t))
+     Then integrate (delta t) → void.
+     So: recΔ b s void → b.
+     
+     So eqW reduced to integrate (delta t), which reduced to void.
+     No new delta created - the delta t was already there inside the arguments to eqW.
+     
+     In general, reduction can expose deltas that were hidden inside, but cannot create new deltas.
+     
+     Since each R_rec_succ consumes one "top-level" delta from its third argument, and no rule can create a new top-level delta in the third argument of a recΔ, we can only apply R_rec_succ finitely many times to any given recΔ constructor.
+     
+     Actually, that's not quite right. The third argument can change due to reduction inside it.
+     Example: recΔ b s C[t] where t reduces to delta t'.
+     Then we might eventually have recΔ b s C[delta t'], and then R_rec_succ applies.
+     
+     But C[delta t'] has the delta inside some context.
+     For R_rec_succ to apply, the third argument must BE delta something, not contain it.
+     So we need the entire third argument to be a delta.
+     
+     Specifically: recΔ b s (delta n).
+     If the third argument reduces from C[t] to delta n, then we could apply R_rec_succ.
+     
+     Can C[t] reduce to delta n?
+     Only if C[t] is not already a delta.
+     The reduction rules can transform terms, but can they create a delta at the root?
+     
+     Looking at all rules: what can be the RHS shape?
+     - void
+     - t (subterm)
+     - b (subterm)
+     - app s (recΔ b s n)
+     - integrate (merge a b)
+     
+     Can any of these be a delta constructor?
+     Only if the subterm is a delta.
+     For example:
+     - R_merge_void_left: merge void t → t. If t is delta u, result is delta u.
+     - Similarly for other merge rules.
+     
+     So yes, reduction can produce a delta at the root.
+     Example: merge void (delta t) → delta t.
+     
+     So recΔ b s (merge void (delta t)) 
+     →* recΔ b s (delta t)
+     → app s (recΔ b s t).
+     
+     So we do a reduction inside the third argument to expose the delta, then apply R_rec_succ.
+     
+     The question is: can this happen infinitely often?
+     
+     For infinite reduction, we'd need to keep exposing new deltas in the third argument of some recΔ.
+     
+     But each time we apply R_rec_succ to recΔ b s (delta n), we get app s (recΔ b s n).
+     The new recΔ has third argument n.
+     To apply R_rec_succ again, we need n to reduce to delta n'.
+     
+     n is a proper subterm of delta n (which was the previous third argument).
+     So we have a decreasing measure: the size of the third argument.
+     
+     Wait, n reduces to delta n', which is BIGGER than n.
+     Example: n = merge void (delta t).
+     |n| = 1 + 1 + (1 + |t|) = 3 + |t|.
+     n reduces to delta t, which has size 1 + |t|.
+     Actually smaller in this case.
+     
+     Can n reduce to something bigger?
+     Let's see: 
+     eqW a b → integrate (merge a b).
+     This can be bigger or smaller?
+     |eqW a b| = 1 + |a| + |b|.
+     |integrate (merge a b)| = 1 + (1 + |a| + |b|) = 2 + |a| + |b|.
+     Bigger by 1.
+     
+     So if n = eqW a b, and it reduces to integrate (merge a b), 
+     and if integrate (merge a b) reduces to delta t?
+     integrate (merge a b) reduces only if merge a b = delta t.
+     But merge reduces to a or b or subterm.
+     So if a = delta t or b = delta t.
+     Say a = delta t, b = void.
+     merge (delta t) void → delta t.
+     integrate (delta t) → void.
+     
+     So eqW (delta t) void → integrate (merge (delta t) void) → integrate (delta t) → void.
+     
+     The size: 
+     eqW (delta t) void: 1 + (1+|t|) + 1 = 3+|t|.
+     void: 1.
+     Much smaller.
+     
+     Actually, let's track the potential for creating deltas at the root.
+     Can a term reduce to a delta?
+     - void: no
+     - integrate t: only if t reduces to delta u, and then integrate (delta u) → void. Not delta.
+     - merge t1 t2: reduces to t1 or t2 or subterm. So if t1 or t2 is delta, result can be delta.
+     - app t1 t2: no rule. Stuck. Cannot reduce to anything.
+     - recΔ b s n: reduces to b or app s (recΔ b s n') or stuck. None are delta unless b or s is.
+     - eqW t1 t2: reduces to void or integrate (merge t1 t2). 
+       integrate (merge t1 t2) reduces to void if merge t1 t2 is delta u.
+       merge t1 t2 reduces to t1 or t2.
+       So eqW (delta u) (delta u) could go:
+       - R_eq_refl: void
+       - R_eq_diff: integrate (merge (delta u) (delta u)) → integrate (delta u) → void.
+     
+     So it seems no rule can increase the "height" or create arbitrary new structure.
+     
+     In fact, looking at the system, it appears to be strongly normalizing because:
+     1. eqW is eliminated and never introduced.
+     2. delta is consumed by R_int_delta and R_rec_succ and never introduced.
+     3. recΔ with third argument void is eliminated.
+     4. recΔ with third argument delta n reduces to app s (recΔ b s n), where the new recΔ has third argument n, a proper subterm of delta n.
+     5. For other recΔ, they are stuck.
+     
+     The only subtlety is that we can reduce inside the third argument of recΔ to turn it into delta something.
+     But the third argument is a proper subterm, and reduction inside it terminates by induction (assuming the third argument itself is SN).
+     
+     Actually, we need to be careful about the interaction.
+     
+     Standard proof: Use a weight function into ordinals.
+     
+     Define W(t) by recursion on t:
+     W(void) = 1
+     W(delta t) = W(t) + 1
+     W(integrate t) = W(t) + 1
+     W(merge t1 t2) = W(t1) + W(t2) + 1
+     W(app t1 t2) = omega^{W(t2)} * W(t1) + W(t2) ... hmm, not sure.
+     
+     Actually, for primitive recursion, we want:
+     W(recΔ b s n) depends on W(n).
+     
+     Let's try:
+     W(recΔ b s n) = omega * W(n) + W(b) + W(s) + 1.
+     
+     Check R_rec_zero: recΔ b s void → b.
+     W(recΔ b s void) = omega * 1 + W(b) + W(s) + 1 = omega + W(b) + W(s) + 1.
+     W(b) = W(b).
+     Is omega + ... > W(b)? Yes, since omega is infinite.
+     So the weight decreases? No, we need the LHS to be larger.
+     omega + W(b) + W(s) + 1 > W(b). Good.
+     
+     Check R_rec_succ: recΔ b s (delta n) → app s (recΔ b s n).
+     W(LHS) = omega * W(delta n) + W(b) + W(s) + 1
+            = omega * (W(n) + 1) + W(b) + W(s) + 1
+            = omega * W(n) + omega + W(b) + W(s) + 1.
+     
+     W(RHS) = W(app s (recΔ b s n))
+            = W(s) + W(recΔ b s n) + 1  [assuming simple addition for app]
+            = W(s) + (omega * W(n) + W(b) + W(s) + 1) + 1
+            = omega * W(n) + W(b) + 2*W(s) + 2.
+     
+     Compare: omega * W(n) + omega + W(b) + W(s) + 1
+          vs: omega * W(n) + W(b) + 2*W(s) + 2
+     
+     The omega term on LHS (the omega * 1 from W(delta n) = W(n)+1 multiplied by the coefficient omega)
+     Actually: omega * (W(n) + 1) = omega * W(n) + omega.
+     Since omega is additive on the left but not right: omega * (n+1) = omega*n + omega.
+     
+     So we have omega * W(n) + omega on left.
+     On right: omega * W(n).
+     Since omega > any finite ordinal, and omega > 2*W(s) + 2 - W(s) - 1 = W(s) + 1,
+     we have LHS > RHS.
+     
+     Actually, omega * W(n) + omega is strictly greater than omega * W(n) + anything finite.
+     And RHS is omega * W(n) + (W(b) + 2W(s) + 2), which is omega * W(n) + finite.
+     So LHS > RHS.
+     
+     Great!
+     
+     Now check other rules:
+     R_int_delta: integrate (delta t) → void.
+     W(LHS) = W(delta t) + 1 = (W(t) + 1) + 1 = W(t) + 2.
+     W(RHS) = 1.
+     Decreases.
+     
+     R_merge_*: similar, decreases.
+     
+     R_eq_diff: eqW a b → integrate (merge a b).
+     W(LHS) = W(a) + W(b) + 1.
+     W(RHS) = W(merge a b) + 1 = W(a) + W(b) + 1 + 1 = W(a) + W(b) + 2.
+     This INCREASES by 1!
+     
+     Oh no! The measure increases.
+     
+     But wait, we also eliminate eqW.
+     Let me recalculate W(eqW a b):
+     If W(eqW a b) = W(a) + W(b) + 1,
+     and W(integrate (merge a b)) = 1 + (1 + W(a) + W(b)) = 2 + W(a) + W(b).
+     Yes, increases by 1.
+     
+     But eqW is bad. Let's give eqW a heavy weight.
+     Set W(eqW a b) = omega + W(a) + W(b).
+     Or actually, since eqW is eliminated and we want strict decrease:
+     
+     Actually, looking at R_eq_diff, we create integrate and merge.
+     The merge then reduces, etc.
+     
+     Better idea: since eqW is linear (just gets eliminated), we can handle it separately.
+     
+     Revised measure: First, count eqW. Lexicographic.
+     Among terms with same eqW count, use W.
+     
+     Or: W(eqW a b) = 1 + max(W(a), W(b)) * 2 or something that dominates the result.
+     
+     Actually, let's compute what eqW a b can become:
+     - void: size 1
+     - integrate (merge a b): size approx size(a)+size(b)+2.
+     
+     Set W(eqW a b) = omega + W(a) + W(b).
+     W(integrate (merge a b)) = 1 + (1 + W(a) + W(b)) = 2 + W(a) + W(b)).
+     Since omega > 2, this decreases.
+     
+     W(eqW a a) = omega + 2W(a).
+     W(void) = 1.
+     Decreases.
+     
+     So the measure works!
+     
+     With this ordinal measure (or a simplified version using pairs (number of eqW, W) lexicographically), we can show SN.
+     
+     Actually, we don't need ordinals. We can use:
+     Measure 1: number of eqW constructors.
+     Measure 2: for terms with no eqW, use the weight W defined as:
+       W(void) = 1
+       W(delta t) = W(t) + 1
+       W(integrate t) = W(t) + 2  [higher because R_int_delta decreases]
+       W(merge t1 t2) = W(t1) + W(t2) + 2
+       W(app t1 t2) = 2*W(t2) + W(t1) + 1
+       W(recΔ b s n) = 3*W(n) + W(b) + W(s) + 1
+     
+     Need to check that each rule decreases W.
+     
+     But the omega argument is cleaner: it shows the system is SN.
+     
+     Actually, looking at R_eq_diff with W(eqW a b) = 2^{W(a)+W(b)+10} or something...
+     
+     The key point: Yes, the system is strongly normalizing.
+     
+     The reasoning:
+     - No rule creates eqW; R_eq_* rules consume eqW. So only finitely many eqW reductions.
+     - With no eqW remaining, recΔ either reduces to base case, or recurses on structurally smaller third argument (removing delta), or gets stuck.
+     - delta is never created, only consumed.
+     - integrate and merge are "shallow" - they don't lead to infinite loops.
+     
+     Wait, I need to be more careful about "delta is never created".
+     Can reduction create delta?
+     merge void (delta t) → delta t.
+     This exposes delta t.
+     
+     But the number of delta constructors never increases (actually it can decrease via R_merge_cancel).
+     In merge void (delta t) → delta t, the count stays same.
+     In merge (delta t) void → delta t, count stays same.
+     In merge t t → t, count halves (roughly).
+     
+     For recΔ, when we have recΔ b s (delta n), we consume the outer delta.
+     The n might expose more deltas, but we can't get more deltas than were originally there.
+     
+     Since each R_rec_succ application requires a delta at the third argument position, and consumes it (reduces to n which is inside), and since the total number of deltas in the term is finite and doesn't increase, we can only apply R_rec_succ finitely many times.
+     
+     Actually, R_rec_succ increases the number of occurrences of s, which might contain deltas.
+     Example: s = delta void.
+     recΔ b (delta void) (delta n) → app (delta void) (recΔ b (delta void) n).
+     LHS has 2 + |n|_delta.
+     RHS has 1 + (|b|_delta + 1 + |n|_delta) = 1 + |b|_delta + 1 + |n|_delta.
+     If |b|_delta = 0, RHS has 2 + |n|_delta, same as LHS.
+     
+     But the recΔ in RHS has third argument n.
+     To apply R_rec_succ to it, we need n = delta n'.
+     We consume that delta.
+     So each application of R_rec_succ consumes one delta from the accessible position.
+     
+     The duplication of s means deltas in s are now in two places.
+     But s is fixed.
+     The recursion tree has branching factor, but finite depth.
+     
+     Actually, R_rec_succ creates app s (recΔ b s n).
+     The recΔ inside can fire if n is delta n'.
+     So we can have deep recursion.
+     
+     But the depth is bounded by the number of nested deltas in the original third argument.
+     Since we can't create new deltas (only move them around or duplicate existing subterms), the total "work" is bounded.
+     
+     Actually, with duplication, we can have exponential blowup, but still finite.
+     
+     Conclusion: The system is strongly normalizing.
+     
+     Wait, I should double-check: is there any way to have a cycle?
+     
+     Suppose we try: 
+     eqW a b → integrate (merge a b).
+     Can integrate (merge a b) reduce back to eqW c d?
+     No, eqW is not on any RHS.
+     
+     recΔ b s (delta n) → app s (recΔ b s n).
+     Can this reduce back to recΔ b' s' (delta n')?
+     app is a constructor with no rules.
+     So no.
+     
+     Therefore, no cycles.
+     And since the "active" constructors (eqW, recΔ with delta, integrate with delta, merge with void or same) are all "decreasing" in some sense, the system terminates.
+     
+     Yes, strong normalization holds.
+     
+     But I want to be absolutely sure about R_rec_succ.
+     recΔ b s (delta n) → app s (recΔ b s n)
+     
+     Suppose n contains recΔ. 
+     recΔ b s (delta (recΔ b' s' (delta n')))
+     → app s (recΔ b s (recΔ b' s' (delta n')))
+     
+     Now we have nested recΔ.
+     The inner recΔ can reduce:
+     → app s (recΔ b s (app s' (recΔ b' s' n')))
+     
+     Is there any issue? The inner recΔ is now at the third argument of the outer recΔ.
+     But the outer recΔ has third argument = app s' (...).
+     This is not of the form void or delta, so the outer recΔ is stuck.
+     
+     The inner one continues: if n' = delta n'', etc.
+     
+     So the nesting doesn't cause problems.
+     
+     What if s contains recΔ that can reduce and produce delta?
+     s is fixed, so its reduction is finite.
+     Once s is normalized, it stays.
+     
+     Actually, s can be anything.
+     But we apply induction on the term structure.
+     
+     Standard proof: The rewrite system is terminating because:
+     1. It is finitely branching (finite number of rules, finite number of redex positions).
+     2. There is no infinite reduction sequence.
+     
+     Proof by induction on a suitable measure.
+     
+     Define |t| as the pair:
+     - First component: number of eqW in t.
+     - Second component: weighted sum where recΔ and delta have high weight.
+     
+     Since eqW is never created, eventually no eqW.
+     Then the system without eqW is clearly terminating because:
+     - R_int_delta, R_merge_*, R_rec_zero all decrease size.
+     - R_rec_succ: recΔ b s (delta n) → app s (recΔ b s n).
+       This replaces recΔ with argument delta n by app containing recΔ with argument n.
+       The "delta" is removed from the third argument.
+       Define size of recΔ b s n as 1 + size(n).
+       Then LHS has third arg size 1+size(n), RHS has third arg size size(n).
+       The app wrapping adds constant overhead.
+       Lexicographic: (size of third arg of recΔ, total size).
+       
+     Actually, simple multisets work.
+     
+     I'll conclude: Yes, the system is strongly normalizable.
+     
+     Reason: 
+     - eqW constructors are never created and are removed by reduction.
+     - delta constructors are never created (no rule has delta as the outermost constructor of a RHS subterm that wasn't already in the LHS).
+     - R_rec_succ consumes one delta from the third argument position and places the remaining argument in a context where it can be further reduced, but the "depth" of nested deltas in the critical position decreases.
+     
+     More precisely: define the measure of a term as the multiset of depths of all eqW and all recΔ-with-delta-third-arg occurrences. Order multisets by the multiset ordering (which is well-founded).
+     
+     Actually, let's just say: The system admits a termination ordering based on lexicographic combinations of:
+     1. Number of eqW symbols (eliminated by R_eq_*).
+     2. For recΔ symbols with third argument of the form delta^n(...), the exponent n.
+     3. Standard size for the rest.
+     
+     Since no rule increases (1), and R_rec_succ decreases the delta-depth of its third argument while preserving the other measures, and other rules decrease size, the system is SN.
+     
+     Actually, R_rec_succ with s containing deltas... but s is duplicated, not the third argument.
+     The third argument loses its outer delta.
+     So the depth of the third argument in terms of leading deltas strictly decreases.
+     
+     Yes, SN holds.
+     
+     One final check: R_eq_diff.
+     eqW a b → integrate (merge a b).
+     This increases term size.
+     But eqW count decreases.
+     So in lex order (eqW count, size), this decreases.
+     
+     R_rec_succ: 
+     recΔ b s (delta n) → app s (recΔ b s n).
+     This increases size (adds app and duplicates s).
+     But the "leading delta count" in third argument decreases.
+     So (leading delta count in third arg, size) decreases lexicographically.
+     
+     And crucially, no rule increases leading delta count or creates eqW.
+     
+     Therefore, yes, SN holds.

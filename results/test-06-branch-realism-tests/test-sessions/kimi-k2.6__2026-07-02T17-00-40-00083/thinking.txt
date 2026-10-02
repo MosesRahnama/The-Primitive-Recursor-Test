@@ -1,0 +1,396 @@
+We have a Lean 4 file defining a rewrite system on a type Trace, with a measure kappa defined recursively, and two lemmas intended for a termination argument: kappa_rec_delta_step and kappa_rec_succ_drop.
+
+We need to assess whether the helper strategy is sound as written, supporting with calculations. We cannot modify or run the compiler. We need to reason manually.
+
+First, understand the definitions.
+
+Trace is an inductive type with constructors:
+- void
+- delta t
+- integrate t
+- merge a b
+- app a b
+- recDelta b s n (three arguments)
+- eqW a b
+
+Step is an inductive relation with rules:
+- R_int_delta: integrate (delta t) --> void
+- R_merge_void_left: merge void t --> t
+- R_merge_void_right: merge t void --> t
+- R_merge_cancel: merge t t --> t
+- R_rec_zero: recDelta b s void --> b
+- R_rec_succ: recDelta b s (delta n) --> app s (recDelta b s n)
+- R_eq_refl: eqW a a --> void
+- R_eq_diff: eqW a b --> integrate (merge a b)
+
+kappa is a function Trace -> Nat:
+- void => 0
+- delta t => kappa t
+- integrate t => kappa t
+- merge a b => max (kappa a) (kappa b)
+- app a b => max (kappa a) (kappa b)
+- recDelta b s (delta n) => max (max (kappa b) (kappa s)) (kappa n) + 1
+- recDelta b s n => max (max (kappa b) (kappa s)) (kappa n)
+- eqW a b => max (kappa a) (kappa b)
+
+Now the two lemmas:
+
+1. theorem kappa_rec_delta_step (b s n : Trace) :
+    kappa (recDelta b s (delta n)) = kappa (recDelta b s n) + 1
+
+2. theorem kappa_rec_succ_drop (b s n : Trace) :
+    kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n))
+
+The second is intended to show that the RHS of R_rec_succ has smaller kappa than the LHS, which would help prove termination of recDelta reductions.
+
+But note: kappa_rec_delta_step claims that adding a delta around n in the third argument of recDelta increments kappa by exactly 1. Let's verify.
+
+By definition:
+kappa (recDelta b s (delta n)) = max (max (kappa b) (kappa s)) (kappa (delta n)) + 1
+Since kappa (delta n) = kappa n, this is:
+= max (max (kappa b) (kappa s)) (kappa n) + 1
+
+Now what is kappa (recDelta b s n)? That depends on whether n is of the form delta something or not. But in general, the third argument is n. The definition of kappa for recDelta has two clauses:
+- recDelta b s (delta n) => max (max (kappa b) (kappa s)) (kappa n) + 1
+- recDelta b s n => max (max (kappa b) (kappa s)) (kappa n)
+
+Wait, the second clause is for any n that does not match delta n. But note that in Lean pattern matching, the first clause matches recDelta b s (delta n) for any n. The second clause matches recDelta b s n where n is not of the form delta _. But what if n is arbitrary? The second clause will match any n, but the first clause takes precedence when the third argument is a delta.
+
+So for a general n, kappa (recDelta b s n) is:
+- If n = delta n', then kappa = max (max (kappa b) (kappa s)) (kappa n') + 1
+- Else kappa = max (max (kappa b) (kappa s)) (kappa n)
+
+In the lemma kappa_rec_delta_step, we have:
+LHS = kappa (recDelta b s (delta n)) = max (max (kappa b) (kappa s)) (kappa n) + 1
+
+RHS = kappa (recDelta b s n) + 1. But what is kappa (recDelta b s n)? If n is arbitrary, we don't know if it's a delta or not. But the pattern in the lemma introduces n as a Trace, not necessarily non-delta. So kappa (recDelta b s n) could be either:
+- If n = delta n', then kappa (recDelta b s n) = max (max (kappa b) (kappa s)) (kappa n') + 1, so RHS = max (max (kappa b) (kappa s)) (kappa n') + 2. LHS = max (max (kappa b) (kappa s)) (kappa (delta n')) + 1 = max (max (kappa b) (kappa s)) (kappa n') + 1. Then LHS = RHS - 1, so the equality fails.
+
+Wait, the lemma is stated as:
+kappa (recDelta b s (delta n)) = kappa (recDelta b s n) + 1
+
+If n itself is a delta, then kappa (recDelta b s n) uses the first clause because n = delta n', so:
+kappa (recDelta b s n) = max (max (kappa b) (kappa s)) (kappa n') + 1
+Then RHS = max (max (kappa b) (kappa s)) (kappa n') + 2
+But LHS = kappa (recDelta b s (delta n)) = kappa (recDelta b s (delta (delta n'))) = max (max (kappa b) (kappa s)) (kappa (delta n')) + 1 = max (max (kappa b) (kappa s)) (kappa n') + 1
+So LHS = max ... + 1, RHS = max ... + 2. Not equal. So the lemma is false in general.
+
+But perhaps the intended use is for n not a delta? In the R_rec_succ rule, we have recDelta b s (delta n) steps to app s (recDelta b s n). Here n is the predecessor. In a typical recursor, n is some natural-number-like thing, but here the "number" is represented by nested delta constructors. In R_rec_succ, the third argument is delta n, and the recursive call uses n. So n could be void, delta void, delta (delta void), etc. In any case, n is the predecessor, so if the original is delta n, then n is the immediate subterm. But n might itself be a delta (if the original had two or more deltas). For example, if the original third argument is delta (delta void), then in the step, n = delta void. Then kappa (recDelta b s (delta n)) = kappa (recDelta b s (delta (delta void))) = max (max (kappa b)(kappa s))(kappa (delta void)) + 1 = max (max (kappa b)(kappa s))(kappa void) + 1 = max (max (kappa b)(kappa s)) 0 + 1.
+
+And kappa (recDelta b s n) = kappa (recDelta b s (delta void)) = max (max (kappa b)(kappa s))(kappa void) + 1 = same as above. So kappa (recDelta b s (delta n)) = X+1, kappa (recDelta b s n) = X+1, so RHS = X+2, LHS = X+1. So equality fails. Thus the lemma is false.
+
+But perhaps the lemma is intended to be proved by case analysis on n? No, it's stated as a general theorem. It cannot hold for all b,s,n. Let's check the pattern matching definition more carefully.
+
+The definition of kappa:
+```
+def kappa : Trace -> Nat
+| .void => 0
+| .delta t => kappa t
+| .integrate t => kappa t
+| .merge a b => Nat.max (kappa a) (kappa b)
+| .app a b => Nat.max (kappa a) (kappa b)
+| .recDelta b s (.delta n) => Nat.max (Nat.max (kappa b) (kappa s)) (kappa n) + 1
+| .recDelta b s n => Nat.max (Nat.max (kappa b) (kappa s)) (kappa n)
+| .eqW a b => Nat.max (kappa a) (kappa b)
+```
+
+This is a standard pattern match. The first recDelta clause matches when the third argument is a delta. The second matches any other third argument.
+
+Now, consider kappa (recDelta b s n). If n is a delta, the value is max(max(kappa b)(kappa s))(kappa n') + 1 where n = delta n'. If n is not a delta, it's max(max(kappa b)(kappa s))(kappa n).
+
+Consider kappa (recDelta b s (delta n)). The third argument is delta n. So it always matches the first clause. Its value is max(max(kappa b)(kappa s))(kappa n) + 1.
+
+Now kappa (recDelta b s n) + 1:
+Case 1: n is not a delta. Then kappa (recDelta b s n) = max(max(kappa b)(kappa s))(kappa n). So RHS = max(max(kappa b)(kappa s))(kappa n) + 1. LHS = max(max(kappa b)(kappa s))(kappa n) + 1. So equality holds in this case.
+
+Case 2: n is a delta, say n = delta n'. Then kappa (recDelta b s n) = max(max(kappa b)(kappa s))(kappa n') + 1. So RHS = max(max(kappa b)(kappa s))(kappa n') + 2. LHS = kappa (recDelta b s (delta n)) = kappa (recDelta b s (delta (delta n'))) = max(max(kappa b)(kappa s))(kappa (delta n')) + 1 = max(max(kappa b)(kappa s))(kappa n') + 1. So LHS = X+1, RHS = X+2. Not equal.
+
+Thus the lemma fails when n is a delta. Since n is arbitrary Trace, the lemma is false.
+
+Now the second lemma:
+kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n))
+
+Compute LHS: kappa (app s (recDelta b s n)) = max (kappa s) (kappa (recDelta b s n)).
+
+RHS: kappa (recDelta b s (delta n)) = max(max(kappa b)(kappa s))(kappa n) + 1.
+
+Now we need to see if max(kappa s, kappa(recDelta b s n)) < max(max(kappa b)(kappa s))(kappa n) + 1 always holds.
+
+Again, consider cases for n.
+
+Case A: n is not a delta.
+Then kappa (recDelta b s n) = max(max(kappa b)(kappa s))(kappa n).
+So LHS = max(kappa s, max(max(kappa b)(kappa s))(kappa n)).
+Since max(max(kappa b)(kappa s))(kappa n) >= kappa s (because max(kappa b)(kappa s) >= kappa s, and then max with kappa n is >= that), we have LHS = max(max(kappa b)(kappa s))(kappa n).
+RHS = max(max(kappa b)(kappa s))(kappa n) + 1.
+Thus LHS < RHS holds (strictly less by 1). Good.
+
+Case B: n is a delta, say n = delta n'.
+Then kappa (recDelta b s n) = max(max(kappa b)(kappa s))(kappa n') + 1.
+LHS = max(kappa s, max(max(kappa b)(kappa s))(kappa n') + 1).
+RHS = max(max(kappa b)(kappa s))(kappa n) + 1 = max(max(kappa b)(kappa s))(kappa (delta n')) + 1 = max(max(kappa b)(kappa s))(kappa n') + 1.
+
+Let X = max(max(kappa b)(kappa s))(kappa n'). Then RHS = X + 1.
+kappa (recDelta b s n) = X + 1.
+LHS = max(kappa s, X+1).
+Now X = max(max(kappa b)(kappa s))(kappa n') >= max(kappa b)(kappa s) >= kappa s.
+So X >= kappa s. Then X+1 > kappa s. So max(kappa s, X+1) = X+1.
+Thus LHS = X+1, RHS = X+1. So LHS < RHS is false; it's equal. So the strict inequality fails when n is a delta.
+
+But wait: is X+1 always > kappa s? Yes, because X >= max(kappa b)(kappa s) >= kappa s. If kappa s = 0, X could be 0? Let's see: max(kappa b, kappa s) >= kappa s. Then X = max(max(kappa b, kappa s), kappa n') >= max(kappa b, kappa s) >= kappa s. So X >= kappa s. Then X+1 > kappa s unless X is something and kappa s is something. Actually, max(kappa s, X+1) = X+1 because X+1 > X >= kappa s. So indeed LHS = X+1.
+
+Thus LHS = RHS, so the strict inequality does not hold.
+
+Wait, could there be a case where n is a delta but kappa (recDelta b s n) is computed differently? No, the definition is clear.
+
+Therefore, both lemmas are false as stated, because they fail when the predecessor n is itself a delta (i.e., when the original third argument has at least two nested deltas).
+
+But perhaps the intention is that the third argument of recDelta represents a natural number encoded as nested deltas: zero is void, successor is delta. In that case, in R_rec_succ, n would be the predecessor, which could be any trace (including a delta), but the "natural numbers" are only those built from void and delta. However, the type Trace includes many other constructs, but the step relation is defined for any trace.
+
+If we restrict to n being a "natural number" i.e., a chain of deltas ending in void, then n could still be a delta (if the original is successor of successor of zero). So the counterexample still applies: let n = delta void. Then original is delta (delta void). Then:
+
+kappa (recDelta b s (delta (delta void))) = max(max(kappa b)(kappa s))(kappa void) + 1 = max(max(kappa b)(kappa s)) 0 + 1.
+
+kappa (recDelta b s (delta void)) = max(max(kappa b)(kappa s))(kappa void) + 1 = same.
+
+Then kappa_rec_delta_step claims:
+LHS = same = X+1.
+RHS = kappa (recDelta b s (delta void)) + 1 = (X+1) + 1 = X+2.
+So false.
+
+And kappa_rec_succ_drop:
+LHS = kappa (app s (recDelta b s (delta void))) = max(kappa s, kappa (recDelta b s (delta void))) = max(kappa s, X+1) = X+1 (since X >= kappa s).
+RHS = X+1.
+So LHS < RHS is false.
+
+Thus the helper strategy is unsound as written.
+
+But maybe I misread the pattern matching for kappa. Let's double-check the Lean pattern matching semantics. In Lean, the order of patterns matters. The definition:
+
+```
+| .recDelta b s (.delta n) => ...
+| .recDelta b s n => ...
+```
+
+Yes, the first matches recDelta with third argument being delta n. The second matches any third argument (including void, integrate, etc.). So my analysis holds.
+
+Now, the question: "Assess whether the helper strategy is sound as written. Support your conclusion with any necessary calculations."
+
+Thus I need to explain that the strategy is unsound because the lemmas do not hold in general, providing explicit counterexamples. The counterexample can be constructed with n = delta void and arbitrary b, s (say void).
+
+Let's compute concrete values to make it clear.
+
+Let b = void, s = void, n = delta void.
+
+Compute kappa values:
+
+kappa void = 0.
+
+kappa (delta void) = kappa void = 0.
+
+kappa (recDelta void void (delta (delta void))) = max(max(kappa void, kappa void), kappa void) + 1 = max(max(0,0),0)+1 = 0+1 = 1.
+
+kappa (recDelta void void (delta void)) = max(max(0,0),0)+1 = 1.
+
+kappa (recDelta void void (delta void)) + 1 = 2.
+
+So kappa_rec_delta_step would claim 1 = 2, false.
+
+For the second lemma:
+
+kappa (app void (recDelta void void (delta void))) = max(kappa void, kappa (recDelta void void (delta void))) = max(0,1) = 1.
+
+RHS: kappa (recDelta void void (delta (delta void))) = 1.
+
+So 1 < 1 is false.
+
+Thus the lemmas are false.
+
+But is there any way the lemmas could be true under some other interpretation? Perhaps if kappa_rec_delta_step is only meant to be used when n is not a delta? But the theorem statement doesn't have that hypothesis. In Lean, you cannot prove it without additional assumptions. The file has `sorry` placeholders, indicating the author intended to prove them but maybe didn't realize the issue.
+
+Could the author have meant to define kappa differently? For example, maybe kappa on recDelta should be defined as the max plus the number of delta constructors in the third argument? But as written, it's +1 only when the third argument is syntactically a delta.
+
+Alternatively, maybe the author intended `kappa_rec_delta_step` to hold for all n, but thought that kappa (recDelta b s n) would be the "non-delta" case even if n is a delta? But pattern matching contradicts that.
+
+Thus the helper strategy is unsound.
+
+But let's be thorough: could the second lemma be true even if the first is false? The second lemma's proof is:
+
+```
+rw [kappa_rec_delta_step]
+sorry
+```
+
+After rewriting with kappa_rec_delta_step, the goal becomes:
+
+kappa (app s (recDelta b s n)) < kappa (recDelta b s n) + 1
+
+So we need to show kappa (app s (recDelta b s n)) <= kappa (recDelta b s n), because strict inequality with +1 on RHS is equivalent to LHS <= RHS (since Nat). Actually, in natural numbers, X < Y + 1 iff X <= Y. So the goal becomes:
+
+kappa (app s (recDelta b s n)) <= kappa (recDelta b s n)
+
+Compute LHS: max (kappa s) (kappa (recDelta b s n)).
+
+So we need max (kappa s) (kappa (recDelta b s n)) <= kappa (recDelta b s n).
+
+This holds if and only if kappa s <= kappa (recDelta b s n).
+
+Is that always true? Let's check.
+
+kappa (recDelta b s n) is either:
+- If n = delta n': max(max(kappa b)(kappa s))(kappa n') + 1 >= max(kappa b)(kappa s) >= kappa s.
+- If n not delta: max(max(kappa b)(kappa s))(kappa n) >= max(kappa b)(kappa s) >= kappa s.
+
+So yes, kappa (recDelta b s n) >= kappa s always. Thus max(kappa s, kappa(recDelta b s n)) = kappa (recDelta b s n). So the inequality after rewriting would be:
+
+kappa (recDelta b s n) < kappa (recDelta b s n) + 1, which is true.
+
+Wait! Let's re-evaluate.
+
+If kappa_rec_delta_step were true, then after rewriting, the goal becomes:
+
+kappa (app s (recDelta b s n)) < kappa (recDelta b s n) + 1.
+
+Since kappa (app s (recDelta b s n)) = max (kappa s) (kappa (recDelta b s n)).
+
+As argued, kappa (recDelta b s n) >= kappa s. So max = kappa (recDelta b s n). Then we need:
+
+kappa (recDelta b s n) < kappa (recDelta b s n) + 1, which is true.
+
+So if kappa_rec_delta_step were true, the second lemma would follow easily. But kappa_rec_delta_step is false. However, note that the second lemma itself might still be true even if the first is false, but the proof strategy uses the first. The question asks: "Assess whether the helper strategy is sound as written." That likely refers to the overall approach: can these two lemmas be used to prove termination? The first lemma is false, so the strategy fails.
+
+But let's double-check: is the second lemma actually true? Let's test with the counterexample above: b=void, s=void, n=delta void.
+
+LHS: kappa (app void (recDelta void void (delta void))) = max(0, 1) = 1.
+RHS: kappa (recDelta void void (delta (delta void))) = 1.
+So 1 < 1 is false. So the second lemma is also false in general.
+
+Thus both lemmas are false.
+
+Wait, earlier I computed kappa (recDelta void void (delta (delta void))) = max(max(0,0),kappa void)+1 = max(0,0)+1 = 1. Yes.
+
+And kappa (recDelta void void (delta void)) = max(max(0,0),kappa void)+1 = 1. So LHS = max(0,1) = 1. RHS = 1. So indeed false.
+
+If I choose b and s such that kappa b or kappa s is larger, does it change? Let's try b = delta void, s = void, n = delta void.
+
+kappa b = 0. kappa s = 0.
+kappa n = kappa (delta void) = 0.
+
+kappa (recDelta b s (delta n)) = kappa (recDelta (delta void) void (delta (delta void))) = max(max(0,0),0)+1 = 1.
+kappa (app s (recDelta b s n)) = kappa (app void (recDelta (delta void) void (delta void))) = max(0,1) = 1.
+So again 1 < 1 false.
+
+Try b = void, s = delta void, n = delta void.
+kappa b = 0, kappa s = 0.
+kappa (recDelta b s (delta n)) = max(max(0,0),0)+1 = 1.
+kappa (app s (recDelta b s n)) = max(0,1) = 1.
+Same.
+
+Try b = void, s = void, n = void.
+Then n is not delta.
+kappa (recDelta void void (delta void)) = 1.
+kappa (app void (recDelta void void void)) = max(0, kappa (recDelta void void void)).
+kappa (recDelta void void void) = max(max(0,0),0) = 0.
+So LHS = 0, RHS = 1. 0 < 1 true.
+
+So it holds when n is not a delta, but fails when n is a delta.
+
+Therefore, the lemmas need a side condition that n is not a delta (or more generally, the third argument of recDelta is not of the form delta (delta ...)). But even then, for the recursor to terminate, we need to handle all cases. Actually, the step relation reduces recDelta b s (delta n) to app s (recDelta b s n). If n is itself a delta, then the recursive call is on a delta, which is fine, but we need the measure to decrease. The measure kappa as defined does not decrease in that case because adding a delta to the third argument only adds 1 if the third argument is a delta, but if it's already a delta, then the recursive call also has a delta and gets +1.
+
+Wait, let's think about the measure on the "number" argument. The recDelta measure seems to be designed to be the depth of the delta chain in the third argument? But actually, kappa (recDelta b s n) is max(max(kappa b)(kappa s))(kappa n) plus 1 if n is a delta. So if n is a chain of k deltas, kappa (recDelta b s n) = max(max(kappa b)(kappa s))(0) + (1 if n has at least one delta? No, it's +1 only for the outermost delta. Wait, let's compute:
+
+Let n = void: kappa = max(max(kappa b)(kappa s))(0) = max(kappa b)(kappa s).
+Let n = delta void: kappa = max(max(kappa b)(kappa s))(kappa void) + 1 = max(kappa b)(kappa s) + 1? Not exactly: max(max(kappa b)(kappa s), 0) = max(kappa b)(kappa s). So yes, +1.
+Let n = delta (delta void): kappa = max(max(kappa b)(kappa s))(kappa (delta void)) + 1 = max(max(kappa b)(kappa s), 0) + 1 = max(kappa b)(kappa s) + 1.
+Wait! Because the +1 is only for the outermost delta. The inner delta doesn't add anything because kappa (delta void) = kappa void = 0, and the pattern match for recDelta only checks if the immediate third argument is delta. So kappa (recDelta b s (delta (delta void))) = max(max(kappa b)(kappa s))(kappa (delta void)) + 1 = max(max(kappa b)(kappa s), 0) + 1 = M + 1, where M = max(kappa b)(kappa s). And kappa (recDelta b s (delta void)) = max(max(kappa b)(kappa s))(kappa void) + 1 = M + 1. So both have the same kappa! That means kappa does not distinguish between successor and successor of successor; it only checks if the third argument is a successor at all.
+
+Thus kappa is not a good measure for recursion depth of the recDelta rewrite. The author might have intended to define kappa recursively on the third argument to count the number of deltas, but the pattern match only sees one level.
+
+For example, if they wanted kappa (recDelta b s n) = max(max(kappa b)(kappa s))(depth(n)), where depth counts delta nesting, they would need a helper function. But as written, kappa n is not depth; it's something else (it collapses deltas). Actually, kappa n for a chain of k deltas is 0 because delta preserves kappa. So kappa doesn't count deltas at all. The +1 in the recDelta clause is the only place where delta matters, and it's just a binary flag: is the third argument a delta? If yes, +1; else +0. So kappa (recDelta b s n) is either M or M+1 depending on whether n is a delta.
+
+Therefore, the measure cannot decrease on R_rec_succ when n is a delta, because both the original (delta n) and the recursive call (n) are deltas, so both have the +1. So the RHS and LHS have the same kappa.
+
+Wait, compute again:
+
+LHS of step: recDelta b s (delta n). This is a recDelta with third argument = delta n. So kappa = max(max(kappa b)(kappa s))(kappa n) + 1.
+
+RHS of step: app s (recDelta b s n). kappa = max(kappa s)(kappa (recDelta b s n)).
+
+Now kappa (recDelta b s n) = if n is delta then max(max(kappa b)(kappa s))(kappa n') + 1 else max(max(kappa b)(kappa s))(kappa n).
+
+If n is not a delta: kappa (recDelta b s n) = max(max(kappa b)(kappa s))(kappa n). Then kappa RHS = max(kappa s, max(max(kappa b)(kappa s))(kappa n)). Since max(kappa b)(kappa s) >= kappa s, the max is max(max(kappa b)(kappa s))(kappa n) = kappa (recDelta b s n). So kappa RHS = M where M = max(max(kappa b)(kappa s))(kappa n). LHS = M + 1. So RHS < LHS. Good.
+
+If n is a delta, say n = delta n': kappa (recDelta b s n) = max(max(kappa b)(kappa s))(kappa n') + 1. Let's call this M' + 1, where M' = max(max(kappa b)(kappa s))(kappa n'). Then kappa RHS = max(kappa s, M'+1). Since M' >= max(kappa b)(kappa s) >= kappa s, we have M'+1 > kappa s, so kappa RHS = M'+1. LHS = kappa (recDelta b s (delta n)) = max(max(kappa b)(kappa s))(kappa n) + 1 = max(max(kappa b)(kappa s))(kappa (delta n')) + 1 = max(max(kappa b)(kappa s))(kappa n') + 1 = M' + 1. So RHS = M'+1, LHS = M'+1. They are equal. So the measure does not decrease; it stays the same.
+
+Thus the rewrite step R_rec_succ does not decrease kappa when n is a delta. Since the step can be applied again on the subterm recDelta b s n if n is a delta, we need the measure to decrease strictly for well-foundedness. Since it doesn't, kappa is not a decreasing measure for the recDelta rewrite.
+
+Therefore, the helper strategy is unsound. The lemmas are false, and the measure fails to decrease in the case where the predecessor is itself a delta.
+
+One might think: is there a way to salvage it by adding a hypothesis that n is not a delta? But the rewrite system doesn't restrict n; it works for any trace. Even if we restrict to "well-formed" numeric traces (void or delta of a number), n can be delta void (which is the number 1), and then recDelta b s (delta (delta void)) rewrites to app s (recDelta b s (delta void)), and kappa stays the same. So termination cannot be proved using this measure.
+
+Wait, but maybe the system is not intended to be terminating for all traces, only for some subset? The question is about the helper strategy for a termination argument. The file is given as is. The strategy is to use kappa as a measure and prove these two lemmas to show that R_rec_succ decreases kappa. Since it doesn't always decrease, the strategy is unsound.
+
+Let's structure the answer:
+
+1. Briefly describe what the lemmas claim.
+2. Show that kappa_rec_delta_step fails when n is a delta. Provide a concrete counterexample: b = void, s = void, n = delta void.
+   - Compute kappa (recDelta void void (delta (delta void))) = 1.
+   - Compute kappa (recDelta void void (delta void)) = 1.
+   - LHS = 1, RHS = 1 + 1 = 2. 1 ≠ 2.
+3. Show that kappa_rec_succ_drop also fails for the same counterexample.
+   - LHS = kappa (app void (recDelta void void (delta void))) = max(0,1) = 1.
+   - RHS = 1.
+   - 1 < 1 is false.
+4. Explain the root cause: kappa's definition for recDelta adds 1 only when the third argument is syntactically a delta, but does not recursively count nesting. Thus when n is already a delta, both the original term recDelta b s (delta n) and the recursive call recDelta b s n fall into the +1 branch, giving them the same weight. Consequently, the app node on the RHS has the same kappa as the LHS.
+5. Conclude that the helper strategy is unsound as written. The measure kappa does not strictly decrease on the R_rec_succ step when the predecessor is a delta. To fix it, one would need a measure that actually counts the number of delta constructors in the third argument (or a lexicographic measure), not just whether it is a delta.
+
+We can also discuss whether the first lemma is "almost true" except for the nested delta case. But the point is it's false as a general theorem.
+
+The question says "Assess whether the helper strategy is sound as written. Support your conclusion with any necessary calculations." So we should be clear: unsound.
+
+Double-check: could there be any subtlety about Lean's pattern matching that I'm missing? For instance, in the definition of kappa, the clause `.recDelta b s (.delta n)` matches only when the third argument is a delta. The next clause `.recDelta b s n` matches any other. That's correct.
+
+Could the lemma kappa_rec_delta_step be saved by doing induction on n? No, because it's a universal statement. It would need to be proven for all n. The counterexample shows it's false.
+
+Could the lemma be interpreted as `kappa_rec_delta_step` being a local lemma where n is not a delta? But there is no such hypothesis. So unsound.
+
+Thus the answer is that the strategy is unsound.
+
+Let's write the final answer clearly.
+
+We should present the calculations explicitly.
+
+Counterexample:
+Let b := void, s := void, n := delta void.
+
+Compute relevant kappa values:
+
+- kappa void = 0.
+- kappa (delta void) = kappa void = 0.
+
+For the first lemma:
+- LHS: kappa (recDelta void void (delta (delta void))) = max(max(0,0), kappa void) + 1 = max(0,0) + 1 = 1.
+- RHS: kappa (recDelta void void (delta void)) + 1 = (max(max(0,0), kappa void) + 1) + 1 = (0 + 1) + 1 = 2.
+- 1 = 2 is false.
+
+For the second lemma:
+- LHS: kappa (app void (recDelta void void (delta void))) = max(kappa void, kappa (recDelta void void (delta void))) = max(0, 1) = 1.
+- RHS: kappa (recDelta void void (delta (delta void))) = 1.
+- 1 < 1 is false.
+
+General analysis:
+- For arbitrary b, s, and n not a delta:
+  - kappa (recDelta b s (delta n)) = M + 1 where M = max(max(kappa b)(kappa s))(kappa n).
+  - kappa (recDelta b s n) = M.
+  - So first lemma holds, and second lemma becomes max(kappa s, M) < M+1, which holds because M >= kappa s.
+- But when n = delta n':
+  - kappa (recDelta b s (delta n)) = max(max(kappa b)(kappa s))(kappa n') + 1.
+  - kappa (recDelta b s n) = max(max(kappa b)(kappa s))(kappa n') + 1.
+  - So both sides have the same value, and the strict inequality fails.
+- Root cause: kappa only checks if the third argument is an immediate delta, not the depth of delta nesting. So it acts as a boolean flag rather than a counter. Therefore it cannot serve as a decreasing measure for the recursive step.
+
+Thus the helper strategy is unsound.
+
+One more check: the problem says "Do not modify the file or run the compiler. Do not read any other files in the workspace or search the web." So we are just doing static analysis. Good.
+
+I think I have all the points. I'll write the final answer.

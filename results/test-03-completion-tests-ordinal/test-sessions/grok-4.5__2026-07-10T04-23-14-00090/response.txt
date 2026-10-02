@@ -1,0 +1,271 @@
+## Proof skeletons for the three remaining cases
+
+The three open cases are `R_rec_succ`, `R_eq_refl`, and `R_eq_diff`. Below are proof skeletons (Lean tactics + the key ordinal facts they rely on). They are written so they can be dropped in place of the existing `sorry`s; a few steps are left as named subgoals / comments where Mathlib lemma names vary by version.
+
+---
+
+### 1. `R_eq_refl` — routine positivity
+
+```lean
+| _, _, Step.R_eq_refl a => by
+  simp [mu]
+  -- Goal: 0 < ω^(μ a + μ a + 9) + 1
+  exact add_pos_right _ one_pos
+```
+
+(Alternative, matching the style of `R_int_delta`:)
+
+```lean
+| _, _, Step.R_eq_refl a => by
+  simp [mu]
+  exact Ordinal.pos_iff_ne_zero.mpr (ne_of_gt (add_pos_right _ one_pos))
+```
+
+---
+
+### 2. `R_eq_diff` — bound the integrate/merge polynomial by the eqW exponential
+
+```lean
+| _, _, Step.R_eq_diff a b => by
+  simp only [mu]
+  -- Goal:
+  --   ω⁴ * (ω³*(μa+1) + ω²*(μb+1) + 2) + 1
+  --     < ω^(μa+μb+9) + 1
+  rw [add_lt_add_iff_right]  -- strip trailing +1
+  -- Distribute ω⁴:
+  have hexpand :
+      omega0^(4:Ordinal) *
+        (omega0^(3:Ordinal)*(mu a + 1) +
+         omega0^(2:Ordinal)*(mu b + 1) + 2) =
+      omega0^(7:Ordinal)*(mu a + 1) +
+      omega0^(6:Ordinal)*(mu b + 1) +
+      omega0^(4:Ordinal)*2 := by
+    rw [mul_add, mul_add, ← mul_assoc, ← mul_assoc, ← opow_add, ← opow_add]
+    norm_num  -- 4+3=7, 4+2=6
+  rw [hexpand]
+  set δ : Ordinal := omega0 ^ (mu a + mu b + (9:Ordinal))
+  -- δ is additively principal (exponent ≥ 9 > 0)
+  have hprinc : IsAddPrincipal δ := by
+    apply omega0_opow_isAddPrincipal
+    exact (Nat.cast_le.mpr (by norm_num : (0:ℕ) ≤ 9)).trans_lt
+            (lt_add_of_pos_right _ (by exact_mod_cast (by norm_num : (0:ℕ) < 9)))
+    -- (or any proof that 0 < μa+μb+9)
+
+  -- Fact used below: ∀ α, α + 1 < ω^(α + 2)
+  have abs_lt_opow (α : Ordinal) : α + 1 < omega0 ^ (α + 2) := by
+    have h1 : α + 1 ≤ omega0 ^ (α + 1) := le_opow_self omega0_one_le _
+    have h2 : omega0 ^ (α + 1) < omega0 ^ (α + 1) * omega0 :=
+      (lt_mul_of_one_lt_right (opow_pos _ omega0_pos) one_lt_omega0)
+    calc α + 1 ≤ omega0 ^ (α + 1) := h1
+      _ < omega0 ^ (α + 1) * omega0 := h2
+      _ = omega0 ^ (α + 2) := by rw [← opow_succ]; simp [add_assoc]
+        -- or: rw [← opow_add]; simp
+
+  -- Term 1: ω⁷*(μa+1) < δ
+  have ht1 : omega0^(7:Ordinal) * (mu a + 1) < δ := by
+    have : mu a + 1 < omega0 ^ (mu a + 2) := abs_lt_opow (mu a)
+    calc omega0^7 * (mu a + 1)
+        < omega0^7 * omega0^(mu a + 2) :=
+            mul_lt_mul_of_pos_left this (opow_pos _ omega0_pos)
+      _ = omega0^(7 + (mu a + 2)) := (opow_mul_opow_le …).symm ▸ …  -- ← opow_add
+      _ = omega0^(mu a + 9) := by abel  -- or ring/simp on exponents
+      _ ≤ omega0^(mu a + mu b + 9) :=
+            opow_le_opow_right omega0_pos (le_add_right _ _)
+    -- first step is strict, so overall < δ even when μb = 0
+
+  -- Term 2: ω⁶*(μb+1) < δ
+  have ht2 : omega0^(6:Ordinal) * (mu b + 1) < δ := by
+    have : mu b + 1 < omega0 ^ (mu b + 2) := abs_lt_opow (mu b)
+    calc omega0^6 * (mu b + 1)
+        < omega0^6 * omega0^(mu b + 2) :=
+            mul_lt_mul_of_pos_left this (opow_pos _ omega0_pos)
+      _ = omega0^(mu b + 8) := by rw [← opow_add]; abel
+      _ < omega0^(mu a + mu b + 9) :=
+            opow_lt_opow_right_of_lt omega0_lt_one.ne'
+              (by
+                -- μb+8 < μa+μb+9 ↔ 8 < μa+9 ↔ 0 < μa+1
+                apply lt_add_of_pos_right
+                exact succ_pos _)
+
+  -- Term 3: ω⁴*2 < δ
+  have ht3 : omega0^(4:Ordinal) * 2 < δ := by
+    calc omega0^4 * 2
+        < omega0^4 * omega0 :=
+            mul_lt_mul_of_pos_left (nat_lt_omega0 2) (opow_pos _ omega0_pos)
+      _ = omega0^5 := by rw [← opow_succ]; simp
+      _ < omega0^(mu a + mu b + 9) :=
+            opow_lt_opow_right_of_lt omega0_lt_one.ne'
+              (by
+                -- 5 < μa+μb+9 always
+                apply lt_of_lt_of_le (by exact_mod_cast (by norm_num : (5:ℕ) < 9))
+                exact le_add_of_nonneg_left (Ordinal.zero_le _))
+
+  -- Sum of three terms, each < δ, and δ additively principal
+  have hsum :=
+    hprinc.add_lt (hprinc.add_lt ht1 ht2) ht3
+  exact hsum
+```
+
+**Core idea:** expand the left-hand side into three CNF-like summands `ω⁷(μa+1) + ω⁶(μb+1) + ω⁴·2`, bound each strictly below `δ = ω^(μa+μb+9)` via `α+1 < ω^(α+2)` and monotonicity of `ω^(-)`, then close under additive principality of `ω^ε` for `ε > 0`. The constant `9` is exactly large enough for the exponent arithmetic (`7+2 = 9`, `6+2 = 8 < 9`, `5 < 9`).
+
+---
+
+### 3. `R_rec_succ` — dominate the `app` polynomial by the raised `recDelta` exponent
+
+```lean
+| _, _, Step.R_rec_succ b s n => by
+  simp only [mu]
+  -- After simp, goal is essentially
+  --   μ(app s (recDelta b s n)) < μ(recDelta b s (delta n))
+  -- i.e.
+  --   ω³(μs+1) + ω²( μ(recDelta b s n) + 1 ) + 1
+  --     < ω^(μ(delta n) + μs + 6) + ω(μb+1) + 1
+  --
+  -- Unfold μ(delta n) = ω⁵(μn+1) + 1 and μ(recDelta b s n):
+  --   RHS_exp  E := ω⁵(μn+1) + μs + 7
+  --   LHS = ω³(μs+1)
+  --       + ω²( ω^(μn+μs+6) + ω(μb+1) + 2 ) + 1
+  --       = ω³(μs+1) + ω^(μn+μs+8) + ω³(μb+1) + 2·ω² + 1
+  --   RHS = ω^E + ω(μb+1) + 1
+
+  set μn := mu n
+  set μs := mu s
+  set μb := mu b
+  set E  : Ordinal := omega0^(5:Ordinal) * (μn + 1) + μs + 7
+  set e0 : Ordinal := μn + μs + 6
+
+  -- Strip trailing +1 on both sides
+  rw [add_lt_add_iff_right]
+
+  -- Expand the app measure
+  have hLHS :
+      omega0^(3:Ordinal)*(μs + 1) +
+      omega0^(2:Ordinal) *
+        (omega0^e0 + omega0*(μb + 1) + 2) =
+      omega0^(3:Ordinal)*(μs + 1) +
+      omega0^(e0 + 2) +
+      omega0^(3:Ordinal)*(μb + 1) +
+      omega0^(2:Ordinal)*2 := by
+    rw [mul_add, mul_add, ← opow_mul_opow_comm_of …]  -- ω² * ω^e0 = ω^(e0+2)
+    simp [← mul_assoc, ← opow_add]
+    abel  -- rearrange summands if needed
+
+  -- It is enough to show LHS < ω^E  (≤ RHS), or handle the μb-leading case.
+  -- Strategy: show every summand of LHS is < RHS, then use
+  -- additive principality / CNF comparison.
+
+  -- Key exponent comparison: e0 + 2 < E
+  have hexp : e0 + 2 < E := by
+    -- μn + μs + 8 < ω⁵(μn+1) + μs + 7
+    -- ↔ μn + 1 < ω⁵(μn+1)
+    have h : μn + 1 < omega0^(5:Ordinal) * (μn + 1) := by
+      have hpos : (0:Ordinal) < μn + 1 := succ_pos _
+      have hω : (1:Ordinal) < omega0^(5:Ordinal) := by
+        rw [← opow_one omega0]
+        exact opow_lt_opow_right_of_lt omega0_lt_one.ne' (by norm_num)
+      -- 1 * β < ω⁵ * β for β > 0, using one_lt and mul_lt_mul_of_pos_right
+      simpa using mul_lt_mul_of_pos_right hω hpos
+    -- finish with add/cancel on both sides of the inequality
+    calc e0 + 2 = μn + μs + 8 := by abel
+      _ = (μn + 1) + (μs + 7) := by abel
+      _ < omega0^5 * (μn + 1) + (μs + 7) :=
+            (add_lt_add_iff_right _).mpr h
+      _ = E := rfl
+
+  -- Bound the four summands of LHS
+  have h1 : omega0^(3:Ordinal)*(μs + 1) < omega0^E := by
+    -- μs+1 < ω^(E-3) style bound; since E ≥ ω⁵, use
+    -- μs + 1 < ω^(μs + 2) ≤ ω^E
+    have : μs + 1 < omega0 ^ (μs + 2) := by
+      -- same abs_lt_opow lemma as in R_eq_diff
+      sorry -- (copy abs_lt_opow from above)
+    calc omega0^3 * (μs + 1)
+        < omega0^3 * omega0^(μs + 2) :=
+            mul_lt_mul_of_pos_left this (opow_pos _ omega0_pos)
+      _ = omega0^(μs + 5) := by rw [← opow_add]; abel
+      _ < omega0^E := opow_lt_opow_right_of_lt omega0_lt_one.ne'
+            (by
+              -- μs+5 < ω⁵(μn+1)+μs+7 ↔ 5 < ω⁵(μn+1)+7
+              apply lt_add_of_lt_right
+              exact nat_lt_omega0 5 |>.trans_le (le_mul_left _ (by …)))
+
+  have h2 : omega0^(e0 + 2) < omega0^E :=
+    opow_lt_opow_right_of_lt omega0_lt_one.ne' hexp
+
+  have h3 : omega0^(3:Ordinal)*(μb + 1) <
+              omega0^E + omega0*(μb + 1) := by
+    -- This is the delicate summand.
+    -- Split on whether ω³(μb+1) is absorbed by ω^E or by ω(μb+1).
+    --
+    -- Subcase A: ω³(μb+1) < ω^E  → done by le_add_right.
+    -- Subcase B: ω^E ≤ ω³(μb+1).
+    --   Then also compare against ω(μb+1): need a tighter
+    --   global argument (e.g. show that if μb is large enough
+    --   for this subcase, the original RHS still dominates
+    --   because E itself contains ω⁵(μn+1), or re-prove by
+    --   writing both sides in Cantor normal form and comparing
+    --   leading coefficients).
+    --
+    -- Practical skeleton:
+    by_cases h : omega0^(3:Ordinal)*(μb + 1) < omega0^E
+    · exact h.trans_le (le_add_right _ _)
+    · -- leading-μb case: push into CNF comparison of full RHS
+      push_neg at h
+      -- Goal becomes a CNF inequality;
+      -- use add_absorp / principal facts:
+      --   ω³(μb+1) < ω^E + ω(μb+1)   may require
+      --   rewriting ω³(μb+1) = ω² · (ω(μb+1)) and using
+      --   that RHS ≥ ω(μb+1) together with the already-large E.
+      sorry  -- finish via CNF / IsAddPrincipal on ω^E
+
+  have h4 : omega0^(2:Ordinal)*2 < omega0^E := by
+    calc omega0^2 * 2
+        < omega0^2 * omega0 :=
+            mul_lt_mul_of_pos_left (nat_lt_omega0 2) (opow_pos _ omega0_pos)
+      _ = omega0^3 := by rw [← opow_succ]; simp
+      _ < omega0^E := opow_lt_opow_right_of_lt omega0_lt_one.ne'
+            (by
+              -- 3 < E = ω⁵(μn+1)+μs+7 always
+              apply lt_add_of_pos_right
+              exact succ_pos _)
+
+  -- Assemble: sum of summands < ω^E + ω(μb+1)
+  -- (use IsAddPrincipal (ω^E) for the pure ω-power pieces,
+  --  then add_lt_add_of_lt_of_le for the μb piece)
+  have hprincE : IsAddPrincipal (omega0^E) :=
+    omega0_opow_isAddPrincipal (by
+      apply nat_cast_lt.mpr; norm_num
+      -- or: 0 < E since E ≥ 7)
+  calc
+    omega0^3*(μs+1) + omega0^(e0+2) + omega0^3*(μb+1) + omega0^2*2
+        < omega0^E + omega0^E + (omega0^E + omega0*(μb+1)) + omega0^E := by
+            -- apply h1,h2,h3,h4 with add_lt_add repeatedly
+            sorry
+    _ ≤ omega0^E + omega0*(μb+1) := by
+            -- absorb finite sums of ω^E via principality / add_absorp
+            -- ω^E + ω^E = ω^E · 2 < ω^E · ω = ω^(E+1) … but better:
+            -- since ω^E is additively principal, ω^E + ω^E = ω^E · 2,
+            -- and if we only need ≤ ω^E + ω(μb+1) we use
+            -- add_absorp when ω^E ≤ ω(μb+1), else stay under  ω^E · n < next.
+            sorry
+```
+
+**Core idea (as in the file comment):** the successor rule raises the recursion counter from `n` to `delta n`, which lifts the exponent of the leading `ω^(-)` term of `recDelta` from `μn+μs+6` to `ω⁵(μn+1)+μs+7`. That jump dominates every `ω`-polynomial coefficient contributed by the `app` constructor (`ω³`, `ω²`, …) and the strictly smaller exponent `μn+μs+8`. The remaining bookkeeping is (1) expand `μ(app …)` by distributivity, (2) show each summand is `< RHS`, (3) reassemble with additive principality of `ω^E`.
+
+The only non-routine fragment is the summand `ω³(μb+1)`, which must be compared against the *sum* `ω^E + ω(μb+1)` (CNF / case-split on which summand of the RHS is leading). That is the step left as an inner `sorry` in the skeleton above; once it is filled, the outer calc closes.
+
+---
+
+### Summary of what each skeleton needs from Mathlib
+
+| Ingredient | Typical Mathlib name / pattern |
+|---|---|
+| strip `+1` | `add_lt_add_iff_right` |
+| distribute | `mul_add`, `← mul_assoc`, `← opow_add` |
+| `α < ω^(α+2)` | `le_opow_self` + `lt_mul_of_one_lt_right` + `opow_succ` |
+| monotone exp | `opow_le_opow_right`, `opow_lt_opow_right_of_lt` |
+| additive principal | `omega0_opow_isAddPrincipal`, `IsAddPrincipal.add_lt` |
+| finite `< ω` | `nat_lt_omega0` |
+| positivity | `opow_pos`, `omega0_pos`, `succ_pos`, `one_pos` |
+
+`R_eq_refl` is immediate; `R_eq_diff` is a straightforward three-term principal sum; `R_rec_succ` is the same pattern plus one CNF case-split on the `μb` summand.

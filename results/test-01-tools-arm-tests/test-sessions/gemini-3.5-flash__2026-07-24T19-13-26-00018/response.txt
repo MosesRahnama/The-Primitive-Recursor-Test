@@ -1,0 +1,318 @@
+[TOOL-CALL code_execution]
+def find_cycle():
+    # Let's think if we can construct a cyclic term.
+    # What if we have a term like t = eqW a b ?
+    # t -> integrate (merge a b)
+    # Can we have integrate (merge a b) reduce to something containing t?
+    # To get t back, we need eqW. But the only way to get eqW is if it was already in a or b.
+    # Since there are no rules that *create* eqW out of nowhere (none of the RHSs of the other rules have eqW, except that eqW can step to integrate (merge a b), which doesn't contain eqW unless a or b contains eqW),
+    # any occurrence of eqW in the reduct must have existed in the starting term.
+    # Let's trace the number of eqW occurrences.
+    # For R_int_delta: integrate (delta t) -> void. Occurrences of eqW: decreases (from t to 0, since t is discarded).
+    # R_merge_void_left: merge void t -> t. Occurrences of eqW: same.
+    # R_merge_void_right: merge t void -> t. Occurrences of eqW: same.
+    # R_merge_cancel: merge t t -> t. Occurrences of eqW: halved (decreases or same).
+    # R_rec_zero: recΔ b s void -> b. Occurrences of eqW: decreases (s is discarded).
+    # R_rec_succ: recΔ b s (delta n) -> app s (recΔ b s n). Occurrences of eqW: s is duplicated!
+    # Ah! s is duplicated: once in `app s ...` and once in `recΔ b s n`.
+    # Wait, can this duplication of s lead to an infinite reduction?
+    # Let's see: s is duplicated, but the third argument of recΔ (which is delta n) decreases to n.
+    # Since the recursion is on the third argument (which is a finite term, and delta n has n as a subterm),
+    # this is a well-founded recursion.
+    # Wait, is there any other rule?
+    # R_eq_refl: eqW a a -> void. Occurrences of eqW: decreases.
+    # R_eq_diff: eqW a b -> integrate (merge a b). Occurrences of eqW: decreases by 1 (the root eqW is gone, only those in a and b remain).
+    pass
+[/TOOL]
+
+
+
+[TOOL-RESULT code_execution]
+{
+ "outcome": "OUTCOME_OK",
+ "id": "pge6u6d2"
+}
+[/TOOL]
+
+
+
+[TOOL-CALL code_execution]
+# Let's write a simple term evaluator or dependency pair analyzer if needed, 
+# or just do a manual proof of termination.
+# Let's check each rule and see if it is compatible with a termination measure.
+
+# Let's define the size of a term or some interpretation.
+# Since delta cannot be created, we can assign a weight to terms.
+# Let's see:
+# R_int_delta: integrate (delta t) -> void
+# R_merge_void_left: merge void t -> t
+# R_merge_void_right: merge t void -> t
+# R_merge_cancel: merge t t -> t
+# R_rec_zero: recΔ b s void -> b
+# R_rec_succ: recΔ b s (delta n) -> app s (recΔ b s n)
+# R_eq_refl: eqW a a -> void
+# R_eq_diff: eqW a b -> integrate (merge a b)
+
+# For R_rec_succ:
+# recΔ b s (delta n) -> app s (recΔ b s n)
+# If we define a weight function W:
+# W(void) = 1
+# W(delta t) = W(t) + 1
+# W(integrate t) = W(t) + 1
+# W(merge t1 t2) = W(t1) + W(t2) + 1
+# W(app t1 t2) = W(t1) + W(t2) + 1
+# W(eqW t1 t2) = W(t1) + W(t2) + 1
+# What about W(recΔ b s n)?
+# Since recΔ b s (delta n) reduces to app s (recΔ b s n), we want:
+# W(recΔ b s (delta n)) > W(app s (recΔ b s n))
+# Let's define W(recΔ b s n) in a way that depends on n.
+# Since delta n has a larger value than n, if we make W(recΔ b s n) grow with n, say:
+# W(recΔ b s n) = W(b) + W(s) * (W(n) + 1) + 1  -- wait, is this monotonic?
+# Let's test if this interpretation works!
+[/TOOL]
+
+
+
+[TOOL-RESULT code_execution]
+{
+ "outcome": "OUTCOME_OK",
+ "id": "ruielo0l"
+}
+[/TOOL]
+
+
+
+[TOOL-CALL code_execution]
+from sympy import Symbol, symbols, solve, simplify
+
+# Let's parameterize the polynomial interpretations.
+# To ensure monotonicity and that the value is >= 1, we can use polynomials with positive coefficients.
+# Let:
+# [void] = c_void >= 1
+# [delta](x) = x + c_delta  (c_delta >= 1)
+# [integrate](x) = x + c_int (c_int >= 1)
+# [merge](x, y) = x + y + c_merge (c_merge >= 1)
+# [app](x, y) = x + y + c_app (c_app >= 1)
+# [eqW](x, y) = x + y + c_eq (c_eq >= 1)
+# [recΔ](b, s, n) = b + s * g(n) + c_rec (c_rec >= 1) where g(n) = c_g * n
+# Wait, let's check if we can have:
+# [recΔ](b, s, n) = b + A * s * n + B * n + C
+# Let's calculate LHS and RHS of R_rec_succ with this interpretation:
+# LHS = [recΔ](b, s, n + c_delta) = b + A * s * (n + c_delta) + B * (n + c_delta) + C
+#     = b + A * s * n + A * c_delta * s + B * n + B * c_delta + C
+# RHS = [app](s, [recΔ](b, s, n)) = s + (b + A * s * n + B * n + C) + c_app
+#     = b + A * s * n + B * n + C + s + c_app
+# We want LHS > RHS:
+# b + A * s * n + A * c_delta * s + B * n + B * c_delta + C > b + A * s * n + B * n + C + s + c_app
+# This simplifies to:
+# A * c_delta * s + B * c_delta > s + c_app
+# We can make this hold for all s >= 1 if:
+# A * c_delta > 1  and  B * c_delta > c_app
+# Since we can choose the constants to be any positive integers, let's set:
+# c_delta = 2
+# A = 1
+# B = 2
+# c_app = 1
+# Then:
+# A * c_delta = 2 > 1 (so 2*s > s holds for all s >= 1)
+# B * c_delta = 4 > 1 = c_app
+# Let's verify this!
+[/TOOL]
+
+
+
+[TOOL-RESULT code_execution]
+{
+ "outcome": "OUTCOME_OK",
+ "id": "9sxwvocr"
+}
+[/TOOL]
+
+
+
+[TOOL-CALL code_execution]
+# Let's verify with sympy
+import sympy as sp
+
+# Define variables as positive real symbols (we can assume >= 1)
+t, a, b, s, n = sp.symbols('t a b s n', positive=True)
+
+# Let's write the interpretations:
+def I_void():
+    return 1
+
+def I_delta(x):
+    return x + 2
+
+def I_integrate(x):
+    return x + 1
+
+def I_merge(x, y):
+    return x + y + 1
+
+def I_app(x, y):
+    return x + y + 1
+
+def I_eqW(x, y):
+    return x + y + 2
+
+def I_rec(b, s, n):
+    return b + s * n + 2 * n + 1
+
+# Let's verify each rule:
+# Rule 1: integrate (delta t) -> void
+lhs1 = I_integrate(I_delta(t))
+rhs1 = I_void()
+diff1 = sp.simplify(lhs1 - rhs1)
+print(f"Rule 1 diff: {diff1} (expect > 0 for t >= 1)")
+
+# Rule 2: merge void t -> t
+lhs2 = I_merge(I_void(), t)
+rhs2 = t
+diff2 = sp.simplify(lhs2 - rhs2)
+print(f"Rule 2 diff: {diff2} (expect > 0)")
+
+# Rule 3: merge t void -> t
+lhs3 = I_merge(t, I_void())
+rhs3 = t
+diff3 = sp.simplify(lhs3 - rhs3)
+print(f"Rule 3 diff: {diff3} (expect > 0)")
+
+# Rule 4: merge t t -> t
+lhs4 = I_merge(t, t)
+rhs4 = t
+diff4 = sp.simplify(lhs4 - rhs4)
+print(f"Rule 4 diff: {diff4} (expect > 0 for t >= 1)")
+
+# Rule 5: recΔ b s void -> b
+lhs5 = I_rec(b, s, I_void())
+rhs5 = b
+diff5 = sp.simplify(lhs5 - rhs5)
+print(f"Rule 5 diff: {diff5} (expect > 0 for s >= 1)")
+
+# Rule 6: recΔ b s (delta n) -> app s (recΔ b s n)
+lhs6 = I_rec(b, s, I_delta(n))
+rhs6 = I_app(s, I_rec(b, s, n))
+diff6 = sp.simplify(lhs6 - rhs6)
+print(f"Rule 6 diff: {diff6} (expect > 0 for s >= 1, n >= 1)")
+
+# Rule 7: eqW a a -> void
+lhs7 = I_eqW(a, a)
+rhs7 = I_void()
+diff7 = sp.simplify(lhs7 - rhs7)
+print(f"Rule 7 diff: {diff7} (expect > 0 for a >= 1)")
+
+# Rule 8: eqW a b -> integrate (merge a b)
+lhs8 = I_eqW(a, b)
+rhs8 = I_integrate(I_merge(a, b))
+diff8 = sp.simplify(lhs8 - rhs8)
+print(f"Rule 8 diff: {diff8} (expect > 0)")
+[/TOOL]
+
+
+
+[TOOL-RESULT code_execution]
+{
+ "outcome": "OUTCOME_OK",
+ "output": "Rule 1 diff: t + 2 (expect > 0 for t >= 1)\nRule 2 diff: 2 (expect > 0)\nRule 3 diff: 2 (expect > 0)\nRule 4 diff: t + 1 (expect > 0 for t >= 1)\nRule 5 diff: s + 3 (expect > 0 for s >= 1)\nRule 6 diff: s + 3 (expect > 0 for s >= 1, n >= 1)\nRule 7 diff: 2*a + 1 (expect > 0 for a >= 1)\nRule 8 diff: 0 (expect > 0)\n",
+ "id": "53ljshck"
+}
+[/TOOL]
+
+
+
+[TOOL-CALL code_execution]
+# Let's verify with I_eqW(x, y) = x + y + 3
+def I_eqW(x, y):
+    return x + y + 3
+
+# Rule 7: eqW a a -> void
+lhs7 = I_eqW(a, a)
+rhs7 = I_void()
+diff7 = sp.simplify(lhs7 - rhs7)
+print(f"Rule 7 diff: {diff7} (expect > 0 for a >= 1)")
+
+# Rule 8: eqW a b -> integrate (merge a b)
+lhs8 = I_eqW(a, b)
+rhs8 = I_integrate(I_merge(a, b))
+diff8 = sp.simplify(lhs8 - rhs8)
+print(f"Rule 8 diff: {diff8} (expect > 0)")
+[/TOOL]
+
+
+
+[TOOL-RESULT code_execution]
+{
+ "outcome": "OUTCOME_OK",
+ "output": "Rule 7 diff: 2*a + 2 (expect > 0 for a >= 1)\nRule 8 diff: 1 (expect > 0)\n",
+ "id": "u598ktkp"
+}
+[/TOOL]
+
+**Yes**, strong normalization of this rewrite system can be established from the presented calculus alone. 
+
+This can be proven rigorously using a standard **polynomial interpretation** over the positive integers ($\mathbb{N}_{\ge 1}$), which is a well-founded ordering.
+
+### 1. The Polynomial Interpretation
+We define an interpretation function $[\cdot] : \text{Trace} \to \mathbb{N}_{\ge 1}$ inductively on the structure of terms:
+*   $[\text{void}] = 1$
+*   $[\text{delta}](x) = x + 2$
+*   $[\text{integrate}](x) = x + 1$
+*   $[\text{merge}](x, y) = x + y + 1$
+*   $[\text{app}](x, y) = x + y + 1$
+*   $[\text{eqW}](x, y) = x + y + 3$
+*   $[\text{recΔ}](b, s, n) = b + s \cdot n + 2n + 1$
+
+For every term $t \in \text{Trace}$, we clearly have $[t] \ge 1$ since all coefficients and constants are positive. Furthermore, the interpretation of every constructor is strictly monotonic in each of its arguments (e.g., if $x > y$, then $[f(\dots, x, \dots)] > [f(\dots, y, \dots)]$).
+
+---
+
+### 2. Verification of the Rules
+To establish strong normalization, we show that for every rewrite rule $l \to r$, the interpretation of the left-hand side is strictly greater than the right-hand side ($[l] > [r]$) for all possible values of subterms ($\ge 1$):
+
+1.  **`R_int_delta`**: $\text{integrate (delta } t) \to \text{void}$
+    $$\begin{aligned}
+    [\text{integrate (delta } t)] &= (t + 2) + 1 = t + 3 \\
+    [\text{void}] &= 1
+    \end{aligned}$$
+    Since $t \ge 1$, we have $t + 3 > 1$.
+
+2.  **`R_merge_void_left`**: $\text{merge void } t \to t$
+    $$[\text{merge void } t] = 1 + t + 1 = t + 2 > t$$
+
+3.  **`R_merge_void_right`**: $\text{merge } t \text{ void} \to t$
+    $$[\text{merge } t \text{ void}] = t + 1 + 1 = t + 2 > t$$
+
+4.  **`R_merge_cancel`**: $\text{merge } t\ t \to t$
+    $$[\text{merge } t\ t] = t + t + 1 = 2t + 1 > t \quad (\text{since } t \ge 1)$$
+
+5.  **`R_rec_zero`**: $\text{recΔ } b\ s\ \text{void} \to b$
+    $$[\text{recΔ } b\ s\ \text{void}] = b + s \cdot 1 + 2(1) + 1 = b + s + 3 > b \quad (\text{since } s \ge 1)$$
+
+6.  **`R_rec_succ`**: $\text{recΔ } b\ s\ (\text{delta } n) \to \text{app } s\ (\text{recΔ } b\ s\ n)$
+    $$\begin{aligned}
+    [\text{recΔ } b\ s\ (\text{delta } n)] &= b + s(n + 2) + 2(n + 2) + 1 \\
+    &= b + sn + 2s + 2n + 5 \\[0.5em]
+    [\text{app } s\ (\text{recΔ } b\ s\ n)] &= s + (b + sn + 2n + 1) + 1 \\
+    &= b + sn + s + 2n + 2
+    \end{aligned}$$
+    The difference is:
+    $$\text{LHS} - \text{RHS} = s + 3$$
+    Since $s \ge 1$, this difference is at least $4$, meaning $\text{LHS} > \text{RHS}$.
+
+7.  **`R_eq_refl`**: $\text{eqW } a\ a \to \text{void}$
+    $$[\text{eqW } a\ a] = 2a + 3 > 1 \quad (\text{since } a \ge 1)$$
+
+8.  **`R_eq_diff`**: $\text{eqW } a\ b \to \text{integrate (merge } a\ b)$
+    $$\begin{aligned}
+    [\text{eqW } a\ b] &= a + b + 3 \\
+    [\text{integrate (merge } a\ b)] &= (a + b + 1) + 1 = a + b + 2
+    \end{aligned}$$
+    Since $a + b + 3 > a + b + 2$, the inequality holds strictly.
+
+---
+
+### Conclusion
+Because every single rule strictly decreases the polynomial interpretation of the term, and because the polynomial functions are strictly monotonic, any reduction step—whether applied at the root of a term or inside any subterm context—strictly decreases the term's integer measure. 
+
+Since $(\mathbb{N}, <)$ is well-founded, there can be no infinite reduction sequences. Thus, **strong normalization is guaranteed and fully provable** strictly within the boundary of the presented syntax and rewrite rules.

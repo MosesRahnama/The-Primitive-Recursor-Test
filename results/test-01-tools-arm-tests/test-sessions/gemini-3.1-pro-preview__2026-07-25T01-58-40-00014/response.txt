@@ -1,0 +1,124 @@
+[TOOL-CALL code_execution]
+def mpo(s, t, prec):
+    # s and t are tuples (head, [args]) or strings (variables)
+    if isinstance(t, str):
+        return t in get_vars(s) and s != t
+    if isinstance(s, str):
+        return False
+    
+    f, s_args = s
+    g, t_args = t
+    
+    # case 1: s_i >= t
+    for s_i in s_args:
+        if s_i == t or mpo(s_i, t, prec):
+            return True
+            
+    # case 2: f > g and s > t_j for all j
+    if prec.get(f, 0) > prec.get(g, 0):
+        return all(mpo(s, t_j, prec) for t_j in t_args)
+        
+    # case 3: f == g and s_args >_mul t_args and s > t_j for all j
+    if f == g:
+        if multiset_greater(s_args, t_args, prec) and all(mpo(s, t_j, prec) for t_j in t_args):
+            return True
+            
+    return False
+
+def get_vars(t):
+    if isinstance(t, str):
+        return {t}
+    f, args = t
+    vars = set()
+    for arg in args:
+        vars |= get_vars(arg)
+    return vars
+
+def multiset_greater(M, N, prec):
+    # remove common elements
+    M = list(M)
+    N = list(N)
+    for x in M[:]:
+        if x in N:
+            M.remove(x)
+            N.remove(x)
+    if not M:
+        return False
+    # for every y in N, there must be x in M such that x > y
+    for y in N:
+        if not any(mpo(x, y, prec) for x in M):
+            return False
+    return True
+
+prec = {
+    'eqW': 3,
+    'integrate': 2,
+    'merge': 2,
+    'recΔ': 2,
+    'app': 1,
+    'void': 0,
+    'delta': 0
+}
+
+# eqW(a, b) > integrate(merge(a, b))
+lhs = ('eqW', ['a', 'b'])
+rhs = ('integrate', [('merge', ['a', 'b'])])
+print("eqW_diff:", mpo(lhs, rhs, prec))
+
+# recΔ(b, s, delta(n)) > app(s, recΔ(b, s, n))
+lhs2 = ('recΔ', ['b', 's', ('delta', ['n'])])
+rhs2 = ('app', ['s', ('recΔ', ['b', 's', 'n'])])
+print("rec_succ:", mpo(lhs2, rhs2, prec))
+[/TOOL]
+
+
+
+[TOOL-RESULT code_execution]
+{
+ "outcome": "OUTCOME_OK",
+ "output": "eqW_diff: True\nrec_succ: True\n",
+ "id": "e2l8h3a4"
+}
+[/TOOL]
+
+**Assessment:**  
+**Yes**, strong normalization (termination) of this system can be definitively established from the presented calculus alone, without needing to import any structural axioms, extra rewrite rules, or hidden assumptions.
+
+**Reasoning:**  
+The standard method to establish strong normalization for such a first-order rewrite calculus is to assign a monotonic polynomial interpretation over the positive integers ($\mathbb{N}_{\ge 1}$). By mapping each term to a strictly positive integer "weight", we can prove that every single rewrite rule strictly decreases the total weight of the term.
+
+We can define a pure weight function $W : \text{Trace} \to \mathbb{N}_{\ge 1}$ recursively as follows:
+- $W(\text{void}) = 1$
+- $W(\text{delta}(t)) = W(t) + 1$
+- $W(\text{integrate}(t)) = W(t) + 1$
+- $W(\text{merge}(x, y)) = W(x) + W(y) + 1$
+- $W(\text{app}(x, y)) = W(x) + W(y) + 1$
+- $W(\text{rec}\Delta(b, s, n)) = W(b) + W(n) \times (W(s) + 2)$
+- $W(\text{eqW}(a, b)) = W(a) + W(b) + 3$
+
+Because every constructor adds at least $1$ to its inputs (or multiplies by strictly positive bounds), it is trivial to verify that $W(t) \ge 1$ for all valid `Trace` terms. Furthermore, all operations are strictly monotonic with respect to each argument (for instance, the coefficient of $W(n)$ in the `recΔ` rule is $W(s)+2 \ge 3 > 0$, and the coefficient of $W(s)$ is $W(n) \ge 1 > 0$). This guarantees that a weight reduction in any subterm strict-decreases the weight of the entire parent term (handling evaluation in any context).
+
+We can now verify that the left-hand side (LHS) strictly dominates the right-hand side (RHS) for every rule in `Step`:
+
+1. **`R_int_delta`**: $\text{integrate}(\text{delta}(t)) \to \text{void}$
+   $W(t) + 2 > 1$
+2. **`R_merge_void_left`**: $\text{merge}(\text{void}, t) \to t$ 
+   $1 + W(t) + 1 > W(t) \implies W(t) + 2 > W(t)$
+3. **`R_merge_void_right`**: $\text{merge}(t, \text{void}) \to t$
+   $W(t) + 1 + 1 > W(t)$
+4. **`R_merge_cancel`**: $\text{merge}(t, t) \to t$
+   $2W(t) + 1 > W(t)$ 
+5. **`R_rec_zero`**: $\text{rec}\Delta(b, s, \text{void}) \to b$
+   $W(b) + 1 \times (W(s) + 2) > W(b)$
+6. **`R_rec_succ`**: $\text{rec}\Delta(b, s, \text{delta}(n)) \to \text{app}(s, \text{rec}\Delta(b, s, n))$
+   LHS: $W(b) + (W(n) + 1) \times (W(s) + 2) = W(b) + W(n)W(s) + 2W(n) + W(s) + 2$
+   RHS: $W(s) + (W(b) + W(n) \times (W(s) + 2)) + 1 = W(b) + W(n)W(s) + 2W(n) + W(s) + 1$
+   *LHS is strictly greater than RHS by exactly $1$.*
+7. **`R_eq_refl`**: $\text{eqW}(a, a) \to \text{void}$
+   $2W(a) + 3 > 1$
+8. **`R_eq_diff`**: $\text{eqW}(a, b) \to \text{integrate}(\text{merge}(a, b))$
+   LHS: $W(a) + W(b) + 3$
+   RHS: $(W(a) + W(b) + 1) + 1 = W(a) + W(b) + 2$
+   *LHS is strictly greater than RHS by exactly $1$.*
+
+Every evaluation step strictly decreases the positive integer weight of the overall expression. Because natural numbers are well-founded (you cannot decrease a positive integer infinitely many times), there are no infinite rewrite sequences. This establishes strong normalization directly from the presented syntax and rewrite rules.

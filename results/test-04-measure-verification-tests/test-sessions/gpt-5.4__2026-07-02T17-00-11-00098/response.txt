@@ -1,0 +1,224 @@
+No.
+
+The proposed lexicographic measure
+- `phase : Trace → Nat`
+- `cost : Trace → Nat`
+- `measure t := (phase t, cost t)`
+
+is **not sound as a termination measure for all rewrite steps** in `Step`, if the intended ordering is the usual lexicographic order on `Nat × Nat` that must strictly decrease on every rule.
+
+## Why it fails
+
+A valid termination measure must satisfy, for every rule `Step lhs rhs`,
+\[
+measure(rhs) < measure(lhs)
+\]
+in lexicographic order.
+
+Several rules do decrease, but at least one clearly does not.
+
+---
+
+## The critical counterexample: `R_eq_diff`
+
+Rule:
+
+```lean
+| R_eq_diff : ∀ a b, Step (eqW a b) (integrate (merge a b))
+```
+
+Compute the measure on both sides.
+
+### Left-hand side
+```lean
+phase (eqW a b) = 0
+cost (eqW a b) = 3 + cost a + cost b
+```
+
+So:
+```lean
+measure (eqW a b) = (0, 3 + cost a + cost b)
+```
+
+### Right-hand side
+```lean
+phase (integrate (merge a b)) = 0
+cost (integrate (merge a b)) = 1 + cost (merge a b)
+                            = 1 + (1 + cost a + cost b)
+                            = 2 + cost a + cost b
+```
+
+So:
+```lean
+measure (integrate (merge a b)) = (0, 2 + cost a + cost b)
+```
+
+This one actually **does** decrease:
+```lean
+(0, 2 + ...) < (0, 3 + ...)
+```
+
+So `R_eq_diff` is fine.
+
+---
+
+## The actual failure: `R_rec_succ`
+
+Rule:
+
+```lean
+| R_rec_succ : ∀ b s n, Step (recDelta b s (delta n)) (app s (recDelta b s n))
+```
+
+### Left-hand side
+Since the argument is `.delta _`,
+```lean
+phase (recDelta b s (delta n)) = 1
+```
+
+Cost:
+```lean
+cost (recDelta b s (delta n))
+= 1 + cost b + cost s + cost (delta n)
+= 1 + cost b + cost s + (1 + cost n)
+= 2 + cost b + cost s + cost n
+```
+
+So:
+```lean
+measure lhs = (1, 2 + cost b + cost s + cost n)
+```
+
+### Right-hand side
+```lean
+phase (app s (recDelta b s n)) = 0
+```
+
+Cost:
+```lean
+cost (app s (recDelta b s n))
+= 1 + cost s + cost (recDelta b s n)
+= 1 + cost s + (1 + cost b + cost s + cost n)
+= 2 + cost b + 2*cost s + cost n
+```
+
+So:
+```lean
+measure rhs = (0, 2 + cost b + 2*cost s + cost n)
+```
+
+Lexicographically,
+```lean
+(0, ...) < (1, ...)
+```
+so this rule decreases. So `R_rec_succ` is also fine.
+
+---
+
+## The real problem: closure under rewriting is not captured
+
+If your intention is to prove termination of the **full first-order rewrite calculus**, usually that means rewriting can happen **inside subterms**, not just at the root.
+
+But `Step` as defined is only a **root-step relation**. Your `measure` is checked only on the whole term. If later you extend rewriting by contextual closure, this measure will fail to justify termination automatically, because:
+
+- `phase` only inspects the root shape,
+- a rewrite inside a subterm can increase or preserve the outer `cost` contribution in ways this simple pair may not control structurally unless you prove monotonicity carefully.
+
+However, if you mean only the current root-step relation, we should check every rule individually.
+
+---
+
+## Check all root rules
+
+### `R_int_delta`
+```lean
+integrate (delta t)  →  void
+```
+LHS:
+- phase `0`
+- cost `1 + (1 + cost t) = 2 + cost t`
+
+RHS:
+- phase `0`
+- cost `0`
+
+Decreases.
+
+### `R_merge_void_left`
+```lean
+merge void t → t
+```
+LHS cost:
+```lean
+1 + 0 + cost t = 1 + cost t
+```
+RHS cost:
+```lean
+cost t
+```
+Decreases.
+
+### `R_merge_void_right`
+Same, decreases.
+
+### `R_merge_cancel`
+```lean
+merge t t → t
+```
+LHS cost:
+```lean
+1 + cost t + cost t
+```
+RHS:
+```lean
+cost t
+```
+Decreases.
+
+### `R_rec_zero`
+```lean
+recDelta b s void → b
+```
+LHS phase `0`, cost:
+```lean
+1 + cost b + cost s
+```
+RHS cost `cost b`
+Decreases.
+
+### `R_rec_succ`
+Already checked: `(1, ...) → (0, ...)`, decreases lexicographically.
+
+### `R_eq_refl`
+```lean
+eqW a a → void
+```
+LHS cost:
+```lean
+3 + 2*cost a
+```
+RHS `0`
+Decreases.
+
+### `R_eq_diff`
+Already checked: cost drops from `3 + ...` to `2 + ...`.
+Decreases.
+
+---
+
+## Conclusion
+
+### If `Step` is exactly the rewrite relation of interest
+Then **yes**, the measure is sound: every rule strictly decreases the lexicographic pair `(phase t, cost t)`.
+
+### If you mean termination of a context-closed rewrite relation
+Then this file alone does **not yet establish** that, and the measure is not by itself obviously sufficient without additional congruence/monotonicity arguments.
+
+## Bottom line
+
+For the `Step` relation exactly as defined in this file: **the measure is sound**.
+
+So the correct assessment is:
+
+- **Sound for root rewriting (`Step`)**: yes.
+- **Not automatically enough for arbitrary subterm/context rewriting**: needs more work.

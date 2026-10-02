@@ -1,0 +1,144 @@
+I'll analyze this rewrite system carefully. Let me first understand the rules and then test for strong normalization.
+
+[TOOL-CALL code_execution]
+{
+ "code": "\n# Let me analyze the rules for potential non-termination.\n# The key suspect rules:\n# R_eq_refl:  eqW a a  -> void\n# R_eq_diff:  eqW a b  -> integrate (merge a b)   -- for ALL a b, no side condition!\n#\n# R_eq_diff has NO guard \"a != b\". So it fires even when a == b.\n# Let's see if we can build a cycle or infinite chain.\n\n# Consider eqW a a. Two rules apply:\n#   R_eq_refl -> void  (terminating)\n#   R_eq_diff -> integrate (merge a a)\n# From integrate (merge a a):\n#   merge a a --(R_merge_cancel)--> a, giving integrate a\n#   Is there a step integrate(delta t) -> void, but only if inner is delta.\n#\n# Let's look for an infinite reduction sequence. Try to find a term t with t -> ... -> C[t]\n\n# Let's search computationally: BFS/DFS over reductions looking for a cycle (a term reachable from itself)\nimport sys\nfrom itertools import product\nsys.setrecursionlimit(100000)\n\n# Represent Trace as tuples\n# ('void',), ('delta',t), ('int',t), ('merge',a,b), ('app',a,b), ('rec',b,s,n), ('eq',a,b)\n\ndef steps(t):\n    \"\"\"All one-step reductions of t (including in subterms - congruence).\"\"\"\n    res = []\n    tag = t[0]\n    # root reductions\n    if tag=='int' and t[1][0]=='delta':\n        res.append(('void',))\n    if tag=='merge':\n        a,b = t[1],t[2]\n        if a==('void',): res.append(b)\n        if b==('void',): res.append(a)\n        if a==b: res.append(a)\n    if tag=='rec':\n        b,s,n = t[1],t[2],t[3]\n        if n==('void',): res.append(b)\n        if n[0]=='delta':\n            res.append(('app',s,('rec',b,s,n[1])))\n    if tag=='eq':\n        a,bb = t[1],t[2]\n        if a==bb: res.append(('void',))\n        res.append(('int',('merge',a,bb)))\n    # congruence (reduce subterms)\n    if tag=='delta':\n        for r in steps(t[1]): res.append(('delta',r))\n    if tag=='int':\n        for r in steps(t[1]): res.append(('int',r))\n    if tag=='merge':\n        for r in steps(t[1]): res.append(('merge',r,t[2]))\n        for r in steps(t[2]): res.append(('merge',t[1],r))\n    if tag=='app':\n        for r in steps(t[1]): res.append(('app',r,t[2]))\n        for r in steps(t[2]): res.append(('app',t[1],r))\n    if tag=='rec':\n        for r in steps(t[1]): res.append(('rec',r,t[2],t[3]))\n        for r in steps(t[2]): res.append(('rec',t[1],r,t[3]))\n        for r in steps(t[3]): res.append(('rec',t[1],t[2],r))\n    if tag=='eq':\n        for r in steps(t[1]): res.append(('eq',r,t[2]))\n        for r in steps(t[2]): res.append(('eq',t[1],r))\n    return res\n\n# Try eqW void void  -> integrate(merge void void) -> integrate void -> ... \nstart = ('eq',('void',),('void',))\nseen=set()\nfrontier=[start]\nfound_cycle=False\n# explore\nreach={}\norder=[start]\ni=0\nwhile i < len(order):\n    cur=order[i]; i+=1\n    for nxt in steps(cur):\n        reach.setdefault(cur,[]).append(nxt)\n        if nxt not in seen:\n            seen.add(nxt); order.append(nxt)\n    if len(order)>5000: break\n\nprint(\"terms reachable from eqW void void:\", len(order))\nfor t in order[:20]:\n    print(t)\n"
+}
+[/TOOL]
+
+
+
+[TOOL-RESULT code_execution]
+{
+ "type": "code_execution_result",
+ "stdout": "terms reachable from eqW void void: 4\n('eq', ('void',), ('void',))\n('void',)\n('int', ('merge', ('void',), ('void',)))\n('int', ('void',))",
+ "stderr": "",
+ "return_code": 0,
+ "content": [],
+ "abort_reason": null
+}
+[/TOOL]
+
+That particular start terminates. The interesting question is whether `R_eq_diff` (which fires unconditionally) can create an infinite chain. Let me look for cycles more systematically.
+
+[TOOL-CALL code_execution]
+{
+ "code": "\n# The danger: R_eq_diff: eqW a b -> integrate(merge a b), unconditionally.\n# But note the RHS has DIFFERENT structure - eqW replaced by integrate/merge.\n# There's no rule that CREATES an eqW node. So eqW can only be consumed, never produced.\n# => the number of eqW nodes is non-increasing under reduction.\n\n# Let's think about a size/measure. Define a measure that strictly decreases.\n# Let me test: does every rule strictly decrease some multiset/ordinal measure?\n\n# Count node sizes to see which rules could increase size.\ndef size(t):\n    tag=t[0]\n    if tag=='void': return 1\n    if tag in ('delta','int'): return 1+size(t[1])\n    if tag in ('merge','app','eq'): return 1+size(t[1])+size(t[2])\n    if tag=='rec': return 1+size(t[1])+size(t[2])+size(t[3])\n\n# Check each rule for size change (root)\nexamples = {\n 'R_int_delta': (('int',('delta',('void',))), ('void',)),\n 'R_merge_void_left': (('merge',('void',),('void',)), ('void',)),\n 'R_merge_cancel': (('merge',('void',),('void',)), ('void',)),\n 'R_rec_zero': (('rec',('void',),('void',),('void',)), ('void',)),\n 'R_eq_refl': (('eq',('void',),('void',)), ('void',)),\n}\n# symbolic sizes:\nprint(\"R_eq_diff: eqW a b (size 1+|a|+|b|) -> integrate(merge a b) (size 2+|a|+|b|)  => +1 SIZE INCREASE\")\nprint(\"R_rec_succ: recΔ b s (delta n): size 1+|b|+|s|+(1+|n|)=2+|b|+|s|+|n|\")\nprint(\"           -> app s (recΔ b s n): size 1+|s|+(1+|b|+|s|+|n|)=2+|b|+2|s|+|n|  => +|s| INCREASE\")\n"
+}
+[/TOOL]
+
+
+
+[TOOL-RESULT code_execution]
+{
+ "type": "code_execution_result",
+ "stdout": "R_eq_diff: eqW a b (size 1+|a|+|b|) -> integrate(merge a b) (size 2+|a|+|b|)  => +1 SIZE INCREASE\nR_rec_succ: recΔ b s (delta n): size 1+|b|+|s|+(1+|n|)=2+|b|+|s|+|n|\n           -> app s (recΔ b s n): size 1+|s|+(1+|b|+|s|+|n|)=2+|b|+2|s|+|n|  => +|s| INCREASE",
+ "stderr": "",
+ "return_code": 0,
+ "content": [],
+ "abort_reason": null
+}
+[/TOOL]
+
+Two rules increase raw size, so a naive size argument fails. But size increase doesn't preclude SN — I need a smarter well-founded measure. Let me design a polynomial/lexicographic interpretation and verify it.
+
+[TOOL-CALL code_execution]
+{
+ "code": "\n# Strategy: polynomial interpretation into natural numbers > 0, monotone in each argument,\n# with each rule strictly decreasing the interpretation. This is a standard SN method\n# (monotone algebra / polynomial interpretation). It requires no extra rules/guards.\n#\n# Assign to each constructor a monotone polynomial:\n#   [void]                = c0\n#   [delta x]             = f_d(x)\n#   [integrate x]         = f_i(x)\n#   [merge x y]           = f_m(x,y)\n#   [app x y]             = f_a(x,y)\n#   [recΔ b s n]          = f_r(b,s,n)\n#   [eqW a b]             = f_e(a,b)\n#\n# Requirements (strict decrease [lhs] > [rhs] for all values of subterms, in weakly monotone algebra):\n# 1) R_int_delta:  f_i(f_d(x))            > c0\n# 2) R_merge_void_left:  f_m(c0, t)       > t\n# 3) R_merge_void_right: f_m(t, c0)       > t\n# 4) R_merge_cancel: f_m(t,t)             > t\n# 5) R_rec_zero: f_r(b,s,c0)              > b\n# 6) R_rec_succ: f_r(b,s,f_d(n))          > f_a(s, f_r(b,s,n))\n# 7) R_eq_refl: f_e(a,a)                  > c0\n# 8) R_eq_diff: f_e(a,b)                  > f_i(f_m(a,b))\n#\n# And each f must be STRICTLY monotone (so congruence/subterm reductions decrease).\n#\n# The critical constraints are (6) and (8).\n# For (8): f_e must dominate f_i(f_m(a,b)). Just make f_e large enough. e.g.\n#          f_i(x)=x+1, f_m(a,b)=a+b, then f_i(f_m)=a+b+1, so need f_e(a,b) > a+b+1.\n#          Set f_e(a,b)=a+b+2. Monotone. Good. Also (7): f_e(a,a)=2a+2>c0 if c0 small.\n#\n# For (6): f_r(b,s,f_d(n)) > f_a(s, f_r(b,s,n)).\n#   The recursor recurses on n structurally (delta n -> n). Classic: use exponential in n's arg,\n#   or f_d(n) = n+1 won't beat multiplication by f_a. Let's try:\n#   Let f_a(x,y) = x + y + 1 (app just adds). Then RHS = s + f_r(b,s,n) + 1.\n#   Need f_r(b,s,f_d(n)) > s + f_r(b,s,n) + 1.\n#   Try f_r(b,s,n) = b + (s+2)*n_arg... but n is a Trace value. Let f_d(n)=n+1.\n#   f_r(b,s,n) = b + n*(s+2). Then LHS with f_d(n)=n+1: b+(n+1)(s+2)=b+n(s+2)+(s+2).\n#   RHS = s + (b+n(s+2)) + 1 = b+n(s+2)+s+1.\n#   LHS-RHS = (s+2)-(s+1)=1 > 0.  GREAT.\n#   Check (5) R_rec_zero with n_arg = [void]=c0: f_r(b,s,c0)=b+c0*(s+2) > b iff c0*(s+2)>0. \n#   If c0>=1 and s>=1 always positive. Good.\n#\n# Now we need all values >=1 (positive) and strict monotonicity. Let's pick concrete:\n#   c0 = [void] = 2\n#   f_d(x) = x+1\n#   f_i(x) = x+1\n#   f_m(a,b) = a+b\n#   f_a(x,y) = x+y+1\n#   f_r(b,s,n) = b + n*(s+2)\n#   f_e(a,b) = a+b+2\n#\n# But wait: strict monotonicity requires e.g. f_m(a,b)=a+b to be strictly increasing in each arg: yes.\n# f_i, f_d, f_a strictly monotone: yes. f_r in each arg: b coeff 1>0, s coeff n>0 (n>=2>0), n coeff (s+2)>0: strictly monotone. f_e: yes.\n#\n# Now verify ALL 8 constraints hold for ALL values >= c0region. Since polynomials, check symbolically\n# with sympy assuming variables >= 2 (all interpretations are >= [void]=2, actually min value).\n# Actually min value of any term: void=2; every constructor only increases. Let's just require vars>=2.\n\nimport sympy as sp\na,b,s,n,t,x,y = sp.symbols('a b s n t x y', positive=True)\nc0=2\nfd=lambda z: z+1\nfi=lambda z: z+1\nfm=lambda p,q: p+q\nfa=lambda p,q: p+q+1\nfr=lambda B,S,N: B + N*(S+2)\nfe=lambda p,q: p+q+2\n\nconstraints = {\n 'R_int_delta': (fi(fd(t)), c0),                       # > c0\n 'R_merge_void_left': (fm(c0,t), t),\n 'R_merge_void_right': (fm(t,c0), t),\n 'R_merge_cancel': (fm(t,t), t),\n 'R_rec_zero': (fr(b,s,c0), b),\n 'R_rec_succ': (fr(b,s,fd(n)), fa(s, fr(b,s,n))),\n 'R_eq_refl': (fe(a,a), c0),\n 'R_eq_diff': (fe(a,b), fi(fm(a,b))),\n}\nfor name,(L,R) in constraints.items():\n    diff = sp.simplify(L-R)\n    print(f\"{name}: [lhs]-[rhs] = {diff}\")\n"
+}
+[/TOOL]
+
+
+
+[TOOL-RESULT code_execution]
+{
+ "type": "code_execution_result",
+ "stdout": "R_int_delta: [lhs]-[rhs] = t\nR_merge_void_left: [lhs]-[rhs] = 2\nR_merge_void_right: [lhs]-[rhs] = 2\nR_merge_cancel: [lhs]-[rhs] = t\nR_rec_zero: [lhs]-[rhs] = 2*s + 4\nR_rec_succ: [lhs]-[rhs] = 1\nR_eq_refl: [lhs]-[rhs] = 2*a\nR_eq_diff: [lhs]-[rhs] = 1",
+ "stderr": "",
+ "return_code": 0,
+ "content": [],
+ "abort_reason": null
+}
+[/TOOL]
+
+All eight rule constraints yield a strictly positive difference. Now let me confirm the two remaining requirements: every interpretation stays ≥ 2 (so variables ≥ 2 assumption is valid), and every constructor is strictly monotone (needed to lift strict decrease through congruence/subterm rewriting).
+
+[TOOL-CALL code_execution]
+{
+ "code": "\nimport sympy as sp\nx,y,z = sp.symbols('x y z', positive=True)\n\n# 1) All interpretations >= 2 given args >= 2:\n#    [void]=2. Others only add/multiply positives, so stay >=2. Verify minimum by plugging args=2.\nprint(\"min values (args=2):\")\nprint(\" delta:\", (2+1))\nprint(\" int:\", (2+1))\nprint(\" merge:\", (2+2))\nprint(\" app:\", (2+2+1))\nprint(\" rec:\", (2 + 2*(2+2)))\nprint(\" eq:\", (2+2+2))\n# all >= 2  ✓  (smallest is void=2 itself; base case)\n\n# 2) Strict monotonicity of each constructor in every argument\n#    (partial derivative > 0 everywhere on domain args>=2, sufficient for strict monotone on integers).\nfd=lambda a: a+1\nfi=lambda a: a+1\nfm=lambda a,b: a+b\nfa=lambda a,b: a+b+1\nfr=lambda B,S,N: B + N*(S+2)\nfe=lambda a,b: a+b+2\n\ndef mono(name,f,args):\n    for v in args:\n        d=sp.diff(f(*args),v)\n        print(f\"  {name} d/d{v} = {d}  (>0 on domain: {sp.simplify(d)})\")\n\na,b,c = sp.symbols('a b c', positive=True)\nprint(\"\\nmonotonicity (all partials must be > 0 for args>=2):\")\nmono(\"delta\",fd,[a])\nmono(\"int\",fi,[a])\nmono(\"merge\",fm,[a,b])\nmono(\"app\",fa,[a,b])\nmono(\"rec\",fr,[a,b,c])\nmono(\"eq\",fe,[a,b])\n"
+}
+[/TOOL]
+
+
+
+[TOOL-RESULT code_execution]
+{
+ "type": "code_execution_result",
+ "stdout": "min values (args=2):\n delta: 3\n int: 3\n merge: 4\n app: 5\n rec: 10\n eq: 6\n\nmonotonicity (all partials must be > 0 for args>=2):\n  delta d/da = 1  (>0 on domain: 1)\n  int d/da = 1  (>0 on domain: 1)\n  merge d/da = 1  (>0 on domain: 1)\n  merge d/db = 1  (>0 on domain: 1)\n  app d/da = 1  (>0 on domain: 1)\n  app d/db = 1  (>0 on domain: 1)\n  rec d/da = 1  (>0 on domain: 1)\n  rec d/db = c  (>0 on domain: c)\n  rec d/dc = b + 2  (>0 on domain: b + 2)\n  eq d/da = 1  (>0 on domain: 1)\n  eq d/db = 1  (>0 on domain: 1)",
+ "stderr": "",
+ "return_code": 0,
+ "content": [],
+ "abort_reason": null
+}
+[/TOOL]
+
+Everything checks out. Let me run a final empirical sanity check: random reduction sequences should always terminate, and the interpretation should strictly decrease at every step including deep congruence steps.
+
+[TOOL-CALL code_execution]
+{
+ "code": "\nimport random\ndef interp(t):\n    tag=t[0]\n    if tag=='void': return 2\n    if tag=='delta': return interp(t[1])+1\n    if tag=='int': return interp(t[1])+1\n    if tag=='merge': return interp(t[1])+interp(t[2])\n    if tag=='app': return interp(t[1])+interp(t[2])+1\n    if tag=='rec': return interp(t[1]) + interp(t[3])*(interp(t[2])+2)\n    if tag=='eq': return interp(t[1])+interp(t[2])+2\n\ndef steps(t):\n    res=[]; tag=t[0]\n    if tag=='int' and t[1][0]=='delta': res.append(('void',))\n    if tag=='merge':\n        a,b=t[1],t[2]\n        if a==('void',):res.append(b)\n        if b==('void',):res.append(a)\n        if a==b:res.append(a)\n    if tag=='rec':\n        b,s,n=t[1],t[2],t[3]\n        if n==('void',):res.append(b)\n        if n[0]=='delta':res.append(('app',s,('rec',b,s,n[1])))\n    if tag=='eq':\n        a,bb=t[1],t[2]\n        if a==bb:res.append(('void',))\n        res.append(('int',('merge',a,bb)))\n    if tag in('delta','int'):\n        for r in steps(t[1]):res.append((tag,r))\n    if tag in('merge','app','eq'):\n        for r in steps(t[1]):res.append((tag,r,t[2]))\n        for r in steps(t[2]):res.append((tag,t[1],r))\n    if tag=='rec':\n        for r in steps(t[1]):res.append(('rec',r,t[2],t[3]))\n        for r in steps(t[2]):res.append(('rec',t[1],r,t[3]))\n        for r in steps(t[3]):res.append(('rec',t[1],t[2],r))\n    return res\n\ncons=['void','delta','int','merge','app','rec','eq']\ndef rand_term(d):\n    if d<=0 or random.random()<0.2: return ('void',)\n    c=random.choice(cons)\n    if c=='void':return ('void',)\n    if c in('delta','int'):return (c,rand_term(d-1))\n    if c in('merge','app','eq'):\n        # sometimes make args equal to trigger cancel/refl\n        a=rand_term(d-1)\n        b=a if random.random()<0.3 else rand_term(d-1)\n        return (c,a,b)\n    if c=='rec':return ('rec',rand_term(d-1),rand_term(d-1),rand_term(d-1))\n\nrandom.seed(1)\nbad=0; maxlen=0\nfor _ in range(20000):\n    t=rand_term(4); L=0; prev=interp(t)\n    while True:\n        nx=steps(t)\n        if not nx: break\n        t=random.choice(nx)\n        v=interp(t)\n        if v>=prev: bad+=1  # interpretation must strictly decrease\n        prev=v; L+=1\n        if L>10000: print(\"NONTERM?\",); break\n    maxlen=max(maxlen,L)\nprint(\"violations of strict decrease:\",bad,\"  max chain length:\",maxlen)\n"
+}
+[/TOOL]
+
+
+
+[TOOL-RESULT code_execution]
+{
+ "type": "code_execution_result",
+ "stdout": "violations of strict decrease: 0   max chain length: 26",
+ "stderr": "",
+ "return_code": 0,
+ "content": [],
+ "abort_reason": null
+}
+[/TOOL]
+
+Zero violations across 20,000 random reduction sequences, all terminating. The interpretation is verified.
+
+## Assessment
+
+**Yes — strong normalization is provable from the calculus alone, with no added axioms, guards, or side conditions.**
+
+### Reasoning
+
+The system is a first-order, binder-free term rewriting system. Strong normalization can be established by a **monotone polynomial interpretation** into the positive integers — a standard, self-contained SN method that adds nothing to the system; it only *interprets* the existing syntax and rules.
+
+**The interpretation** (each constructor mapped to a strictly monotone polynomial, all values ≥ 2):
+
+| Term | Interpretation `⟦·⟧` |
+|---|---|
+| `void` | `2` |
+| `delta x` | `⟦x⟧ + 1` |
+| `integrate x` | `⟦x⟧ + 1` |
+| `merge x y` | `⟦x⟧ + ⟦y⟧` |
+| `app x y` | `⟦x⟧ + ⟦y⟧ + 1` |
+| `recΔ b s n` | `⟦b⟧ + ⟦n⟧·(⟦s⟧ + 2)` |
+| `eqW a b` | `⟦a⟧ + ⟦b⟧ + 2` |
+
+**Two conditions suffice for SN** (Lankford / monotone algebra theorem), both verified above:
+
+1. **Strict monotonicity** of every constructor in every argument — confirmed (all partial derivatives > 0 on the domain). This lets a strict decrease at any redex propagate through congruence/subterm rewriting.
+2. **Strict decrease** `⟦lhs⟧ > ⟦rhs⟧` for all eight rules — confirmed, with the differences being: `R_int_delta` (+t), `R_merge_void_*` (+2), `R_merge_cancel` (+t), `R_rec_zero` (+2s+4), `R_rec_succ` (+1), `R_eq_refl` (+2a), `R_eq_diff` (+1).
+
+Since `⟦·⟧` maps into `(ℕ, >)` (well-founded) and strictly decreases on every step, no infinite reduction chain can exist.
+
+### Why the "dangerous" rules are actually fine within the system
+
+- **`R_eq_diff` fires unconditionally** (`eqW a b → integrate(merge a b)` with no `a ≠ b` guard). One might fear this is a source of non-termination, but it is not: **no rule ever produces an `eqW` node**, so `eqW` is strictly consumed. The interpretation captures this — `eqW` is given a constant "+2" head slack that dominates `integrate(merge a b)` (which costs only +1 over the same subterms). No guard is needed.
+- **`R_rec_succ` and `R_eq_diff` increase raw term size**, so a naive size measure fails — but the polynomial handles the recursor by weighting the recursion argument `n` multiplicatively against the step function `s`, so peeling one `delta` off `n` outpaces the `app`/duplication cost.
+
+### Boundary note
+
+This stays strictly inside your constraints: I used only the given syntax and the eight given rewrite rules, added no rules, no side conditions, no external structural axioms. The polynomial interpretation is purely a metatheoretic certificate. It is straightforwardly formalizable in Lean 4 by defining `⟦·⟧ : Trace → ℕ`, proving `Step t u → ⟦u⟧ < ⟦t⟧` by case analysis on the eight constructors (the arithmetic is exactly the positive differences shown), and concluding `WellFounded (flip Step)` via the inverse image of `Nat.lt`.
+
+**Conclusion:** the calculus is strongly normalizing, and this is demonstrable from the presented system alone.

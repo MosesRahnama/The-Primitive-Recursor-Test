@@ -1,0 +1,203 @@
+# Proof Skeletons for the Three Remaining Cases
+
+Below are proof skeletons for the three `sorry` cases. I'll present each with a strategy, the key lemmas needed, and structured skeleton code.
+
+---
+
+## Case 1: `R_eq_refl` (easiest — pure positivity)
+
+**Goal after `simp [mu]`:** `0 < omega0 ^ (mu a + mu a + 9) + 1`.
+
+This is just positivity of a successor ordinal.
+
+```lean
+| _, _, Step.R_eq_refl a => by
+    simp [mu]
+    -- Goal: 0 < omega0 ^ (mu a + mu a + 9) + 1
+    exact Ordinal.pos_iff_ne_zero.mpr (by
+      apply ne_of_gt
+      exact add_pos_right _ one_pos)
+```
+
+**Backup strategy** if the exponent form differs after `simp` (e.g. `2 * mu a` normalization):
+```lean
+    -- alt: positivity via successor
+    positivity  -- may not fire on ordinals; fallback below
+    -- or:
+    exact lt_of_lt_of_le one_pos (le_add_left _ _)
+```
+Note the reference `R_int_delta` case shows the exact `pos_iff_ne_zero.mpr (ne_of_gt (add_pos_right _ one_pos))` idiom works — reuse it.
+
+---
+
+## Case 2: `R_eq_diff` — the exponent dominates
+
+**Goal:** `omega0 ^ (4:Ordinal) * (mu(merge a b) + 1) + 1 < omega0 ^ (mu a + mu b + 9) + 1`.
+
+**Strategy.** Reduce to comparing the two summands before `+1` via monotonicity of `· + 1`, then show the LHS is `< omega0 ^ (mu a + mu b + 9)`. The crucial fact is that the base of an `omega0`-power with a *large exponent* dominates any polynomial in smaller powers.
+
+**Key lemmas.**
+- `Ordinal.lt_opow_iff_of_lt` / bounding by principal ordinals: `omega0 ^ e` is *additively and multiplicatively principal* when `e` is nonzero. Use `Ordinal.principal_add_omega0_opow` and `Ordinal.principal_mul_omega0_opow`.
+- Any term of the form `omega0 ^ k * (c + 1)` with `k < (mu a + mu b + 9)` satisfies `< omega0 ^ (mu a + mu b + 9)` (since `omega0^k * n < omega0^{k+1} ≤ omega0^{big}`).
+- `omega0 ^ e * (x + 1) + 1 < omega0 ^ e'` when `e < e'` and the multiplier is bounded — combine via principality (closure under addition/multiplication below the power).
+
+**Skeleton.**
+```lean
+| _, _, Step.R_eq_diff a b => by
+    simp only [mu]
+    -- After simp: LHS = omega0^4 * (omega0^3*(mu a+1) + omega0^2*(mu b+1) + 1 + 1) + 1
+    --             RHS = omega0 ^ (mu a + mu b + 9) + 1
+    apply Ordinal.add_lt_add_right  -- strip the trailing "+ 1" on both sides
+    -- Goal: omega0^4 * (mu(merge a b) + 1) < omega0 ^ (mu a + mu b + 9)
+    set E : Ordinal := mu a + mu b + 9 with hE
+    -- Step A: the whole LHS is built from powers with exponent < E.
+    -- Bound the inner factor:  mu(merge a b) + 1 < omega0 ^ (mu a + mu b + 4)
+    have hbig : (5 : Ordinal) ≤ E := by
+      -- 9 ≥ 5 and add_left/right monotonicity
+      rw [hE]; exact le_add_of_le_right (by norm_num) -- adjust to available lemma
+      -- alt: `le_add_left` chain
+    -- Step B: use that omega0^E is (additively & multiplicatively) principal.
+    have hprin_add : Principal (· + ·) (omega0 ^ E) :=
+      Ordinal.principal_add_omega0_opow E  -- name may be `principal_add_opow` variant
+    have hprin_mul : Principal (· * ·) (omega0 ^ E) :=
+      Ordinal.principal_mul_omega0_opow E
+    -- Step C: each atom omega0^k*(m+1) with k ≤ 4 < E is < omega0^E.
+    have base_lt : ∀ (k : Ordinal), k < E → ∀ m : Ordinal,
+        (m + 1 < omega0 ^ E) → omega0 ^ k * (m + 1) < omega0 ^ E := by
+      intro k hk m hm
+      calc omega0 ^ k * (m + 1)
+          < omega0 ^ E := by
+            -- omega0^k * small  <  omega0^E  when k < E, using mul principality / opow_lt
+            apply hprin_mul.lt _ _ ?_ hm  -- shape depends on Principal API
+            · exact (Ordinal.opow_lt_opow_iff_right one_lt_omega0).mpr hk
+    -- Step D: assemble via additive principality (closed under +).
+    -- Show each of the three summands < omega0^E, then their sum < omega0^E.
+    sorry  -- fill Step D by repeated `hprin_add.add_lt` on the three atoms
+```
+
+**Practical simplification.** Rather than the full principal-ideal machinery, the cleanest route is:
+
+```lean
+    -- Cleaner: bound LHS by a single power then compare exponents.
+    -- omega0^4 * (X + 1) ≤ omega0^4 * omega0^(deg X + 1) = omega0^(4 + deg X + 1)
+    -- and 4 + deg X + 1 < mu a + mu b + 9  because deg X ≈ 3 + max(mu a, mu b).
+```
+where you use `Ordinal.mul_le_mul`, `opow_add`, and `opow_lt_opow_iff_right (one_lt_omega0)` to finish with a single `opow` comparison. The arithmetic slack `9` vs `4+…` is designed to make the final exponent inequality hold; verify it as an ordinal `<` on exponents.
+
+---
+
+## Case 3: `R_rec_succ` — the hardest (nested power tower)
+
+**Goal:**
+```
+mu(app s (recDelta b s n)) < mu(recDelta b s (delta n))
+```
+i.e.
+```
+omega0^3*(mu s+1) + omega0^2*(mu(recDelta b s n)+1) + 1
+  <  omega0 ^ (omega0^5*(mu n+1) + 1 + mu s + 6) + omega0*(mu b+1) + 1
+```
+
+**Strategy.** The RHS leading term is `omega0 ^ (BIG)` where `BIG = mu(delta n) + mu s + 6` and `mu(delta n) = omega0^5*(mu n+1)+1`. The entire LHS is a finite sum of `omega0^k * (…)` where every constituent exponent is *bounded by a fixed polynomial in `mu n, mu s, mu b`* — in particular strictly below `BIG`, because `BIG` contains `omega0^5*(mu n+1)`, which dwarfs any exponent of shape `mu n + mu s + c`.
+
+**Key sub-facts to establish (as `have`s):**
+
+1. `hexp : mu(recDelta b s n) < omega0 ^ (mu n + mu s + 6 + 1)`
+   — the whole `recDelta` measure is below the next power (its leading power is `omega0^(mu n+mu s+6)`).
+2. `hdom : (mu n + mu s + 6 + 1 + 2) < (omega0^5*(mu n+1) + 1 + mu s + 6)`
+   i.e. the exponent produced by expanding the LHS is `< BIG`.
+   This holds because `omega0^5*(mu n+1) ≥ omega0^5 > any (mu n + mu s + c)` since `omega0^5` absorbs additive polynomials (use `Ordinal.add_lt_omega0_opow` / `principal_add`).
+3. Each LHS atom `< omega0^BIG`, then sum `< omega0^BIG` by additive principality, then `< RHS` by `le_add_right`.
+
+**Skeleton.**
+```lean
+| _, _, Step.R_rec_succ b s n => by
+    simp only [mu]
+    set BIG : Ordinal := omega0 ^ (5:Ordinal) * (mu n + 1) + 1 + mu s + 6 with hBIG
+    -- RHS = omega0 ^ BIG + omega0*(mu b+1) + 1
+    -- It suffices to bound the entire LHS below omega0 ^ BIG.
+    have hprin : Principal (· + ·) (omega0 ^ BIG) := by
+      apply Ordinal.principal_add_omega0_opow
+      -- BIG ≠ 0 : it is a successor-ish; show 0 < BIG
+    -- (1) bound the recDelta subterm
+    have hrec : mu.recDelta_aux ... := sorry -- unfold; see below
+    -- Concretely:
+    have hrec_lt :
+        omega0 ^ (mu n + mu s + 6) + omega0*(mu b+1) + 1
+          < omega0 ^ BIG := by
+      -- exponent (mu n+mu s+6) < BIG, so the leading power is below;
+      -- the tail (omega0*(mu b+1)+1) is also below omega0^BIG; use hprin.
+      have hlt_exp : mu n + mu s + 6 < BIG := by
+        rw [hBIG]
+        -- mu n + mu s + 6  <  omega0^5*(mu n+1) + 1 + mu s + 6
+        -- because mu n < omega0^5*(mu n+1)+1 additively
+        sorry
+      -- combine: leading power < omega0^BIG via opow monotonicity + principality
+      sorry
+    -- (2) bound the three LHS atoms individually below omega0^BIG
+    have hexp_ok : (2:Ordinal) < BIG ∧ (3:Ordinal) < BIG := by
+      constructor <;> · rw [hBIG]; -- 2,3 < BIG since BIG ≥ omega0^5
+        sorry
+    have hA : omega0^(3:Ordinal)*(mu s+1) < omega0 ^ BIG := by
+      -- opow_lt_opow_iff_right + mul principality
+      sorry
+    have hB : omega0^(2:Ordinal)*(mu (recDelta b s n)+1) < omega0 ^ BIG := by
+      -- uses hrec_lt to bound (mu(recDelta ...)+1), then mul principality
+      sorry
+    -- (3) assemble sum < omega0^BIG, then < RHS
+    have hsum : omega0^3*(mu s+1) + omega0^2*(mu(recDelta b s n)+1) + 1
+                  < omega0 ^ BIG := by
+      have h01 : (1:Ordinal) < omega0 ^ BIG := by
+        exact one_lt_opow one_lt_omega0 (by positivity_or_pos_BIG)
+      -- fold with hprin.add_lt
+      exact hprin.add_lt (hprin.add_lt hA hB) h01
+    calc  omega0^3*(mu s+1) + omega0^2*(mu(recDelta b s n)+1) + 1
+        < omega0 ^ BIG := hsum
+      _ ≤ omega0 ^ BIG + omega0*(mu b+1) + 1 := by
+            exact le_add_right _ _ |>.trans (le_add_right _ _)
+```
+
+---
+
+## Shared helper lemmas worth extracting first
+
+To make all three cases uniform, prove these once (above `mu_decreases`):
+
+```lean
+-- Comparing pure powers.
+lemma opow_lt_opow_exp {p q : Ordinal} (h : p < q) :
+    omega0 ^ p < omega0 ^ q :=
+  (opow_lt_opow_iff_right one_lt_omega0).mpr h
+
+-- A "small polynomial" atom is below a bigger power.
+lemma atom_lt_opow {k m E : Ordinal} (hk : k < E) :
+    omega0 ^ k * (m + 1) < omega0 ^ E := by
+  -- m+1 < omega0^(m+1); omega0^k * omega0^(m+1) = omega0^(k+m+1);
+  -- need k+m+1 ≤ E OR use principal-mul of omega0^E.
+  sorry
+
+-- Additive/multiplicative principality of omega-powers.
+lemma padd (E : Ordinal) : Principal (· + ·) (omega0 ^ E) :=
+  Ordinal.principal_add_omega0_opow E
+lemma pmul (E : Ordinal) : Principal (· * ·) (omega0 ^ E) :=
+  Ordinal.principal_mul_omega0_opow E
+```
+
+**Guidance on `atom_lt_opow` (the workhorse):** the safe proof is
+```
+omega0^k * (m+1)
+  ≤ omega0^k * omega0^(m+1)      -- since m+1 < omega0^(m+1)  (`lt_opow_self`/`right_le_opow`)
+  = omega0^(k + (m+1))           -- `opow_add`
+  < omega0^E                     -- if k + m + 1 < E via `opow_lt_opow_exp`
+```
+So its real hypothesis should be `k + (m+1) ≤ E` (strict when needed). Adjust the callers to supply the right exponent bound; the measure's numeric slack (`+6`, `+9`) exists precisely to satisfy these.
+
+---
+
+## Recommended completion order
+
+1. **`R_eq_refl`** — copy the `R_int_delta` positivity idiom (1 line).
+2. **`R_eq_diff`** — one `add_lt_add_right`, then `atom_lt_opow` × 3 folded with `padd`, using `9` slack for the exponent inequality.
+3. **`R_rec_succ`** — same pattern with `BIG`, plus the extra `have hrec_lt` bounding the nested `recDelta`. The only genuinely new step is `hlt_exp : mu n + mu s + 6 < BIG`, which follows from `mu n < omega0^5*(mu n+1)+1` (via `lt_add_one`/`le_mul_right`) and additive monotonicity.
+
+The `sorry`s left in the skeleton are all discharged by `opow_lt_opow_exp`, `atom_lt_opow`, and `Principal.add_lt`/`Principal.mul_lt`; no new mathematical insight beyond "big exponent dominates" is required.

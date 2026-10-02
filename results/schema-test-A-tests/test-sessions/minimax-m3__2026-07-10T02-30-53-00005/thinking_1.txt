@@ -1,0 +1,382 @@
+The system has two rules:
+- F(x, y, Z) -> x
+- F(x, y, S(n)) -> G(y, F(x, y, n))
+
+To analyze strong normalization, I need to check if every reduction sequence terminates.
+
+The first rule is a base case that terminates. The second rule expands F into a G applied to a recursive F call.
+
+The issue: there's no rule for G. G is a free constructor/term with no defining rules. So when we reduce F(x, y, S(n)), we get G(y, F(x, y, n)), and then we're stuck — we can't reduce G further, and we can only continue reducing the inner F.
+
+Let me think about this more carefully. Start with F(x, y, S(n)):
+- F(x, y, S(n)) -> G(y, F(x, y, n))
+- Then we can reduce F(x, y, n) further.
+
+If n = Z: F(x, y, Z) -> x. Total steps: 2.
+If n = S(n'): F(x, y, S(S(n'))) -> G(y, F(x, y, S(n'))) -> G(y, G(y, F(x, y, n'))) -> ...
+
+Each step increases the size of the term (wraps a G around), but each recursive call decreases n. So the recursion on n terminates.
+
+For any starting term F(x, y, S^k(Z)):
+- After k steps we reach F(x, y, S^k(Z)) -> G(y, F(x, y, S^(k-1)(Z))) -> ... -> G^k(y, x).
+
+This terminates in exactly k+1 steps. So F(x, y, S(...)) normalizes.
+
+But what about other terms? What if we start with G(...)? G has no rules, so it doesn't reduce. So any term containing G as the outermost that can't be matched by F stays as is.
+
+What about F with non-numeric third argument? The only rules match F(x, y, Z) and F(x, y, S(n)). If we have F(x, y, f) where f is not Z or S(_), it doesn't reduce. If f is S(non-normal-form), we first need to normalize f.
+
+Hmm, but n is a VAR. So S(n) matches anything where the third argument has the form S(n) for any term n. n itself could be a complex term.
+
+Wait, n is a variable in the rule. So S(n) matches any term of the form S(t) for any t. So F(x, y, S(t)) -> G(y, F(x, y, t)).
+
+This means if we have F(x, y, S(F(a, b, c))), we get G(y, F(x, y, F(a, b, c))). Then F(a, b, c) reduces based on its own structure, and the outer F's recursion is on the third argument.
+
+But the key question: does the outer F's recursion on its third argument terminate? It's not "decreasing" in any obvious sense — the third argument t can be any term, including growing terms.
+
+Wait, but n is matched to whatever t is, and t is then used as the recursive call. So the third argument of F in the recursive call is t itself. There's no structural decrease unless we can prove it.
+
+Example: F(x, y, F(a, b, c)) — this has form S(_) is false, Z is false, so doesn't match any rule. Wait, no: F(x, y, F(a, b, c)) has third argument F(a, b, c), not S(_). So no match unless F(a, b, c) reduces to something matching.
+
+Hmm, but t = F(a, b, c) is a valid n in the rule F(x, y, S(n)) -> G(y, F(x, y, n)). So the structure: if we have F(x, y, S(t)), reduce to G(y, F(x, y, t)). The recursive call is F(x, y, t) where t is arbitrary.
+
+Is there a measure that decreases? The third argument changes from S(t) to t. The second F call has third argument t, which has lost one S.
+
+If we count the "S-depth" of the third argument: S(t) has one more S than t. So the S-depth decreases by 1 each recursive step on the outer F. Eventually it hits Z (or something not of the form S(_)).
+
+But what if t = S(S(...))? Still decreases. What if t contains things that grow? Like F(x, y, S(F(x, y, S(Z))))? Let's trace:
+F(x, y, S(F(x, y, S(Z)))) 
+-> G(y, F(x, y, F(x, y, S(Z))))
+Now reduce F(x, y, F(x, y, S(Z))). The third arg is F(x, y, S(Z)) which has form... not S(_), it's F(...). So F(x, y, F(x, y, S(Z))) doesn't match either rule directly.
+
+We'd need to first reduce the inner F. F(x, y, S(Z)) -> G(y, F(x, y, Z)) -> G(y, x).
+
+So F(x, y, F(x, y, S(Z))) -> F(x, y, G(y, x)). This still has third argument G(y, x) which isn't S(_) or Z. Stuck.
+
+So G(y, F(x, y, F(x, y, S(Z)))) -> G(y, F(x, y, G(y, x))). And then F(x, y, G(y, x)) is stuck since G(y, x) doesn't match Z or S(_).
+
+Hmm, so if t can grow or become a non-S, non-Z term, the third argument of the recursive F call might not match either rule, halting reduction.
+
+The question is whether reduction always terminates. Consider F(x, y, S(S(...S(F(x, y, S(Z)))...))). 
+
+Actually, I think the concern is: can the third argument "grow" during reduction? Let's think about a problematic case.
+
+Consider: what if F(x, y, n) where n itself contains F?
+
+n = F(a, b, S(Z)). Then F(x, y, F(a, b, S(Z))) — this doesn't match Z or S(_), so we need n = F(a, b, S(Z)) to reduce first.
+
+F(a, b, S(Z)) -> G(b, F(a, b, Z)) -> G(b, a).
+
+So F(x, y, F(a, b, S(Z))) -> F(x, y, G(b, a)) [after reducing inner F]. Now third arg is G(b, a), which doesn't match. So we're stuck.
+
+What about a case where reduction doesn't terminate? We need to find a term where the recursive structure creates infinite reduction.
+
+Actually let me think about it as: each F(x, y, t) reduction step. The rule F(x, y, S(n)) -> G(y, F(x, y, n)) requires t = S(t') for some t'. Each reduction peels off one S from the outermost structure of the third argument.
+
+But the new F's third argument is n, and n might have a different structure after being substituted. The original n was the "tail" of S, so n's structure is whatever was inside S.
+
+I think we can prove termination by a lexicographic measure: (depth of F-applications, depth of S from outermost in third arg, ...). Or actually, the key insight: F(x, y, S(...S(t)...)) reduces by peeling S's, but when n itself is an F, we'd reduce the inner F first.
+
+Actually, let me think about whether there's a path that doesn't terminate.
+
+Try: F(F(a, b, c), y, S(Z))
+-> G(y, F(F(a, b, c), y, Z)) [rule 2]
+-> G(y, F(a, b, c)) [rule 1]
+
+So F(F(a, b, c), y, S(Z)) terminates. Good.
+
+Try: F(x, y, S(F(F(x, y, Z), y, Z)))
+Third arg: S(F(F(x, y, Z), y, Z)). Match rule 2.
+-> G(y, F(x, y, F(F(x, y, Z), y, Z)))
+Now F(x, y, F(F(x, y, Z), y, Z)) — third arg is F(...), not S or Z. Stuck unless F(F(x, y, Z), y, Z) reduces.
+
+F(F(x, y, Z), y, Z) -> F(x, y, Z) [rule 1 with x:=F(x,y,Z), y:=y, no wait]
+
+Rule 1: F(x, y, Z) -> x. So F(F(x, y, Z), y, Z) -> F(x, y, Z) [substituting the F(x,y,Z) for x in the rule]. Then F(x, y, Z) -> x.
+
+So F(F(x, y, Z), y, Z) -> F(x, y, Z) -> x.
+
+Therefore F(x, y, F(F(x, y, Z), y, Z)) -> F(x, y, x) [since the inner reduces to x].
+
+Wait, but we need to first reduce the inner F call. F(x, y, F(F(x, y, Z), y, Z)) — to reduce this outer F, we need its third arg to be S or Z. It's F(...), so we can't apply the rule directly. We must first normalize the third arg.
+
+Third arg = F(F(x, y, Z), y, Z). Reduce: -> F(x, y, Z) -> x. So third arg normalizes to x.
+
+Now the outer F(x, y, x) — third arg is x (a variable), doesn't match. Stuck.
+
+So total: F(x, y, S(F(F(x, y, Z), y, Z))) -> G(y, F(x, y, F(F(x, y, Z), y, Z))) -> G(y, F(x, y, x)) [after inner F normalizes]. Then stuck at F(x, y, x).
+
+OK so this terminates.
+
+What about something that would loop? The structure is: F reductions peel S's, and when n is an F, that F is reduced first. The reduction on inner F's terminates independently (by induction on term size or similar).
+
+Hmm, actually I want to be more careful. The standard technique: define a measure and show it decreases. For F(x, y, t) where t is in normal form, the number of S's at the "top" of t is some finite number k (0 if t doesn't start with S). Each application of rule 2 reduces k by 1. Rule 1 handles k=0. This works if t is a normal form.
+
+But t might not be in normal form. We need to normalize it first. During normalization of t, t gets smaller (or reaches normal form). Once t is in normal form, the F reduction peels S's.
+
+The question: can normalization of t interact with F(x, y, t) reduction in a problematic way?
+
+Actually, in the TRS setting, we have full substitution and any subterm can be reduced. So at any point, any reducible redex can be reduced.
+
+Let me think about whether the system is strongly normalizing.
+
+Claim: It is strongly normalizing.
+
+Proof sketch: Define a measure M(t) for terms. The system has no recursion on the first two arguments, only on the third. When F(x, y, t) reduces, the third argument gets smaller in some sense, or the F disappears.
+
+Actually, a cleaner way: define the "F-nesting depth" and the "S-depth of third argument" as a measure. 
+
+For F(x, y, t): measure is (1, 0, t) or similar. Each rule application:
+- Rule 1: term reduces from F(x, y, Z) to x, so we lose one F. Measure decreases.
+- Rule 2: F(x, y, S(n)) -> G(y, F(x, y, n)). New term has a new F nested inside G with arg t = n. Hmm, but we might have a new F call.
+
+This is the issue. Each rule 2 application creates a new F call, but with a smaller "third argument" in some sense (peeled off one S).
+
+Let's define: |F(x, y, t)| = S-depth of t when t is an S-chain or Z, otherwise... hmm, this is complicated.
+
+Alternative: lexicographic ordering. Define S-count(t) = number of S symbols in t (with multiplicities, counting S in subterms too). 
+
+F(x, y, S(n)) -> G(y, F(x, y, n)): G has no rules. F(x, y, n) has third arg n, which is one S smaller than S(n). So the outer F's third arg has one less S. The new F's third arg is n, so it has strictly fewer S's. But the new F itself counts.
+
+Define M(t) = total number of F symbols in t that are reducible (i.e., whose third arg starts with S or is Z). Hmm, still complex.
+
+Let me try yet another approach: well-founded induction. Consider the structure of reductions.
+
+Observation: In any reduction of F(x, y, t), the third argument t gets replaced by the original n = "t with one S peeled" if t = S(t'), or by x if t = Z. 
+
+If t is a normal form (no S, no Z, and is "stuck"), then F(x, y, t) is stuck. So we only have a reduction if t = S(t') or t = Z.
+
+If t = S(t') and t' is not in normal form, we can either:
+(a) First reduce t' to t'' (normal form), then apply rule 2 with t = S(t'').
+(b) Apply rule 2 with n = t' (not yet normalized), getting G(y, F(x, y, t')) where t' still has reducible redexes.
+
+In case (b), the new F's third arg is t', which has the reducible redexes that t had (minus the outer S). Eventually this F call reduces further.
+
+Hmm, this is the standard issue. Let me think about whether the system could be non-terminating.
+
+Consider: F(x, y, S^n(Z)) terminates in n+1 steps (giving G^n(y, x)).
+
+Consider: F(x, y, S^n(F(a, b, S^m(Z)))) — the third arg is S^n(F(a, b, S^m(Z))). Reducing outer F peels S's. After n steps, F(x, y, F(a, b, S^m(Z))). Now we need to reduce F(a, b, S^m(Z)) which is the third arg. F(a, b, S^m(Z)) -> G(b, F(a, b, S^(m-1)(Z))) -> ... -> G^m(b, a). 
+
+So F(x, y, S^n(F(a, b, S^m(Z)))) -> G(y, ...) -> G(y, F(x, y, S^(n-1)(F(a, b, S^m(Z))))) -> ... -> G^n(y, F(x, y, F(a, b, S^m(Z)))) -> G^n(y, F(x, y, G^m(b, a))).
+
+Now F(x, y, G^m(b, a)) — third arg is G^m(b, a), not S or Z. Stuck.
+
+So this terminates.
+
+What if t = F(a, b, F(c, d, S(Z)))? Then n is the whole thing when t = S(n). Wait, t = F(a, b, F(c, d, S(Z))) doesn't start with S. So F(x, y, t) is stuck unless t reduces.
+
+t = F(a, b, F(c, d, S(Z))) -> F(a, b, G(d, F(c, d, Z))) [rule 2] -> F(a, b, G(d, c)) [rule 1]. Stuck.
+
+So F(x, y, F(a, b, F(c, d, S(Z)))) reduces to F(x, y, F(a, b, G(d, c))) which is stuck. Terminates.
+
+What if t = S(F(a, b, S(Z)))? F(x, y, S(F(a, b, S(Z)))) -> G(y, F(x, y, F(a, b, S(Z)))).
+
+Now F(x, y, F(a, b, S(Z))) — third arg F(a, b, S(Z)) reduces to G(b, a). So this F -> F(x, y, G(b, a)) [after reducing third arg]. Stuck.
+
+Total: F(x, y, S(F(a, b, S(Z)))) -> G(y, F(x, y, G(b, a))). Terminates.
+
+I think the key observation is: each application of rule 2 "consumes" one S from the third argument (replacing S(n) with n), and rule 1 terminates F. The S count (counting S symbols in the term) might not decrease, because G is introduced. But the structure of the term's F calls in a sense is "shorter" — let me think.
+
+Actually here's a cleaner argument. Consider the multiset of "F-applications" in the term, with each F having an associated "S-depth" = number of leading S's in its third arg (or ∞ if not S-prefix).
+
+Wait, S(n) matches when the third arg is exactly S(something). So S-depth is whether the third arg starts with S, and how deeply nested. Hmm.
+
+OK here's another attempt. Use the polynomial interpretation or the size-change principle.
+
+Actually I think the cleanest argument: The system is essentially a partial function — F(x, y, n) computes the result of iterating G(y, ·) n times starting from x. This is well-defined for natural-number n and terminates.
+
+To formalize: define the "size" of a term t as |t| = number of symbols. Rule 1: F(x,y,Z) -> x, sizes 3+1+1+1=... hmm sizes don't work cleanly because the LHS has variables.
+
+Let me try: define a rank function. For each F occurrence in a term, define its rank. The rank of an F(x, y, t) is the number of leading S's in t if t starts with S, plus 1 if t = Z, plus ∞ otherwise... hmm.
+
+Actually, let me just argue informally that the system is strongly normalizing.
+
+The crucial property: G has no reduction rules, so once a G is at the top, we can't reduce it. This means reduction can only happen "below" G or via F.
+
+The S-depth argument: when F(x, y, S(n)) reduces, the new F(x, y, n) has third arg n, which has one less S-symbol at the top. But n can be more complex.
+
+Hmm, let me think about it as: rank(F(x, y, t)) = "1 + (number of S's in t's S-chain prefix)".
+
+Wait, t doesn't have to be an S-chain. It could be F(...).
+
+Let me try: define a function from terms to a well-founded order.
+
+Approach via size-change: each F call has a measure = (depth, ...) where depth is the maximum number of nested F-applications, or the S-nesting depth of the third arg.
+
+Actually, I realize there might be a non-termination issue I'm missing. Let me think harder.
+
+Suppose F(x, y, S(t)) where t is itself reducible. We can:
+(a) Reduce t to t' first, then apply rule 2 to F(x, y, S(t')).
+(b) Apply rule 2 to get G(y, F(x, y, t)), and reduce t inside.
+
+In either case, eventually we have F(x, y, S(t')) where t' is in NF. Then we peel S to get F(x, y, t'). If t' is in NF and not S or Z, we're stuck on that F.
+
+If t' = S(t''), we continue peeling.
+
+The question is: could t' grow back to have more S's? No, because t' is in NF, and S(t') has one more S than t', so reducing it decreases the S count at that F.
+
+But could the number of S's in the whole term grow? Each rule 2 application adds one G but doesn't add S. Rule 1 doesn't add S. So the number of S symbols is non-increasing! In fact, S symbols are only "moved" or removed.
+
+Wait, but n in the rule is a variable that's substituted with the corresponding term. If t = S(F(a, b, S(Z))), then in the rule F(x, y, S(n)) -> G(y, F(x, y, n)), we substitute n = F(a, b, S(Z)), getting F(x, y, S(F(a, b, S(Z)))) -> G(y, F(x, y, F(a, b, S(Z)))). The number of S's: 2 in LHS, 1 in RHS. Decreased by 1!
+
+In general, S-count(F(x, y, S(n))) = 1 + S-count(n). S-count(G(y, F(x, y, n))) = S-count(n). So S-count decreases by 1 per rule 2 application.
+
+For rule 1: S-count(F(x, y, Z)) = 0 (assuming x has no S's... but x is a variable). Hmm, S-count depends on the actual term.
+
+OK, let me define S-count more carefully. S-count(t) = number of occurrences of S in t.
+
+Rule 1: F(x, y, Z) -> x. S-count: |S(F(x,y,Z))| = |S(x)| + (other stuff in x). And S-count(x) = S-count of x. These could be different in either direction.
+
+Wait, x is bound in the rule, so when we apply the rule, x is replaced by an actual term. So the change in S-count is S-count of the actual term at the position of x.
+
+Hmm, this is getting complicated. The S-count can increase if x has many S's.
+
+OK so S-count is not a monotone measure.
+
+Let me think differently. I'll use the "interpretation method" or just argue by induction on term structure.
+
+Claim: The system is strongly normalizing.
+
+Proof: For each term, define its "F-call graph" where each F(x, y, t) is a node, and we draw edges to F occurrences in t. Hmm.
+
+Alternative: there's no infinite chain because rule 2 reduces the "F-depth + S-depth" lexicographically.
+
+Define: depth(t) for term t, where:
+- depth(Z) = 0
+- depth(S(t)) = 1 + depth(t)
+- depth(G(t1, t2)) = max(depth(t1), depth(t2)) + 1
+- depth(F(t1, t2, t3)) = max(depth(t1), depth(t2), depth(t3)) + 1
+- depth(x) = 0 (variable)
+
+This is just the term depth, which doesn't decrease under rule 2.
+
+Hmm, let me try yet another measure.
+
+Define the "S-height" of t at position p = "is the root of t an S?" or 0 if not.
+
+For F(x, y, t), define measure M(F(x, y, t)) = (1, h(t)) where h(t) is the number of leading S's on t (or 0 if t doesn't start with S, or "stuck" if t is not in NF and not S-prefix).
+
+Hmm, still complex.
+
+OK let me just try to find a non-terminating term or convince myself none exists.
+
+For non-termination, we'd need an infinite reduction sequence. Each step is either rule 1 or rule 2. Rule 1 ends an F (the F goes away). Rule 2 creates a new F inside a G.
+
+So an infinite reduction must have infinitely many rule 2 applications (rule 1 ends things).
+
+Each rule 2 application: F(x, y, S(n)) -> G(y, F(x, y, n)). The "F(x, y, n)" inside is the recursive F. Its third arg is n, which was inside S.
+
+If we always reduce the outermost F first (leftmost-innermost), then... hmm, reduction order is non-deterministic.
+
+Strategy: focus on one F call. Each rule 2 reduces the "leading S depth" by 1 (replaces S(n) with n). This is well-founded: 0, 1, 2, ... cannot decrease infinitely.
+
+But the F(x, y, n) at the end has its own reductions. And those reductions might create new F calls. And in the new F's third arg n, we might have F's that get reduced, which might create more structure...
+
+Wait, F's are nested in the third arg, not in x and y. So F(x, y, F(a, b, c)) has F(a, b, c) as a subterm of the third arg.
+
+For the outer F to reduce, third arg must be S or Z. So F(x, y, F(a, b, c)) is stuck (third arg is F(...), not S or Z).
+
+To unstick, we reduce the inner F. F(a, b, c) -> ... -> normal form. If normal form is S or Z, the outer F can then reduce.
+
+This seems fine. Each F reduction is bounded by the leading S count, and inner F's reduce first if they need to.
+
+Actually, I want to argue: define the "F-arity" of a normal form as the number of S's at the front (or 0 if Z or other). For non-NF terms, define a more complex measure.
+
+I think the cleanest argument: this TRS is strongly normalizing. The reason is essentially that F is a well-defined partial function (it's G iterated n times applied to x), and the rewrite rules are a straightforward implementation.
+
+Hmm wait, the issue is that n can be a variable, and the rule pattern S(n) matches S(t) for ANY t. So F(x, y, S(t)) reduces regardless of t. This is the standard TRS issue: variables in rules can match complex terms.
+
+But still, in the system, every application of rule 2 reduces the number of S's in the term? Let's check.
+
+LHS: F(x, y, S(n)). S-count = S-count(x) + S-count(y) + 1 + S-count(n).
+RHS: G(y, F(x, y, n)). S-count = S-count(y) + S-count(x) + 0 + S-count(n).
+Wait, where's the S in the RHS? In the inner F(x, y, n), there's no S at the top. S-count of G(y, F(x, y, n)) = S-count(y) + S-count(F(x,y,n)) = S-count(y) + S-count(x) + S-count(n) + (whatever S's are in F(x,y,n)'s structure, but no S at top of F(x,y,n)).
+
+Hmm, S-count(F(x, y, n)) = S-count(x) + S-count(y) + 0 + S-count(n) (since the third arg of F is n, which is at the position, not an S).
+
+So S-count(LHS) = S-count(x) + S-count(y) + 1 + S-count(n).
+S-count(RHS) = S-count(y) + S-count(x) + S-count(n) + 0.
+Difference: 1. So S-count decreases by exactly 1 per rule 2 application.
+
+For rule 1: F(x, y, Z) -> x. S-count: 0 + 0 + 0 + 0 = 0 (in the LHS pattern, third arg is Z which has no S's). After substitution: S-count of x. So S-count of LHS instance is S-count(x) + S-count(y). RHS is S-count(x). Difference: S-count(y). Not necessarily decreasing!
+
+Wait, that's a problem. S-count of y could be positive. So rule 1 could increase S-count if y has S's.
+
+Hmm, but rule 1 is a "terminating" rule — it ends an F. So in a sense, even if S-count increases, the F call is gone.
+
+For the system to be SN, we need a measure that strictly decreases with each rewrite.
+
+Let me think. For rule 1, the F disappears, replaced by x. For rule 2, the F's third arg loses an S.
+
+Define M(t) = (number of F-occurrences, sum of S-counts in third args of F's, ...) — multi-argument.
+
+Hmm, let's try: for term t, let f(t) = number of F occurrences in t. Rule 1: F(x, y, Z) -> x, so f decreases by 1 (the F is gone). Rule 2: F(x, y, S(n)) -> G(y, F(x, y, n)). f(LHS) = 1 + f(x) + f(y) + f(S(n)) = 1 + f(x) + f(y) + f(n) (S doesn't add F's). f(RHS) = f(y) + 1 + f(x) + f(y) + f(n) (F(x,y,n) has the same structure as F(x,y,S(n)) but with n not S(n)) = f(y) + 1 + f(x) + f(y) + f(n).
+
+Wait, F(x, y, n) has one F (itself), plus any F's in x, y, n. f(F(x,y,n)) = 1 + f(x) + f(y) + f(n).
+f(G(y, F(x,y,n))) = 0 (G has no F's, but its args do) = f(y) + f(F(x,y,n)) = f(y) + 1 + f(x) + f(y) + f(n).
+
+f(LHS) = f(F(x,y,S(n))) = 1 + f(x) + f(y) + f(S(n)) = 1 + f(x) + f(y) + f(n) (since S(n) has no F's if n has no F's; but n could have F's, so f(S(n)) = f(n)).
+
+So f(LHS) = 1 + f(x) + f(y) + f(n). f(RHS) = f(y) + 1 + f(x) + f(y) + f(n) = 1 + f(x) + 2f(y) + f(n).
+
+Difference: f(RHS) - f(LHS) = f(y). So f doesn't necessarily decrease.
+
+Hmm, but each rule 2 application introduces G's. Let me consider a different measure.
+
+Number of (F-call, leading-S-depth) pairs. For each F occurrence, look at its third argument and count the leading S's (0 if Z, 0 if other, k if S^k(t)).
+
+For F(x, y, Z): leading S depth = 0 (well, it's a terminal case).
+For F(x, y, S^k(t)) where t doesn't start with S: leading S depth = k.
+For F(x, y, t) where t doesn't start with S and t ≠ Z: leading S depth = "stuck" (infinity, or special marker).
+
+After rule 1: the F is gone. OK.
+After rule 2: F(x, y, S(n)) -> G(y, F(x, y, n)). The new F has third arg n, so its leading S depth = leading S depth of n.
+
+Hmm, the leading S depth of n could be anything (more than or less than the original).
+
+This is getting complicated. Let me just trust that the system is SN and think about why.
+
+The function computed is: F(x, y, n) = if n == 0 then x else G(y, F(x, y, n-1)). This is well-defined for natural-number n. The TRS rules implement this correctly.
+
+But the TRS system has variables, and n could be any term. The question is whether the TRS can get "stuck" in a loop due to the variable-matching.
+
+I think the answer is: yes, the system is strongly normalizing. The reasoning can be made rigorous using a suitable measure.
+
+One such measure: assign to each term t a value M(t) = (# S symbols in t, # F symbols in t, ...) lexicographically. Hmm, but we showed # S can increase or decrease.
+
+Let me try: M(t) = (# F symbols in t, # S symbols in t). Lexicographic.
+
+Rule 1: F(x,y,Z) -> x. #F decreases by 1 (the F is removed). #S: was 0 in pattern, now S-count(x). #S could increase. But #F decreased, so M decreases (lex order, #F first).
+
+Rule 2: F(x,y,S(n)) -> G(y, F(x,y,n)). #F: was 1 + f(x) + f(y) + f(n), now 0 + f(y) + 1 + f(x) + f(y) + f(n) = 1 + f(x) + 2f(y) + f(n). #F can increase! #S: was 1 + S(x) + S(y) + S(n), now S(y) + S(x) + 0 + S(n) = S(x) + S(y) + S(n). #S decreased by 1.
+
+So lex order on (#F, #S) doesn't work for rule 2 since #F can increase.
+
+Let me try (#S, #F) lex.
+
+Rule 1: #S could go either way (was 0+S(x)+S(y), now S(x)). If S(y) > 0, #S decreases. If S(y) = 0, #S stays. #F decreases by 1. So lex (#S, #F): #S stays or decreases, and #F decreases. So lex decreases (since #S doesn't increase and #F decreases — wait, lex compares #S first; if #S stays the same, then #F decreasing means lex decreases; if #S decreases, lex decreases). 
+
+Wait, lex (#S, #F): smaller is "less". If #S decreases, then (a, b) < (a', b') with a < a' regardless of b. If #S stays, then need b < b'. In rule 1, #S: from S(x) + S(y) to S(x). Difference is -S(y). If S(y) > 0, #S decreases. If S(y) = 0, #S stays. In the latter case, #F: was 1 + f(x) + f(y) + 0 = 1 + f(x) + f(y), now f(x). Difference: -1 - f(y). #F decreases by 1 + f(y) ≥ 1.
+
+So in all cases for rule 1, lex (#S, #F) decreases. 
+
+Rule 2: #S: was S(x) + S(y) + 1 + S(n), now S(y) + S(x) + 0 + S(n) = S(x) + S(y) + S(n). Difference: -1. #S decreases by 1.
+
+So in rule 2, #S decreases by 1, so lex (#S, #F) decreases regardless of #F. 
+
+So lex (#S, #F) is a well-founded measure that strictly decreases with each rewrite. This proves strong normalization!
+
+Wait, let me double-check rule 1. LHS: F(x, y, Z). #S in this term (with substitution): S(x) + S(y) + 0 (Z has no S) = S(x) + S(y). RHS: x. #S: S(x). So #S(LHS) - #S(RHS) = S(y) ≥ 0. #S doesn't increase.
+
+#L(F(x, y, Z)) = 1 + f(x) + f(y) + 0 = 1 + f(x) + f(y). #F(x) = f(x). #F(LHS) - #F(RHS) = 1 + f(y) ≥ 1. #F decreases by at least 1.
+
+So in rule 1: #S doesn't increase, #F decreases. Lex (#S, #F) decreases. ✓
+
+Rule 2: LHS = F(x, y, S(n)). #S = S(x) + S(y) + 1 + S(n). RHS = G(y, F(x, y, n)). #S = S(y) + S(x) + S(n) (G has no S, F(x,y,n) has no top-level S). #S(LHS) - #S(RHS) = 1. #S decreases by 1.
+
+So #S decreases strictly. ✓
+
+Great, so the measure (#S, #F) with lex ordering shows strong normalization.
+
+Therefore, yes, strong normalization can be established from the rules alone.

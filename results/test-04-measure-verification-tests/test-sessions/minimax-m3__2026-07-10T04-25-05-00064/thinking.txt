@@ -1,0 +1,90 @@
+Let me analyze this Lean 4 file carefully.
+
+The file defines:
+1. A `Trace` inductive type representing a first-order rewrite calculus
+2. A `Step` relation defining rewriting rules
+3. A `phase` function that returns 1 for `recDelta b s (delta _)` and 0 otherwise
+4. A `cost` function computing some measure
+5. A `measure` that pairs phase and cost (lexicographic)
+
+The question is whether the lexicographic termination measure is sound — meaning, does every step strictly decrease the measure in lexicographic order?
+
+Let me check each rule:
+
+**R_int_delta**: `Step (integrate (delta t)) void`
+- LHS: `integrate (delta t)` — phase: not recDelta, so 0. cost: 1 + (1 + cost t) = 2 + cost t. Measure: (0, 2 + cost t)
+- RHS: `void` — phase: 0, cost: 0. Measure: (0, 0)
+- Decreases? cost decreases (2 + cost t > 0). ✓
+
+**R_merge_void_left**: `Step (merge void t) t`
+- LHS: `merge void t` — phase: 0, cost: 1 + 0 + cost t = 1 + cost t. Measure: (0, 1 + cost t)
+- RHS: `t` — measure: (phase t, cost t)
+- Need (0, 1 + cost t) > (phase t, cost t) lexicographically
+- If phase t = 0: need 1 + cost t > cost t. ✓
+- If phase t = 1: need phase comparison: 0 vs 1. 0 < 1. ✗ FAILS!
+- For phase t = 1, t must be `recDelta _ _ (delta _)`. So this rule fails when the right side is of the form `recDelta b s (delta n)`.
+
+Wait, let me re-examine. Is this actually a problem? The rule says `merge void t` reduces to `t`. If `t` is `recDelta b s (delta n)`, then LHS has phase 0, RHS has phase 1. The measure goes from (0, 1+cost t) to (1, cost t), which is an INCREASE in lexicographic order.
+
+So this rule does not strictly decrease the measure! This is a soundness issue.
+
+**R_merge_void_right**: `Step (merge t void) t` — same issue.
+
+**R_merge_cancel**: `Step (merge t t) t`
+- LHS: `merge t t` — phase: 0, cost: 1 + 2*cost t. Measure: (0, 1 + 2*cost t)
+- RHS: `t` — measure: (phase t, cost t)
+- If phase t = 0: 1 + 2*cost t > cost t. ✓
+- If phase t = 1: 0 < 1. ✗ FAILS
+
+**R_rec_zero**: `Step (recDelta b s void) b`
+- LHS: `recDelta b s void` — phase: void is not delta, so 0. cost: 1 + cost b + cost s + 0 = 1 + cost b + cost s. Measure: (0, 1 + cost b + cost s)
+- RHS: `b` — measure: (phase b, cost b)
+- If phase b = 0: need 1 + cost b + cost s > cost b, which requires cost s ≥ 0. Since cost is always ≥ 0, this holds (when cost s = 0, 1 + cost b > cost b). ✓
+- If phase b = 1: 0 < 1. ✗ FAILS
+
+**R_rec_succ**: `Step (recDelta b s (delta n)) (app s (recDelta b s n))`
+- LHS: `recDelta b s (delta n)` — phase: 1. cost: 1 + cost b + cost s + (1 + cost n) = 2 + cost b + cost s + cost n. Measure: (1, 2 + cost b + cost s + cost n)
+- RHS: `app s (recDelta b s n)` — phase: 0 (app is not recDelta). cost: 1 + cost s + (1 + cost b + cost s + cost n) = 2 + 2*cost s + cost b + cost n. Measure: (0, 2 + 2*cost s + cost b + cost n)
+- Lex: 1 > 0. ✓ Decreases.
+
+**R_eq_refl**: `Step (eqW a a) void`
+- LHS: `eqW a a` — phase: 0. cost: 3 + 2*cost a. Measure: (0, 3 + 2*cost a)
+- RHS: `void` — (0, 0)
+- 3 + 2*cost a > 0. ✓
+
+**R_eq_diff**: `Step (eqW a b) (integrate (merge a b))`
+- LHS: `eqW a b` — phase: 0. cost: 3 + cost a + cost b. Measure: (0, 3 + cost a + cost b)
+- RHS: `integrate (merge a b)` — phase: 0. cost: 1 + (1 + cost a + cost b) = 2 + cost a + cost b. Measure: (0, 2 + cost a + cost b)
+- 3 + cost a + cost b > 2 + cost a + cost b. ✓
+
+So the problematic rules are:
+- R_merge_void_left (when RHS is recDelta ...)
+- R_merge_void_right (when RHS is recDelta ...)
+- R_merge_cancel (when RHS is recDelta ...)
+- R_rec_zero (when b is recDelta ...)
+
+In all these cases, the LHS has phase 0, but the RHS could have phase 1 (if it's of the form `recDelta _ _ (delta _)`).
+
+Let me think about whether `b` could be of the form `recDelta _ _ (delta _)` in R_rec_zero. Yes, syntactically nothing prevents this. So we have:
+- `Step (recDelta (recDelta b' s' (delta n)) s void) (recDelta b' s' (delta n))`
+- LHS measure: (0, 1 + cost(...)
+- RHS measure: (1, cost(...))
+- 0 < 1 lexicographically, so measure INCREASES.
+
+Therefore, the lexicographic termination measure is **NOT sound**.
+
+Let me double-check by constructing concrete counterexamples more carefully.
+
+For R_merge_void_left with `t = recDelta void void (delta void)`:
+- t's phase: recDelta b s (delta _) — phase = 1
+- LHS: `merge void (recDelta void void (delta void))` — phase 0, cost = 1 + 0 + cost(t)
+- RHS: `recDelta void void (delta void)` — phase 1, cost = cost(t)
+- Measure LHS: (0, 1 + cost(t))
+- Measure RHS: (1, cost(t))
+- Lex comparison: (0, ...) vs (1, ...): 0 < 1, so RHS > LHS, NOT a decrease.
+
+Yes, this is a clear counterexample. The measure is unsound.
+
+So the answer: The measure is NOT sound. The `phase` function only marks `recDelta b s (delta _)` as phase 1, but the rules R_merge_void_left/right, R_merge_cancel, and R_rec_zero can reduce a phase-0 term to a phase-1 term, which would not be a decrease in lexicographic order.
+
+Specifically, these rules' RHS could be of the form `recDelta b s (delta n)`, which has phase 1, while the LHS has phase 0.

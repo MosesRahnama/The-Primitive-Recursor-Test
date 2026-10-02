@@ -1,0 +1,78 @@
+I'll analyze whether the helper strategy is sound by examining both theorems carefully.
+
+## Analyzing `kappa_rec_delta_step`
+
+The claim is:
+```
+kappa (recDelta b s (delta n)) = kappa (recDelta b s n) + 1
+```
+
+**Left side:** By `kappa_rec_delta`, we have
+```
+kappa (recDelta b s (delta n)) = max (max (kappa b) (kappa s)) (kappa n) + 1
+```
+
+**Right side:** We need `kappa (recDelta b s n) + 1`. But this depends on the *shape* of `n`, because `kappa`'s definition pattern-matches on the third argument:
+
+- **Case `n = delta m`:** Then `recDelta b s n = recDelta b s (delta m)`, so
+  ```
+  kappa (recDelta b s n) = max (max (kappa b) (kappa s)) (kappa m) + 1
+  ```
+  Note `kappa n = kappa (delta m) = kappa m`. So the RHS becomes
+  ```
+  max (max (kappa b) (kappa s)) (kappa m) + 1 + 1
+  ```
+  while the LHS is `max (max (kappa b) (kappa s)) (kappa m) + 1`.
+  These differ by 1 — **the theorem is FALSE in this case.**
+
+- **Case `n` is not of the form `delta _` (e.g. `void`, `merge ...`, etc.):** Then the fall-through pattern applies:
+  ```
+  kappa (recDelta b s n) = max (max (kappa b) (kappa s)) (kappa n)
+  ```
+  and the RHS is `max (max (kappa b) (kappa s)) (kappa n) + 1`, which equals the LHS. **True in this case.**
+
+**Concrete counterexample.** Let `b = s = void` and `n = delta void`.
+
+- LHS: `kappa (recDelta void void (delta (delta void)))` = `max (max 0 0) (kappa (delta void)) + 1` = `max 0 0 + 1` = `1`.
+- `kappa (recDelta void void (delta void))` = `max (max 0 0) (kappa void) + 1` = `0 + 1` = `1`.
+- So RHS = `1 + 1 = 2`.
+
+Thus `1 = 2` would be required, which is false. **`kappa_rec_delta_step` is not provable** (it is a false statement), so its `sorry` can never be discharged.
+
+## Analyzing `kappa_rec_succ_drop`
+
+The claim is:
+```
+kappa (app s (recDelta b s n)) < kappa (recDelta b s (delta n))
+```
+
+The proof starts with `rw [kappa_rec_delta_step]`, rewriting the RHS to `kappa (recDelta b s n) + 1`. Setting aside that this rewrite relies on the false lemma, let's check whether the *goal statement itself* is even true, since that determines whether the intended strategy could work with a correct helper.
+
+**LHS:** `kappa (app s (recDelta b s n)) = max (kappa s) (kappa (recDelta b s n))`.
+
+**RHS:** `kappa (recDelta b s (delta n)) = max (max (kappa b) (kappa s)) (kappa n) + 1`.
+
+Consider the sub-case where `n = delta m`. Then:
+- `kappa (recDelta b s n) = max (max (kappa b) (kappa s)) (kappa m) + 1`.
+- LHS `= max (kappa s) (max (max (kappa b) (kappa s)) (kappa m) + 1)`.
+  Since `kappa s ≤ max(max(kappa b)(kappa s))(kappa m) + 1`, LHS `= max (max (kappa b) (kappa s)) (kappa m) + 1`.
+- RHS `= max (max (kappa b) (kappa s)) (kappa (delta m)) + 1 = max (max (kappa b) (kappa s)) (kappa m) + 1`.
+
+So LHS **equals** RHS, and the strict inequality `<` **fails** (it's `x < x`).
+
+**Concrete counterexample:** `b = s = void`, `n = delta void`:
+- LHS: `kappa (app void (recDelta void void (delta void)))` = `max 0 1` = `1`.
+- RHS: `kappa (recDelta void void (delta (delta void)))` = `1` (computed above).
+- `1 < 1` is false.
+
+So the **goal statement of `kappa_rec_succ_drop` is itself false**, independent of the helper.
+
+## Conclusion
+
+**The helper strategy is unsound.**
+
+1. `kappa_rec_delta_step` is a **false proposition** (fails whenever `n` has the form `delta m`, e.g. `b=s=void, n=delta void` gives `1 = 2`). Its `sorry` is unclosable. The root cause is that `kappa`'s recursion on `recDelta` only adds `+1` when the third argument is *syntactically* `delta _`, so it does not add one `+1` per `delta` layer — it saturates.
+
+2. `kappa_rec_succ_drop` is also a **false proposition** as stated (fails for `b=s=void, n=delta void`, giving `1 < 1`). Even a correct helper could not rescue it, because the target statement itself does not hold.
+
+The deeper design flaw is that `kappa` fails to strictly decrease across `R_rec_succ`: unfolding one `delta` layer does not necessarily reduce `kappa`, so `kappa` is not a valid termination measure for this rewrite system. A sound measure would need to count something like the total number of `delta` constructors in the recursion argument (or total term size), not this saturating pattern.

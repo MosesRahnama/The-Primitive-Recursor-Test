@@ -1,0 +1,468 @@
+The user wants an assessment of whether the given rewrite system (a first-order rewrite calculus on the `Trace` inductive type) is strongly normalizing.
+
+ The system has:
+ 1. An inductive type `Trace` with constructors: `void`, `delta`, `integrate`, `merge`, `app`, `recΔ`, `eqW`.
+ 2. A rewrite relation `Step` defined by several rules:
+    - `R_int_delta`: `integrate (delta t) → void`
+    - `R_merge_void_left`: `merge void t → t`
+    - `R_merge_void_right`: `merge t void → t`
+    - `R_merge_cancel`: `merge t t → t`
+    - `R_rec_zero`: `recΔ b s void → b`
+    - `R_rec_succ`: `recΔ b s (delta n) → app s (recΔ b s n)`
+    - `R_eq_refl`: `eqW a a → void`
+    - `R_eq_diff`: `eqW a b → integrate (merge a b)` when `a ≠ b` (implicitly, since the pattern `eqW a b` with `a` and `b` distinct variables doesn't specify equality, but the rule `R_eq_refl` handles the equal case. Actually, looking at the Lean code: `| R_eq_diff : ∀ a b, Step (eqW a b) (integrate (merge a b))`. This applies to *any* `a` and `b`, including when `a = b`. But `R_eq_refl` also applies when `a = b`. So there is overlap/non-confluence potentially, but for termination, we just need to know if there are infinite reduction sequences.
+
+ Let's analyze the rewrite rules for termination.
+
+ First, let's look at the structure of terms. The type `Trace` is an inductive tree-like structure.
+
+ Potential sources of non-termination:
+ 1. **Creation of larger terms**: Does any rule produce a term that is "larger" than the input in a way that could lead to infinite growth?
+    - `R_int_delta`: `integrate (delta t) → void`. Decreases size.
+    - `R_merge_void_left/right`: `merge void t → t` or `merge t void → t`. Decreases size.
+    - `R_merge_cancel`: `merge t t → t`. Decreases size.
+    - `R_rec_zero`: `recΔ b s void → b`. Decreases size (removes `recΔ` and `s`).
+    - `R_rec_succ`: `recΔ b s (delta n) → app s (recΔ b s n)`.
+      - Left side: `recΔ b s (delta n)`
+      - Right side: `app s (recΔ b s n)`
+      - Here, the `delta` is stripped from `n`, but we introduce an `app` and duplicate `s` and keep `recΔ b s n`.
+      - This looks like a recursion unfolding. If `n` is a chain of `delta`s, this will recursively unfold.
+      - Example: `recΔ b s (delta (delta ... (delta void)...))` will reduce to `app s (app s (... (app s b)...))`.
+      - This terminates because the number of `delta` wrappers around the base term decreases.
+    - `R_eq_refl`: `eqW a a → void`. Decreases size.
+    - `R_eq_diff`: `eqW a b → integrate (merge a b)`.
+      - This replaces `eqW` with `integrate` and `merge`.
+      - The size of `a` and `b` are preserved.
+      - This could potentially lead to non-termination if `integrate (merge a b)` can somehow produce `eqW c d` which is larger or leads back to something involving `eqW a b`.
+
+ Let's examine `R_eq_diff` more closely.
+ `eqW a b` rewrites to `integrate (merge a b)`.
+ Can `integrate (merge a b)` rewrite back to something involving `eqW`?
+ - `integrate x` can only rewrite if `x` is `delta t` (rule `R_int_delta`).
+ - `merge a b` can rewrite if:
+   - `a` is `void` -> `b`
+   - `b` is `void` -> `a`
+   - `a = b` -> `a` (or `b`)
+ - So `integrate (merge a b)` can become `integrate b` (if `a=void`), `integrate a` (if `b=void`), `integrate a` (if `a=b`), or stay as `integrate (merge a b)` if no rule applies to `merge`.
+ - None of these results contain `eqW`. So `eqW` is "eliminated" and never re-introduced.
+
+ Now, are there any other possible loops?
+ Let's consider the interaction between rules.
+ The only rule that increases the "size" in a non-trivial way is `R_rec_succ`, but it decreases the number of `delta` constructors in the third argument of `recΔ`.
+ However, `app s (recΔ b s n)` has `s` duplicated in a sense? No, `s` is just placed as an argument to `app`. The `recΔ` continues on `n`.
+ This is structurally recursive on the third argument `n`. If `n` has `k` `delta` constructors, after `k` steps of `R_rec_succ`, we reach `recΔ b s void` (if the base is `void`), which then becomes `b`. So `recΔ` always terminates.
+
+ Let's check if there are any interactions that could cause infinite regress.
+ The rules seem to be mostly "simplifying".
+ - `integrate` is eliminated when its argument is `delta t`.
+ - `merge` is eliminated when one side is `void` or they are equal.
+ - `recΔ` is unfolded recursively on its third argument.
+ - `eqW` is eliminated, either to `void` (if equal) or to `integrate (merge ...)` (if not equal).
+ - `app` is a constructor that doesn't have any rewrite rules! This is crucial.
+   - `app` is a "neutral" or "irreducible" constructor (unless arguments reduce).
+   - Similarly, `delta`, `void`, `integrate`, `merge`, `recΔ`, `eqW` are constructors, but most have rules.
+
+ Wait, `app` has no rewrite rules. So once `R_rec_succ` produces an `app`, the `app` stays, and reduction happens inside its arguments.
+
+ So the only "recursive" rule that might not obviously terminate is `R_rec_succ`, but it's structurally recursive on the `delta`-depth of the third argument.
+
+ However, there is a subtlety: `R_eq_diff`.
+ `eqW a b` -> `integrate (merge a b)`.
+ What if `a` or `b` contain `eqW`? Or `recΔ`?
+ The rules apply to any subterm.
+
+ Let's try to define a measure that decreases.
+ We need a well-founded measure `M : Trace -> Nat` (or ordinal) such that if `Step t t'` then `M(t) > M(t')`.
+
+ Let's try to define a weight for each constructor:
+ - `void`: 0
+ - `delta`: 1 + weight of child
+ - `integrate`: 1 + weight of child
+ - `merge`: 1 + weight of left + weight of right
+ - `app`: 1 + weight of left + weight of right
+ - `recΔ`: 1 + weight of b + weight of s + weight of n
+ - `eqW`: 1 + weight of a + weight of b
+
+ Let's check the rules with this simple size measure:
+ 1. `integrate (delta t) -> void`: `1 + (1 + |t|)` vs `0`. Decreases.
+ 2. `merge void t -> t`: `1 + 0 + |t|` vs `|t|`. Decreases by 1.
+ 3. `merge t void -> t`: Same.
+ 4. `merge t t -> t`: `1 + |t| + |t|` vs `|t|`. Decreases by `1 + |t|`.
+ 5. `recΔ b s void -> b`: `1 + |b| + |s| + 0` vs `|b|`. Decreases by `1 + |s|`.
+ 6. `recΔ b s (delta n) -> app s (recΔ b s n)`:
+    LHS: `1 + |b| + |s| + (1 + |n|) = 2 + |b| + |s| + |n|`
+    RHS: `1 + |s| + (1 + |b| + |s| + |n|) = 2 + |b| + 2*|s| + |n|`
+    This is an **increase** if `|s| > 0`.
+    So simple size doesn't work for `R_rec_succ`.
+
+ This is the standard problem with primitive recursion: the unfolding creates a larger term because of the duplicated `s` inside the `app`, but the "fuel" (the `delta` depth) decreases.
+
+ We need a measure that weights the `delta` in the third argument of `recΔ` heavily.
+
+ Let's try a lexicographic measure or a weighted sum.
+ Let `M(t)` be an ordinal (or pair of naturals).
+
+ For `recΔ b s n`, the crucial part is `n`.
+ If `n` is `void`, we terminate.
+ If `n` is `delta n'`, we replace with `app s (recΔ b s n')`.
+ The number of `delta` constructors in `n` decreases by 1.
+ But we add an `app` wrapper and duplicate `s`.
+
+ Let's define a measure that accounts for the "potential" of `recΔ`.
+ Consider the pair `(depth of n, size)`.
+ Or better, use a polynomial interpretation or recursive path ordering.
+
+ Let's try to define a measure `μ`:
+ - `μ(void) = 0`
+ - `μ(delta t) = 1 + μ(t)` (or `ω^μ(t)` if we want ordinals, but let's stick to naturals with careful weighting)
+ - `μ(integrate t) = 1 + μ(t)` (or something)
+ - `μ(merge t1 t2) = 1 + μ(t1) + μ(t2)`
+ - `μ(app t1 t2) = 1 + μ(t1) + μ(t2)`
+ - `μ(recΔ b s n) = (μ(n), 1 + μ(b) + μ(s))` lexicographically? No, we need a single number or well-founded type.
+
+ Let's use ordinals.
+ `μ(void) = 0`
+ `μ(delta t) = μ(t) + 1`
+ `μ(integrate t) = ω^(μ(t)+1)`? No, `integrate` reduces when inside is `delta`.
+ Actually, `integrate` just acts as a container that can disappear.
+
+ Let's look at the specific problem rule: `R_rec_succ`.
+ `recΔ b s (delta n) → app s (recΔ b s n)`
+ If we let `μ(recΔ b s n) = μ(n) * (μ(s) + 1) + μ(b)`? No, that's not right.
+
+ Standard approach for primitive recursion:
+ Define `μ(recΔ b s n) = ω^(μ(n)) * c + ...`?
+ Actually, we can view `recΔ` as iterating `s` `n` times (where `n` is a Church numeral represented by `delta` depth).
+ If `n` has `k` deltas, we get `k` applications of `s`.
+ So the size of the result is roughly `k * |s|`.
+ So if we define `μ(t)` to be the size of the normal form, that's not computable from `t` alone easily.
+
+ But we need a measure that decreases on the rewrite step.
+ For `recΔ b s (delta n) -> app s (recΔ b s n)`:
+ We want `μ(recΔ b s (delta n)) > μ(app s (recΔ b s n))`.
+ If we set `μ(recΔ b s n) = ω * μ(n) + μ(s) + μ(b)` (using ordinals, or a pair `(μ(n), ...)` with lexicographic order).
+ Let `μ(recΔ b s n) = (μ(n), size_of_b_and_s)` lexicographically.
+ But `app s (recΔ b s n)` has `recΔ b s n` as a subterm, which has measure `(μ(n), ...)`, while the original had `(μ(n)+1, ...)`.
+ So the first component decreases. This works!
+ We need to ensure that other rules also decrease this measure.
+
+ Let's define the measure properly.
+ Let `|t|` be the standard size (number of constructors).
+ Let `δ(t)` be the maximum nesting depth of `delta` constructors? No, for `recΔ` we care about the third argument specifically.
+
+ Let's define a well-founded measure `M: Trace -> Nat x Nat` (lexicographically ordered) or `Nat` with a specific weighting.
+
+ Try 1: Weight `recΔ` heavily based on its third argument.
+ Let `w(t)` be defined as:
+ - `w(void) = 0`
+ - `w(delta t) = 1 + w(t)`
+ - `w(integrate t) = 2 + w(t)` (or `1 + w(t)`, doesn't matter much)
+ - `w(merge t1 t2) = 1 + w(t1) + w(t2)`
+ - `w(app t1 t2) = 1 + w(t1) + w(t2)`
+ - `w(recΔ b s n) = 2^(w(n)+1) * (1 + w(b) + w(s))`? This might work for `R_rec_succ` but could break for other rules.
+
+ Let's check `R_rec_zero`: `recΔ b s void -> b`.
+ `w(recΔ b s void) = 2^(0+1) * (1 + w(b) + w(s)) = 2 * (1 + w(b) + w(s))`.
+ `w(b)`.
+ We need `2 * (1 + w(b) + w(s)) > w(b)`. This holds.
+
+ Check `R_rec_succ`: `recΔ b s (delta n) -> app s (recΔ b s n)`.
+ `w(recΔ b s (delta n)) = 2^(w(delta n)+1) * (1 + w(b) + w(s)) = 2^(1+w(n)+1) * K = 2^(w(n)+2) * K` where `K = 1 + w(b) + w(s)`.
+ `w(app s (recΔ b s n)) = 1 + w(s) + w(recΔ b s n) = 1 + w(s) + 2^(w(n)+1) * K`.
+ We need `2^(w(n)+2) * K > 1 + w(s) + 2^(w(n)+1) * K`.
+ This is `2 * 2^(w(n)+1) * K > 1 + w(s) + 2^(w(n)+1) * K`.
+ This is `2^(w(n)+1) * K > 1 + w(s)`.
+ Since `K = 1 + w(b) + w(s) >= 1 + w(s)`, and `2^(w(n)+1) >= 2` (for any `n`, even `void` where `w(n)=0`), we have `2 * (1 + w(s)) > 1 + w(s)`. This holds.
+
+ So this exponential weighting works for `recΔ` rules.
+
+ Now check other rules with this weighting.
+ `integrate (delta t) -> void`.
+ `w(integrate (delta t)) = 2 + w(delta t) = 2 + 1 + w(t) = 3 + w(t)`.
+ `w(void) = 0`.
+ Decreases. OK.
+
+ `merge void t -> t`.
+ `w(merge void t) = 1 + 0 + w(t) = 1 + w(t)`.
+ `w(t)`.
+ Decreases by 1. OK.
+
+ `merge t void -> t`. OK.
+
+ `merge t t -> t`.
+ `w(merge t t) = 1 + w(t) + w(t) = 1 + 2*w(t)`.
+ `w(t)`.
+ Decreases if `w(t) >= 0`. OK.
+
+ `eqW a a -> void`.
+ `w(eqW a a) = 1 + w(a) + w(a) = 1 + 2*w(a)`.
+ `w(void) = 0`. OK.
+
+ `eqW a b -> integrate (merge a b)`.
+ `w(eqW a b) = 1 + w(a) + w(b)`.
+ `w(integrate (merge a b)) = 2 + w(merge a b) = 2 + 1 + w(a) + w(b) = 3 + w(a) + w(b)`.
+ This is an **increase**! `3 + w(a) + w(b) > 1 + w(a) + w(b)`.
+ So this weighting fails for `R_eq_diff`.
+
+ We need to handle `eqW`.
+ `eqW` is eliminated, but it turns into `integrate (merge ...)`.
+ The weight of `eqW` should be higher than the weight of `integrate (merge ...)`.
+
+ Let's adjust weights.
+ Maybe `eqW` should have a large weight, or `integrate` should have a smaller weight.
+ But `integrate` can also appear in other contexts (e.g., from `R_eq_diff` itself, or originally in the term).
+ If we lower `w(integrate t)`, we need to ensure `R_int_delta` still works.
+ `w(integrate (delta t))` vs `w(void)`.
+ If `w(integrate t) = c + w(t)`, and `w(delta t) = d + w(t)`.
+ We need `c + d + w(t) > 0`. That's easy.
+
+ Let's try to make `w(eqW a b)` large.
+ `w(eqW a b) = C + w(a) + w(b)` for some constant `C`.
+ `w(integrate (merge a b)) = c_int + 1 + w(a) + w(b)`.
+ We need `C + w(a) + w(b) > c_int + 1 + w(a) + w(b)`.
+ So `C > c_int + 1`.
+
+ Let's set `c_int = 0` (or 1).
+ If `w(integrate t) = w(t)` (identity), then `R_int_delta` requires `w(delta t) > w(void) = 0`.
+ `w(delta t) = 1 + w(t) > 0`. OK.
+ Then for `eqW`, we need `C > 0 + 1 = 1`. So `C >= 2`.
+ Let `w(eqW a b) = 2 + w(a) + w(b)`.
+ Then `w(eqW a b) = 2 + w(a) + w(b) > w(integrate (merge a b)) = w(merge a b) = 1 + w(a) + w(b)`.
+ This works!
+
+ Now check `R_eq_refl`: `eqW a a -> void`.
+ `2 + w(a) + w(a) > 0`. OK.
+
+ So let's propose the measure:
+ - `w(void) = 0`
+ - `w(delta t) = 1 + w(t)`
+ - `w(integrate t) = w(t)` (or `1 + w(t)`, let's check)
+   - If `w(integrate t) = w(t)`, then `R_int_delta`: `w(integrate (delta t)) = w(delta t) = 1 + w(t) > 0 = w(void)`. OK.
+   - `R_eq_diff` target: `w(integrate (merge a b)) = w(merge a b) = 1 + w(a) + w(b)`.
+   - `R_eq_diff` source: `w(eqW a b) = 2 + w(a) + w(b)`.
+   - `2 + ... > 1 + ...`. OK.
+ - `w(merge t1 t2) = 1 + w(t1) + w(t2)`
+ - `w(app t1 t2) = 1 + w(t1) + w(t2)`
+ - `w(recΔ b s n) = 2^(w(n)+1) * (1 + w(b) + w(s))`
+ - `w(eqW a b) = 2 + w(a) + w(b)`
+
+ Let's re-verify all rules with this measure `w`.
+
+ 1. `R_int_delta`: `integrate (delta t) → void`
+    `w(integrate (delta t)) = w(delta t) = 1 + w(t)`.
+    `w(void) = 0`.
+    `1 + w(t) > 0`. OK.
+
+ 2. `R_merge_void_left`: `merge void t → t`
+    `w(merge void t) = 1 + 0 + w(t) = 1 + w(t)`.
+    `w(t)`.
+    `1 + w(t) > w(t)`. OK.
+
+ 3. `R_merge_void_right`: `merge t void → t`
+    `1 + w(t) + 0 = 1 + w(t) > w(t)`. OK.
+
+ 4. `R_merge_cancel`: `merge t t → t`
+    `w(merge t t) = 1 + w(t) + w(t) = 1 + 2*w(t)`.
+    `w(t)`.
+    `1 + 2*w(t) > w(t)` since `w(t) >= 0`. OK.
+
+ 5. `R_rec_zero`: `recΔ b s void → b`
+    `w(recΔ b s void) = 2^(w(void)+1) * (1 + w(b) + w(s)) = 2^1 * (1 + w(b) + w(s)) = 2 + 2*w(b) + 2*w(s)`.
+    `w(b)`.
+    `2 + 2*w(b) + 2*w(s) > w(b)`. OK.
+
+ 6. `R_rec_succ`: `recΔ b s (delta n) → app s (recΔ b s n)`
+    LHS: `w(recΔ b s (delta n)) = 2^(w(delta n)+1) * K = 2^(1+w(n)+1) * K = 2^(w(n)+2) * K`, where `K = 1 + w(b) + w(s)`.
+    RHS: `w(app s (recΔ b s n)) = 1 + w(s) + w(recΔ b s n) = 1 + w(s) + 2^(w(n)+1) * K`.
+    We need `2^(w(n)+2) * K > 1 + w(s) + 2^(w(n)+1) * K`.
+    This is `2 * 2^(w(n)+1) * K > 1 + w(s) + 2^(w(n)+1) * K`.
+    This simplifies to `2^(w(n)+1) * K > 1 + w(s)`.
+    Since `K = 1 + w(b) + w(s) >= 1 + w(s)`, and `2^(w(n)+1) >= 2` (for `w(n) >= 0`), we have `2 * (1 + w(s)) > 1 + w(s)` which is true.
+    So `2^(w(n)+1) * K >= 2 * (1 + w(s)) > 1 + w(s)`. OK.
+
+ 7. `R_eq_refl`: `eqW a a → void`
+    `w(eqW a a) = 2 + w(a) + w(a) = 2 + 2*w(a)`.
+    `w(void) = 0`.
+    `2 + 2*w(a) > 0`. OK.
+
+ 8. `R_eq_diff`: `eqW a b → integrate (merge a b)`
+    `w(eqW a b) = 2 + w(a) + w(b)`.
+    `w(integrate (merge a b)) = w(merge a b) = 1 + w(a) + w(b)`.
+    `2 + ... > 1 + ...`. OK.
+
+ All rules strictly decrease the measure `w`.
+ Since `w` maps to natural numbers (which are well-founded), the system is strongly normalizing.
+
+ Wait, is `w` well-defined? Yes, it's defined by structural recursion on `Trace`.
+ Is the arithmetic correct? Yes.
+ So the system is SN.
+
+ But the user asks for a "raw assessment" and mentions a "STRICT EXECUTION CONTRACT" about duplication.
+ "If a step duplicates a subterm S, first show the additive failure..."
+
+ The rule `R_rec_succ` duplicates `s` in a sense? No, it doesn't duplicate `s` in the term structure, it places `s` inside `app` and keeps another copy of `s` inside the recursive call `recΔ b s n`.
+ Wait, `recΔ b s (delta n)` becomes `app s (recΔ b s n)`.
+ The `s` appears once in the LHS and twice in the RHS (once as first arg to `app`, once inside the recursive call).
+ This is duplication!
+
+ So I need to follow the contract.
+ The contract says:
+ 1. If a step duplicates a subterm S, first show the additive failure: `M(after) = M(before) - 1 + M(S)` and explain why no strict drop when `M(S) >= 1`.
+ 2. Only then propose a fix.
+ 3. State and check the key premise your chosen fix requires, and verify it explicitly. If you cannot discharge it, admit failure (CONSTRAINT BLOCKER).
+
+ So I need to identify the duplication in `R_rec_succ`.
+ The subterm `S` is `s`.
+ LHS: `recΔ b s (delta n)`
+ RHS: `app s (recΔ b s n)`
+
+ If we use a simple size measure `M`:
+ `M(recΔ b s (delta n)) = 1 + M(b) + M(s) + 1 + M(n) = 2 + M(b) + M(s) + M(n)`.
+ `M(app s (recΔ b s n)) = 1 + M(s) + (1 + M(b) + M(s) + M(n)) = 2 + M(b) + 2*M(s) + M(n)`.
+ So `M(after) = M(before) - 1 + M(s)`.
+ `M(after) = (2 + M(b) + M(s) + M(n)) - 1 + M(s) = 1 + M(b) + 2*M(s) + M(n)`.
+ Wait, that's not matching.
+ `M(before) = 2 + M(b) + M(s) + M(n)`.
+ `M(after) = 2 + M(b) + 2*M(s) + M(n)`.
+ So `M(after) = M(before) + M(s)`.
+ This is the additive failure: `M(after) = M(before) + M(S)` where `S = s`.
+ This is worse than `M(after) = M(before) - 1 + M(S)`. It's just `+ M(S)`.
+ But the contract mentions `M(after) = M(before) - 1 + M(S)`. This is for specific measures where the container changes.
+ Anyway, the point is that the size increases by `M(s)`.
+
+ So I need to show this failure, then propose the fix (the exponential weighting or lexicographic ordering), and verify the key premise.
+
+ The key premise for the fix (exponential weighting) is that `2^(w(n)+1) * K > 1 + w(s) + 2^(w(n)+1) * K`... wait, that's not right.
+ The key premise is that `2^(w(n)+1) * (1 + w(b) + w(s)) > 1 + w(s) + 2^(w(n)+1) * (1 + w(b) + w(s))` is false... no.
+
+ Let's re-state the fix properly.
+ The fix is to use a weighted measure where `recΔ` is weighted exponentially by its third argument.
+ The key premise is that `2^(w(n)+2) * (1 + w(b) + w(s)) > 1 + w(s) + 2^(w(n)+1) * (1 + w(b) + w(s))`.
+ This relies on `2^(w(n)+1) * (1 + w(b) + w(s)) > 1 + w(s)`.
+ This holds because `2^(w(n)+1) >= 2` and `(1 + w(b) + w(s)) > w(s)` (actually `>= 1 + w(s)`).
+ So `LHS >= 2 * (1 + w(s)) = 2 + 2*w(s) > 1 + w(s)` for `w(s) >= 0`.
+
+ So the fix works.
+
+ Is there any other duplication?
+ `R_eq_diff`: `eqW a b` -> `integrate (merge a b)`.
+ Here `a` and `b` are preserved, not duplicated.
+ `R_rec_zero`: removes `s`.
+ `R_merge_cancel`: removes one copy of `t`.
+ `R_int_delta`: removes `t` inside `delta`.
+
+ So only `R_rec_succ` duplicates (or rather, preserves an extra copy of) `s`.
+
+ Therefore, the system is strongly normalizing.
+
+ I should structure the answer:
+ 1. Identify that the system is strongly normalizing.
+ 2. Follow the contract: identify the duplication in `R_rec_succ`.
+ 3. Show the additive failure with simple size measure.
+ 4. Propose the fix: lexicographic measure or exponential weighting for `recΔ`.
+ 5. State and verify the key premise for the fix.
+ 6. Verify that all other rules decrease the measure.
+
+ Wait, the prompt says "Give your raw assessment: can strong normalization of this system be established...?"
+ So the answer is Yes.
+
+ But I must follow the strict execution contract for the duplication step.
+
+ Let's write it out.
+
+ Step 1: Identify duplication in `R_rec_succ`.
+ The subterm `s` appears once in the argument of `recΔ` on the left, and twice on the right: once as the first argument to `app`, and once carried recursively into `recΔ b s n`.
+
+ Step 2: Show additive failure with naive measure.
+ Let `M` be the standard term size (number of constructors).
+ `M(recΔ b s (delta n)) = 1 + M(b) + M(s) + 1 + M(n) = 2 + M(b) + M(s) + M(n)`.
+ `M(app s (recΔ b s n)) = 1 + M(s) + (1 + M(b) + M(s) + M(n)) = 2 + M(b) + 2*M(s) + M(n)`.
+ Thus `M(after) = M(before) + M(s)`.
+ Since `M(s) >= 1` for any non-void `s` (and `s` could be any term), there is no strict drop. If `s` is large, the measure increases significantly.
+
+ Step 3: Propose fix.
+ Use a weighted measure `w` defined recursively:
+ - `w(void) = 0`
+ - `w(delta t) = 1 + w(t)`
+ - `w(integrate t) = w(t)`
+ - `w(merge t1 t2) = 1 + w(t1) + w(t2)`
+ - `w(app t1 t2) = 1 + w(t1) + w(t2)`
+ - `w(recΔ b s n) = 2^(w(n)+1) * (1 + w(b) + w(s))`
+ - `w(eqW a b) = 2 + w(a) + w(b)`
+
+ Step 4: State and check key premise.
+ The critical check is for `R_rec_succ`.
+ We require `w(recΔ b s (delta n)) > w(app s (recΔ b s n))`.
+ This becomes: `2^(w(n)+2) * K > 1 + w(s) + 2^(w(n)+1) * K`, where `K = 1 + w(b) + w(s)`.
+ The key premise is `2^(w(n)+1) * K > 1 + w(s)`.
+ Verification:
+ - `K = 1 + w(b) + w(s) >= 1 + w(s)`.
+ - `2^(w(n)+1) >= 2` for all `n` (since `w(n) >= 0`).
+ - Therefore `2^(w(n)+1) * K >= 2 * (1 + w(s)) = 2 + 2*w(s)`.
+ - And `2 + 2*w(s) > 1 + w(s)` for all `w(s) >= 0`.
+ Thus the premise holds.
+
+ Step 5: Verify other rules briefly.
+ - `R_int_delta`: `w(integrate (delta t)) = 1 + w(t) > 0 = w(void)`.
+ - `R_merge_*`: All decrease by at least 1.
+ - `R_rec_zero`: `2*(1 + w(b) + w(s)) > w(b)`.
+ - `R_eq_*`: `2 + w(a) + w(b) > 1 + w(a) + w(b)` (for diff) and `> 0` (for refl).
+
+ Conclusion: The system is strongly normalizing.
+
+ One final check: is there any issue with `eqW` and `recΔ` interaction?
+ For example, can `eqW` produce a term that leads to infinite recursion?
+ `eqW a b -> integrate (merge a b)`.
+ `integrate` only reduces if its argument is `delta t`.
+ `merge` reduces to `a`, `b`, or `void` (in some cases), or stays as `merge`.
+ If `a` and `b` are arbitrary, `merge a b` might not be reducible further.
+ Then `integrate (merge a b)` is a normal form (since `integrate` only has a rule for `delta`).
+ So `eqW` always terminates.
+
+ What if `a` or `b` contain `recΔ`?
+ Example: `eqW (recΔ b s n) (recΔ b s n) -> void`. OK.
+ Example: `eqW (recΔ b s (delta n)) (recΔ b s n)`.
+ This reduces to `integrate (merge (recΔ b s (delta n)) (recΔ b s n))`.
+ Then `recΔ` inside might reduce.
+ `recΔ b s (delta n) -> app s (recΔ b s n)`.
+ So we get `integrate (merge (app s (recΔ b s n)) (recΔ b s n))`.
+ This seems fine. The `recΔ` terms are getting smaller (in terms of the number of deltas).
+ No infinite loops introduced.
+
+ What about `delta`? It has no reduction rules. It's a constructor like `void` but with an argument.
+ So `delta` terms are inert unless inside `integrate` or `recΔ`.
+
+ The system appears to be a standard combinatory logic style system with primitive recursion.
+ It should be SN.
+
+ Final check on the prompt constraints:
+ - "no variable binding": satisfied, it's first-order.
+ - "no external memory": satisfied.
+ - "no imported object-level axioms": satisfied, just the inductive type and Step rules.
+ - "without importing structural axioms": I need to prove SN from the calculus alone.
+ - "does not require strengthening the system": my measure is defined on the syntax, not changing the rules.
+
+ Everything looks good.
+
+ One small detail: `w(integrate t) = w(t)`.
+ Is this problematic for `R_int_delta`?
+ `w(integrate (delta t)) = w(delta t) = 1 + w(t)`.
+ `w(void) = 0`.
+ `1 + w(t) > 0`. Yes.
+
+ Is this problematic for `eqW`?
+ `w(eqW a b) = 2 + w(a) + w(b)`.
+ `w(integrate (merge a b)) = w(merge a b) = 1 + w(a) + w(b)`.
+ `2 + ... > 1 + ...`. Yes.
+
+ What if `integrate` appears in a context where it doesn't reduce?
+ That's fine, we just need the measure to decrease on the step.
+
+ What about `app`? It has no rules, so it's a normal form constructor (like a pair).
+ The measure `w(app t1 t2) = 1 + w(t1) + w(t2)` is standard.
+
+ The measure seems robust.
+
+ So the answer is: **Yes**, strong normalization can be established.
+
+ I will write the response following the contract.

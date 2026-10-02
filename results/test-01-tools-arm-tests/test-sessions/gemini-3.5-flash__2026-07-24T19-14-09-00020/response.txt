@@ -1,0 +1,505 @@
+[TOOL-CALL code_execution]
+def step_congruence(term):
+    # term is represented as a tuple, e.g., ('void',), ('delta', t), ('integrate', t), ('merge', t1, t2), etc.
+    # We want to find all possible single-step reductions.
+    # First, root reductions:
+    reductions = set()
+    
+    # R_int_delta : integrate (delta t) -> void
+    if term[0] == 'integrate' and term[1][0] == 'delta':
+        reductions.add(('void',))
+    
+    # R_merge_void_left : merge void t -> t
+    if term[0] == 'merge' and term[1][0] == 'void':
+        reductions.add(term[2])
+        
+    # R_merge_void_right : merge t void -> t
+    if term[0] == 'merge' and term[2][0] == 'void':
+        reductions.add(term[1])
+        
+    # R_merge_cancel : merge t t -> t
+    if term[0] == 'merge' and term[1] == term[2]:
+        reductions.add(term[1])
+        
+    # R_rec_zero : recΔ b s void -> b
+    if term[0] == 'recΔ' and term[3][0] == 'void':
+        reductions.add(term[1])
+        
+    # R_rec_succ : recΔ b s (delta n) -> app s (recΔ b s n)
+    if term[0] == 'recΔ' and term[3][0] == 'delta':
+        b, s, n = term[1], term[2], term[3][1]
+        reductions.add(('app', s, ('recΔ', b, s, n)))
+        
+    # R_eq_refl : eqW a a -> void
+    if term[0] == 'eqW' and term[1] == term[2]:
+        reductions.add(('void',))
+        
+    # R_eq_diff : eqW a b -> integrate (merge a b)
+    if term[0] == 'eqW':
+        reductions.add(('integrate', ('merge', term[1], term[2])))
+        
+    # Congruence rules:
+    if term[0] == 'delta':
+        for r in step_congruence(term[1]):
+            reductions.add(('delta', r))
+    elif term[0] == 'integrate':
+        for r in step_congruence(term[1]):
+            reductions.add(('integrate', r))
+    elif term[0] == 'merge':
+        for r in step_congruence(term[1]):
+            reductions.add(('merge', r, term[2]))
+        for r in step_congruence(term[2]):
+            reductions.add(('merge', term[1], r))
+    elif term[0] == 'app':
+        for r in step_congruence(term[1]):
+            reductions.add(('app', r, term[2]))
+        for r in step_congruence(term[2]):
+            reductions.add(('app', term[1], r))
+    elif term[0] == 'recΔ':
+        for r in step_congruence(term[1]):
+            reductions.add(('recΔ', r, term[2], term[3]))
+        for r in step_congruence(term[2]):
+            reductions.add(('recΔ', term[1], r, term[3]))
+        for r in step_congruence(term[3]):
+            reductions.add(('recΔ', term[1], term[2], r))
+    elif term[0] == 'eqW':
+        for r in step_congruence(term[1]):
+            reductions.add(('eqW', r, term[2]))
+        for r in step_congruence(term[2]):
+            reductions.add(('eqW', term[1], r))
+            
+    return reductions
+
+# Let's search for a cycle or non-termination
+# Since we want to find if there is an infinite reduction sequence.
+# We can do a BFS/DFS to check for cycles.
+# Let's write a function to find cycles.
+visited = {}
+def find_cycle(term, path):
+    if term in path:
+        return path[path.index(term):] + [term]
+    if term in visited:
+        return visited[term]
+    
+    path.append(term)
+    next_terms = step_congruence(term)
+    for nt in next_terms:
+        cycle = find_cycle(nt, path)
+        if cycle:
+            return cycle
+    path.pop()
+    visited[term] = None
+    return None
+
+# Let's try some candidate terms.
+# e.g. eqW a b. What if we have recΔ, etc.?
+# Wait, can we create an infinite loop with recΔ ?
+# R_rec_succ: recΔ b s (delta n) -> app s (recΔ b s n)
+# If s is a term that does something?
+# What if s contains delta, and when applied, it grows?
+# Wait! Let's check if we can write a self-replicating term.
+# What about eqW?
+# eqW a b -> integrate (merge a b)
+# If we have eqW (delta a) (delta b) -> integrate (merge (delta a) (delta b))
+# What if we have a term like t = recΔ void (delta void) (delta void) ? No.
+# Let's think: is there any way to construct a loop?
+# Wait, is there any rule that increases the size of the term and can lead back to itself?
+# R_rec_succ : recΔ b s (delta n) -> app s (recΔ b s n)
+# This reduces the "n" (from delta n to n), which is a strict decrease in the size of the third argument.
+# So recΔ alone terminates because the third argument always decreases.
+# What about eqW?
+# eqW a b -> integrate (merge a b)
+# If we have eqW, we can replace it with integrate and merge.
+# But does the number of eqW decrease?
+# In eqW a b -> integrate (merge a b), the eqW constructor is eliminated.
+# Wait! But the subterms a and b are duplicated in merge a b? No, they are just placed in merge.
+# But wait, what if we have merge t t -> t? That reduces size.
+# Is there any constructor that can create more eqW?
+# Let's check:
+# Do any of the right-hand sides introduce NEW eqW constructors that weren't in the left-hand side?
+# None of the rules introduce eqW!
+# Let's check the right-hand sides of the rules:
+# - void (no eqW)
+# - t (no new eqW, only subterm)
+# - b (no new eqW, only subterm)
+# - app s (recΔ b s n) (no new eqW, only subterms b, s, n)
+# - void (no eqW)
+# - integrate (merge a b) (no new eqW, only subterms a, b)
+# Since no rewrite rule can ever generate a new `eqW` constructor, the number of `eqW` constructors in any term must strictly decrease with each application of `R_eq_refl` or `R_eq_diff` (as the `eqW` constructor itself is destroyed, and no new ones are created).
+# Wait, let's verify if this is true.
+# If we apply R_eq_diff: eqW a b -> integrate (merge a b).
+# The eqW is replaced by integrate and merge. The subterms a and b are preserved.
+# Thus, the number of eqW occurrences in the term decreases by 1.
+# What about the other rules? Do they increase the number of eqW?
+# - R_int_delta: integrate (delta t) -> void. Number of eqW decreases by whatever was inside t.
+# - R_merge_void_left/right: merge void t -> t. Number of eqW remains the same or decreases.
+# - R_merge_cancel: merge t t -> t. Number of eqW decreases (since one copy of t is discarded).
+# - R_rec_zero: recΔ b s void -> b. Number of eqW decreases (since s is discarded).
+# - R_rec_succ: recΔ b s (delta n) -> app s (recΔ b s n).
+# Wait! Here, `s` is duplicated!
+# In the left hand side: recΔ b s (delta n) contains one `s`.
+# In the right hand side: app s (recΔ b s n) contains TWO `s`!
+# Ah! `s` is duplicated!
+# If `s` contains `eqW`, then the number of `eqW` can INCREASE!
+# Let's check this!
+# If we have `s` containing `eqW`, and we run `recΔ b s (delta n)`, the number of `eqW` increases.
+# But does it still terminate?
+# Since the third argument of `recΔ` must be `delta n`, and it reduces to `n`, which is strictly smaller.
+# Since `n` is a finite term, the number of times `R_rec_succ` can be applied is bounded by the number of `delta` nested constructors in the third argument.
+# Once the third argument becomes `void` (or anything else that is not `delta n`), no more `R_rec_succ` can be applied.
+# So the recursion is well-founded and must terminate.
+# But wait, does this mean the whole system terminates?
+# What if we have a term like:
+# t = recΔ b s n, where s can reduce to something containing delta?
+# Wait! Can s reduce to a term starting with delta?
+# For example, can we have a rule that produces delta?
+# Let's check:
+# None of the rules have `delta` in their right-hand side, EXCEPT if it was already in the subterms.
+# Wait! Is `delta` ever produced by a rule?
+# Let's look at the right-hand sides of all rules:
+# 1. void
+# 2. t
+# 3. t
+# 4. t
+# 5. b
+# 6. app s (recΔ b s n)
+# 7. void
+# 8. integrate (merge a b)
+# None of the right-hand sides have `delta` as a constructor!
+# The only way a term can have `delta` is if it was already present in the initial term.
+# Since the initial term is finite, it can only contain a finite number of `delta` constructors.
+# Wait, can `delta` be duplicated?
+# `s` is duplicated in `R_rec_succ`, so the number of `delta` constructors can increase.
+# But can we have a cycle?
+# Let's think: is there any way to build an infinite reduction?
+# Let's write a python search to try to find counterexamples or prove termination.
+[/TOOL]
+
+
+
+[TOOL-RESULT code_execution]
+{
+ "outcome": "OUTCOME_OK",
+ "id": "uqil52ri"
+}
+[/TOOL]
+
+
+
+[TOOL-CALL code_execution]
+# Let's write a simple termination prover using a dependency pair or polynomial interpretation,
+# or just a depth-first search for loops up to a certain size.
+# Since the system is very small, we can generate all terms up to a certain size and check their reduction graph.
+
+# Term representation:
+# void: 0
+# delta(t): (1, t)
+# integrate(t): (2, t)
+# merge(t1, t2): (3, t1, t2)
+# app(t1, t2): (4, t1, t2)
+# recΔ(b, s, n): (5, b, s, n)
+# eqW(a, b): (6, a, b)
+
+def term_to_str(t):
+    if t == 0: return "void"
+    if t[0] == 1: return f"delta({term_to_str(t[1])})"
+    if t[0] == 2: return f"integrate({term_to_str(t[1])})"
+    if t[0] == 3: return f"merge({term_to_str(t[1])}, {term_to_str(t[2])})"
+    if t[0] == 4: return f"app({term_to_str(t[1])}, {term_to_str(t[2])})"
+    if t[0] == 5: return f"recΔ({term_to_str(t[1])}, {term_to_str(t[2])}, {term_to_str(t[3])})"
+    if t[0] == 6: return f"eqW({term_to_str(t[1])}, {term_to_str(t[2])})"
+
+# Generate terms of size up to N
+def gen_terms(max_size):
+    terms_by_size = {1: [0]}
+    for s in range(2, max_size + 1):
+        terms_by_size[s] = []
+        # delta, integrate: size s-1
+        for t in terms_by_size[s-1]:
+            terms_by_size[s].append((1, t))
+            terms_by_size[s].append((2, t))
+        # merge, app, eqW: size s1 + s2 = s - 1
+        for s1 in range(1, s - 1):
+            s2 = s - 1 - s1
+            for t1 in terms_by_size[s1]:
+                for t2 in terms_by_size[s2]:
+                    terms_by_size[s].append((3, t1, t2))
+                    terms_by_size[s].append((4, t1, t2))
+                    terms_by_size[s].append((6, t1, t2))
+        # recΔ: size s1 + s2 + s3 = s - 1
+        for s1 in range(1, s - 2):
+            for s2 in range(1, s - 1 - s1):
+                s3 = s - 1 - s1 - s2
+                for t1 in terms_by_size[s1]:
+                    for t2 in terms_by_size[s2]:
+                        for t3 in terms_by_size[s3]:
+                            terms_by_size[s].append((5, t1, t2, t3))
+    all_terms = []
+    for s in sorted(terms_by_size.keys()):
+        all_terms.extend(terms_by_size[s])
+    return all_terms
+
+# Let's define the one-step reduction relation with congruence
+def step(t):
+    if t == 0:
+        return set()
+    reductions = set()
+    # Root reductions:
+    # 1. integrate(delta(x)) -> void
+    if t[0] == 2 and t[1] != 0 and t[1][0] == 1:
+        reductions.add(0)
+    # 2. merge(void, x) -> x
+    if t[0] == 3 and t[1] == 0:
+        reductions.add(t[2])
+    # 3. merge(x, void) -> x
+    if t[0] == 3 and t[2] == 0:
+        reductions.add(t[1])
+    # 4. merge(x, x) -> x
+    if t[0] == 3 and t[1] == t[2]:
+        reductions.add(t[1])
+    # 5. recΔ(b, s, void) -> b
+    if t[0] == 5 and t[3] == 0:
+        reductions.add(t[1])
+    # 6. recΔ(b, s, delta(n)) -> app(s, recΔ(b, s, n))
+    if t[0] == 5 and t[3] != 0 and t[3][0] == 1:
+        b, s, n = t[1], t[2], t[3][1]
+        reductions.add((4, s, (5, b, s, n)))
+    # 7. eqW(a, a) -> void
+    if t[0] == 6 and t[1] == t[2]:
+        reductions.add(0)
+    # 8. eqW(a, b) -> integrate(merge(a, b))
+    if t[0] == 6:
+        reductions.add((2, (3, t[1], t[2])))
+        
+    # Congruence:
+    if t[0] in (1, 2):
+        for r in step(t[1]):
+            reductions.add((t[0], r))
+    elif t[0] in (3, 4, 6):
+        for r in step(t[1]):
+            reductions.add((t[0], r, t[2]))
+        for r in step(t[2]):
+            reductions.add((t[0], t[1], r))
+    elif t[0] == 5:
+        for r in step(t[1]):
+            reductions.add((5, r, t[2], t[3]))
+        for r in step(t[2]):
+            reductions.add((5, t[1], r, t[3]))
+        for r in step(t[3]):
+            reductions.add((5, t[1], t[2], r))
+            
+    return reductions
+
+# Let's run a search for cycles in the state graph.
+# Since it's a DAG if it terminates, we can check for cycles using DFS.
+# Let's generate terms up to size 6 and check if any of them can initiate an infinite path.
+terms = gen_terms(6)
+print(f"Generated {len(terms)} terms.")
+# Let's find cycles for these terms
+visited = {}
+path = []
+def check_cycle(t):
+    if t in visited:
+        return visited[t]
+    if t in path:
+        # found cycle!
+        cycle_idx = path.index(t)
+        return path[cycle_idx:] + [t]
+    
+    path.append(t)
+    next_states = step(t)
+    for ns in next_states:
+        res = check_cycle(ns)
+        if res:
+            return res
+    path.pop()
+    visited[t] = False
+    return False
+
+cycle_found = False
+for t in terms:
+    res = check_cycle(t)
+    if res:
+        print("Cycle found!")
+        print([term_to_str(x) for x in res])
+        cycle_found = True
+        break
+if not cycle_found:
+    print("No cycle found for terms up to size 6.")
+[/TOOL]
+
+
+
+[TOOL-RESULT code_execution]
+{
+ "outcome": "OUTCOME_OK",
+ "output": "Generated 658 terms.\nNo cycle found for terms up to size 6.\n",
+ "id": "z9oe8ijm"
+}
+[/TOOL]
+
+
+
+[TOOL-CALL code_execution]
+def lpo(s, t, precedence, status):
+    # s and t are terms.
+    # precedence: dict mapping constructor to an integer (higher means larger in precedence)
+    # status: dict mapping constructor to a permutation (tuple of indices)
+    
+    if s == 0: # void is 0
+        s_head = 'void'
+        s_args = []
+    else:
+        s_head = s[0]
+        s_args = list(s[1:])
+        
+    if t == 0:
+        t_head = 'void'
+        t_args = []
+    else:
+        t_head = t[0]
+        t_args = list(t[1:])
+        
+    # LPO 1: s_i >= t for some i
+    for s_i in s_args:
+        if s_i == t or lpo(s_i, t, precedence, status):
+            return True
+            
+    # LPO 2: s_head > t_head and s > t_i for all i
+    if precedence[s_head] > precedence[t_head]:
+        for t_i in t_args:
+            if not (s == t_i or lpo(s, t_i, precedence, status)):
+                return False
+        return True
+        
+    # LPO 3: s_head == t_head and s > t_i for all i, and (s_1, ..., s_n) >_lex (t_1, ..., t_n)
+    if s_head == t_head:
+        for t_i in t_args:
+            if not (s == t_i or lpo(s, t_i, precedence, status)):
+                return False
+        # compare lexicographically using the permutation in status
+        perm = status.get(s_head, tuple(range(len(s_args))))
+        for idx in perm:
+            if idx >= len(s_args):
+                break
+            s_arg = s_args[idx]
+            t_arg = t_args[idx]
+            if s_arg == t_arg:
+                continue
+            elif lpo(s_arg, t_arg, precedence, status):
+                return True
+            else:
+                return False
+        return False
+        
+    return False
+
+# Let's map constructors:
+# void: 'void'
+# delta: 'delta'
+# integrate: 'integrate'
+# merge: 'merge'
+# app: 'app'
+# recΔ: 'recΔ'
+# eqW: 'eqW'
+
+precedence = {
+    'void': 0,
+    'delta': 1,
+    'merge': 2,
+    'app': 3,
+    'integrate': 4,
+    'recΔ': 5,
+    'eqW': 6
+}
+
+# recΔ has 3 arguments: b, s, n (indices 0, 1, 2)
+# We want the 3rd argument (index 2) to be compared first, then others.
+status = {
+    'recΔ': (2, 0, 1)
+}
+
+# Let's define variables as mock objects (or we can just test with some dummy terms)
+# Since the rules are schemas, we can test with variable terms (which act as constants with low precedence)
+# Actually, we can just treat free variables as constants with precedence 0.
+# Let's test each rule:
+# 1. R_int_delta : integrate (delta t) -> void
+# Let's use t = 0 (void) as a representative, or a variable 't' with precedence -1.
+precedence['t'] = -1
+precedence['b'] = -1
+precedence['s'] = -1
+precedence['n'] = -1
+precedence['a'] = -1
+
+rules = [
+    # (LHS, RHS)
+    (('integrate', ('delta', 't')), 0), # 1
+    (('merge', 0, 't'), 't'), # 2
+    (('merge', 't', 0), 't'), # 3
+    (('merge', 't', 't'), 't'), # 4
+    (('recΔ', 'b', 's', 0), 'b'), # 5
+    (('recΔ', 'b', 's', ('delta', 'n')), ('app', 's', ('recΔ', 'b', 's', 'n'))), # 6
+    (('eqW', 'a', 'a'), 0), # 7
+    (('eqW', 'a', 'b'), ('integrate', ('merge', 'a', 'b'))), # 8
+]
+
+for idx, (lhs, rhs) in enumerate(rules, 1):
+    res = lpo(lhs, rhs, precedence, status)
+    print(f"Rule {idx}: {res}")
+[/TOOL]
+
+
+
+[TOOL-RESULT code_execution]
+{
+ "outcome": "OUTCOME_OK",
+ "output": "Rule 1: True\nRule 2: True\nRule 3: True\nRule 4: True\nRule 5: True\nRule 6: True\nRule 7: True\nRule 8: True\n",
+ "id": "7soq2myl"
+}
+[/TOOL]
+
+**Yes, strong normalization of this system can be established.** 
+
+No external assumptions, extra rewrite rules, guards, or system-strengthening are required. The proof can be carried out using a standard tool from term rewriting theory: the **Lexicographic Path Ordering (LPO) with status**, which is a well-founded reduction order on first-order terms.
+
+### The Proof Setup
+
+We define a strict precedence (partial order) $>$ on the constructors of `Trace` as follows:
+$$\text{eqW} > \text{integrate} > \text{merge} > \text{app} > \text{rec}\Delta > \text{delta} > \text{void}$$
+
+For the constructor $\text{rec}\Delta(b, s, n)$, which has three arguments, we assign a lexicographic status prioritizing the **third** argument (index 2) first, comparing arguments in the permutation sequence $(2, 0, 1)$ (i.e., comparing the recursion parameter $n$ before the base $b$ and step $s$).
+
+---
+
+### Verification of the Rewrite Rules
+Under this LPO, every rule $l \to r$ is strictly decreasing ($l >_{\text{LPO}} r$):
+
+1. **`R_int_delta : integrate (delta t) -> void`**
+   * Since $\text{integrate} > \text{void}$ by precedence, this holds.
+
+2. **`R_merge_void_left : merge void t -> t`** and **`R_merge_void_right : merge t void -> t`**
+   * This holds directly by the subterm property of LPO ($t$ is a proper subterm of the left-hand side).
+
+3. **`R_merge_cancel : merge t t -> t`**
+   * This holds by the subterm property.
+
+4. **`R_rec_zero : recΔ b s void -> b`**
+   * This holds by the subterm property (since $b$ is a subterm of the left-hand side).
+
+5. **`R_rec_succ : recΔ b s (delta n) -> app s (recΔ b s n)`**
+   * Because $\text{rec}\Delta > \text{app}$ by precedence, we must show:
+     * $\text{rec}\Delta(b, s, \text{delta}(n)) >_{\text{LPO}} s$ (holds by the subterm property).
+     * $\text{rec}\Delta(b, s, \text{delta}(n)) >_{\text{LPO}} \text{rec}\Delta(b, s, n)$. Under the lexicographic status of $\text{rec}\Delta$, we compare the third arguments first: $\text{delta}(n) >_{\text{LPO}} n$ holds by the subterm property.
+   * Thus, the step reduces strictly under LPO.
+
+6. **`R_eq_refl : eqW a a -> void`**
+   * Since $\text{eqW} > \text{void}$ by precedence, this holds.
+
+7. **`R_eq_diff : eqW a b -> integrate (merge a b)`**
+   * Since $\text{eqW} > \text{integrate}$ by precedence, we must show $\text{eqW}(a, b) >_{\text{LPO}} \text{merge}(a, b)$.
+   * Since $\text{eqW} > \text{merge}$ by precedence, we must show $\text{eqW}(a, b) >_{\text{LPO}} a$ and $\text{eqW}(a, b) >_{\text{LPO}} b$, both of which hold by the subterm property.
+
+---
+
+### Conclusion
+Because LPO is a well-founded simplification order that is compatible with contexts and substitutions, and because every rule in the calculus is strictly oriented by LPO, **the term rewriting system is strongly normalizing** under any reduction strategy (with or without congruence).

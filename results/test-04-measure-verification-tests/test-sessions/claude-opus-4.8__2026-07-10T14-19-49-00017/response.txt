@@ -1,0 +1,55 @@
+I'll analyze whether the proposed lexicographic measure `(phase t, cost t)` decreases on every rewrite step.
+
+## Understanding the measure
+
+The measure is `(phase t, cost t)` compared lexicographically. For soundness, every `Step t t'` must satisfy `measure t' < measure t`, i.e., either:
+- `phase t' < phase t`, or
+- `phase t' = phase t` and `cost t' < cost t`.
+
+Note `phase` is only nonzero (equal to 1) for a term whose **top constructor** is `recDelta b s (delta n)`. For all other top-level shapes, `phase = 0`.
+
+## Checking each rule
+
+Let me focus on the potentially problematic rules first.
+
+**R_rec_succ**: `recDelta b s (delta n) → app s (recDelta b s n)`.
+- LHS: top is `recDelta _ _ (delta _)`, so `phase = 1`.
+- RHS: top is `app`, so `phase = 0`.
+- Since `0 < 1`, the phase strictly decreases. ✓ (This is exactly why phase exists — cost could otherwise fail here, let me verify: LHS cost = `1 + cost b + cost s + (1 + cost n)`; RHS cost = `1 + cost s + (1 + cost b + cost s + cost n) = 2 + cost b + 2·cost s + cost n`. RHS cost can be *larger* due to the duplicated `s`, so cost alone fails. The phase drop saves it.) ✓
+
+Now the other rules. For these I need `phase t' ≤ phase t`, and if equal, cost strictly decreases.
+
+**R_int_delta**: `integrate (delta t) → void`. LHS phase 0, RHS phase 0. Cost: LHS `1 + (1 + cost t) = 2 + cost t`, RHS `0`. Decreases. ✓
+
+**R_merge_void_left**: `merge void t → t`. LHS phase 0. RHS phase = `phase t`, which could be 1 if `t = recDelta _ _ (delta _)`!
+- LHS phase 0, RHS phase possibly 1. Then `phase t' = 1 > 0 = phase t`. **Lexicographic comparison fails.** ✗
+
+Let me double check. `merge void t` has top constructor `merge`, so `phase = 0`. If `t = recDelta b s (delta n)`, then `t'` has `phase = 1`. So `measure t' = (1, ...)` and `measure t = (0, ...)`, giving `measure t' > measure t`. **The measure increases.** ✗
+
+**R_merge_void_right**: `merge t void → t`. Same problem: LHS phase 0, RHS phase possibly 1. ✗
+
+**R_merge_cancel**: `merge t t → t`. LHS phase 0, RHS phase possibly 1. ✗
+
+**R_rec_zero**: `recDelta b s void → b`. LHS top `recDelta _ _ void` → phase 0. RHS phase = `phase b`, possibly 1. ✗
+
+**R_eq_refl**: `eqW a a → void`. LHS phase 0, RHS phase 0, cost decreases. ✓
+
+**R_eq_diff**: `eqW a b → integrate (merge a b)`. LHS phase 0 (top `eqW`), RHS phase 0 (top `integrate`). Cost: LHS `3 + cost a + cost b`, RHS `1 + (1 + cost a + cost b) = 2 + cost a + cost b`. Decreases. ✓
+
+## Conclusion
+
+**The measure is NOT sound.**
+
+The fundamental flaw: `phase` is defined only by inspecting the **top constructor** of a term. But several rewrite rules extract a *subterm* to the top level (`R_merge_void_left/right`, `R_merge_cancel`, `R_rec_zero`). If that subterm happens to be of the form `recDelta _ _ (delta _)`, its phase jumps from 0 to 1, and the lexicographic measure **increases**.
+
+Concrete counterexample for `R_merge_void_left`:
+
+Let `t = recDelta void void (delta void)`. Then:
+- `measure (merge void t) = (phase = 0, cost = 1 + 0 + cost t)` where `cost t = 1 + 0 + 0 + 1 = 2`, so `= (0, 3)`.
+- `measure t = (phase = 1, cost = 2) = (1, 2)`.
+
+Lexicographically `(1, 2) > (0, 3)`, so the step `merge void t → t` **increases** the measure. This step could then feed into `R_rec_succ`, and one can construct configurations where the interplay does not obviously terminate under this measure.
+
+The phase trick works for `R_rec_succ` in isolation, but it is not stable under the congruence/projection behavior of the other rules, since those rules can promote a phase-1 subterm to the root.
+
+To fix it, `phase` would need to count occurrences of the `recDelta _ _ (delta _)` pattern **anywhere** in the term (a global count), not just at the root — and even then one would need to recheck that no rule increases that global count (R_rec_succ removes one such redex; the projection rules only remove context, never create new `recDelta (delta ...)` redexes, so a structural count is plausibly workable, but the top-only definition as given is unsound).

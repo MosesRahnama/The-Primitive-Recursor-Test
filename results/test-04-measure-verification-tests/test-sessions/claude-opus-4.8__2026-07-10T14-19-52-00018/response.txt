@@ -1,0 +1,49 @@
+I'll analyze whether the lexicographic measure `(phase, cost)` decreases on every rewrite step.
+
+The measure uses lexicographic ordering on `(phase t, cost t)`. For soundness, every step `Step t t'` must satisfy `measure t' < measure t` lexicographically, meaning either `phase t' < phase t`, or `phase t' = phase t ∧ cost t' < cost t`.
+
+Let me check each rule. First, note that `phase` is only nonzero (equals 1) when the term is exactly `recDelta _ _ (delta _)`.
+
+**R_int_delta**: `integrate (delta t) → void`
+- phase both 0. cost: `1 + (1 + cost t) = 2 + cost t` → `0`. Decreases. ✓
+
+**R_merge_void_left**: `merge void t → t`
+- phase source 0. phase t could be 1 (if t is `recDelta _ _ (delta _)`). Then phase 0 → 1, which *increases*. ✗ **PROBLEM**
+
+Let me check this carefully. Take `t = recDelta b s (delta n)`. Then:
+- Source: `merge void (recDelta b s (delta n))`. phase = 0 (top constructor is merge).
+- Target: `recDelta b s (delta n)`. phase = 1.
+
+So `measure source = (0, ...)` and `measure target = (1, ...)`. Lexicographically `(1, _) > (0, _)`, so the measure **increases**. This rule is NOT sound under this measure.
+
+**R_merge_void_right**: `merge t void → t` — same problem with `t = recDelta _ _ (delta _)`. ✗
+
+**R_merge_cancel**: `merge t t → t` — same problem if `t = recDelta _ _ (delta _)`. ✗
+
+**R_rec_zero**: `recDelta b s void → b`
+- Source phase 0 (third arg is void, not delta). cost `1 + cost b + cost s` → `cost b`. Decreases. ✓
+
+**R_rec_succ**: `recDelta b s (delta n) → app s (recDelta b s n)`
+- Source phase = 1. Target `app ...` phase = 0. So phase 1 → 0 decreases. ✓ (This is why phase exists — cost alone would fail here: source cost `1 + cost b + cost s + (1 + cost n) = 2 + cost b + cost s + cost n`; target cost `1 + cost s + (1 + cost b + cost s + cost n) = 2 + cost b + 2·cost s + cost n` which can be larger. So phase is essential here and it works.)
+
+**R_eq_refl**: `eqW a a → void`
+- phase both 0. cost `3 + 2·cost a` → 0. Decreases. ✓
+
+**R_eq_diff**: `eqW a b → integrate (merge a b)`
+- phase both 0. cost: source `3 + cost a + cost b`; target `1 + (1 + cost a + cost b) = 2 + cost a + cost b`. Decreases. ✓
+
+## Conclusion
+
+**The measure is NOT sound.**
+
+The failure is in the three merge rules (`R_merge_void_left`, `R_merge_void_right`, `R_merge_cancel`). These rules "unwrap" a term from under a `merge`, and if the extracted term happens to be of the form `recDelta _ _ (delta _)`, the `phase` component jumps from `0` to `1`, making the lexicographic measure **increase**.
+
+Concrete counterexample:
+```
+Step (merge void (recDelta b s (delta n))) (recDelta b s (delta n))
+```
+- `measure` of source = `(0, cost)`
+- `measure` of target = `(1, cost)`
+- Since `(1, _) > (0, _)` lexicographically, the measure increases.
+
+The root cause is that `phase` is not a "structural" property preserved appropriately: it's a fragile top-level pattern-match that can be exposed by reductions elsewhere in the term. Note also that the calculus is not context-closed (no congruence rules for `Step`), so these are only head reductions — but even at the head level the merge rules directly exhibit the increase. A sound measure would need to account for the `recDelta`/`delta` structure globally (e.g., counting `recDelta` nodes whose third argument is a `delta`) rather than only at the top constructor.

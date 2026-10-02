@@ -1,0 +1,552 @@
+Let me analyze this Lean 4 file carefully.
+
+The system defines:
+- A `Trace` type with constructors: `void`, `delta`, `integrate`, `merge`, `app`, `recΔ`, `eqW`
+- A `Step` relation with rewrite rules
+
+The rewrite rules are:
+1. `R_int_delta`: `integrate (delta t) → void`
+2. `R_merge_void_left`: `merge void t → t`
+3. `R_merge_void_right`: `merge t void → t`
+4. `R_merge_cancel`: `merge t t → t` (idempotent)
+5. `R_rec_zero`: `recΔ b s void → b`
+6. `R_rec_succ`: `recΔ b s (delta n) → app s (recΔ b s n)`
+7. `R_eq_refl`: `eqW a a → void`
+8. `R_eq_diff`: `eqW a b → integrate (merge a b)` (when a ≠ b, implied)
+
+Wait, looking at `R_eq_diff` more carefully: it says for ALL `a b`, `eqW a b → integrate (merge a b)`. This is unconditional. So even when `a = b`, this rule applies: `eqW a a → integrate (merge a a) → integrate a` (by R_merge_cancel).
+
+But we also have `R_eq_refl: eqW a a → void`. So `eqW a a` can step to BOTH `void` AND `integrate (merge a a)`. This means the system is not confluent in a strong sense, but it might still be weakly normalizing/terminating.
+
+The question: can strong normalization be established from the calculus alone?
+
+Let me think about this. The system has:
+- No variable binding (good for analysis)
+- No external memory
+- These rewrite rules only
+
+For strong normalization, we need to show that every reduction sequence eventually terminates (reaches a normal form).
+
+The system is not obviously terminating. Let me look for potential non-termination.
+
+Consider `eqW a a`:
+- Can step to `void` (R_eq_refl) - normal form
+- Can step to `integrate (merge a a)` (R_eq_diff), which can step to `integrate a` (R_merge_cancel)
+
+So from `eqW a a` we can go to `void` or to `integrate a`. If `integrate a` is not in normal form, what about it?
+
+`integrate t` reduces to `void` only if `t = delta u` for some `u` (R_int_delta). So `integrate a` for non-`delta` `a` would be a normal form (assuming no other rules apply).
+
+Now, can we construct a non-terminating term? Let me think...
+
+The rules are:
+- `integrate (delta t) → void` (decreases size significantly)
+- `merge void t → t`, `merge t void → t`, `merge t t → t` (decreases)
+- `recΔ b s void → b`, `recΔ b s (delta n) → app s (recΔ b s n)` (recursive on the structure)
+- `eqW a a → void` and `eqW a b → integrate (merge a b)` (decreases?)
+
+The `recΔ` rule is interesting. It unfolds as:
+`recΔ b s (delta n) → app s (recΔ b s n)`
+
+So if we have `recΔ b s (delta (delta ... (delta void)))`, it unfolds to:
+`app s (recΔ b s (delta (delta ... (delta void))))`
+→ `app s (app s (recΔ b s (delta ... (delta void))))`
+→ ...
+→ `app s (app s (... (app s b)...))`
+
+This terminates because each step peels off one `delta`.
+
+The size argument: every rewrite rule strictly decreases some measure of the term? Let's check:
+- `integrate (delta t) → void`: size goes from `1 + size(t) + 1` to 0. Decreases.
+- `merge void t → t`: decreases.
+- `merge t void → t`: decreases.
+- `merge t t → t`: decreases.
+- `recΔ b s void → b`: decreases.
+- `recΔ b s (delta n) → app s (recΔ b s n)`: hmm, this INCREASES if `s` is large! The size goes from `1 + size(b) + size(s) + 1 + size(n)` to `1 + size(s) + 1 + 1 + size(b) + size(s) + 1 + size(n)`. The size increases!
+
+Wait, but is there a measure? The recursion is on `n` (the natural number encoded as iterated `delta`s ending in `void`). Each recursive call has a strictly smaller `n` in the `delta` chain.
+
+So we can use a measure: the number of `delta` constructors at the top, going down to `void`. This is a structural measure that strictly decreases in the `recΔ_succ` rule.
+
+Let me think about a potential measure. Consider the triple:
+- (number of `recΔ` constructors with `delta`-argument that are not in normal form, ...)
+- Actually, let me think more carefully.
+
+For `recΔ b s (delta n) → app s (recΔ b s n)`: the number of `delta`s in the recursive position decreases. So we can measure the depth of the `delta` chain in the recursive position of `recΔ`.
+
+Hmm, but `app` doesn't reduce. So `app s (recΔ b s n)` - the `recΔ` here is now "smaller" (one less delta), but it's wrapped in an `app`. If we had something like `recΔ b s (integrate ...)` we could potentially create issues, but `recΔ` only fires on the patterns given.
+
+Wait, can `n` in `recΔ b s (delta n)` be something like `delta n'` that itself has issues? Let me think about non-termination...
+
+Could we have:
+`eqW a a → integrate (merge a a) → integrate a` (stuck, if a is not delta)
+`eqW a a → void` (normal form)
+
+What about `eqW (delta a) (delta a)`:
+- → `void` via R_eq_refl
+- → `integrate (merge (delta a) (delta a))` → `integrate (delta a)` → `void` via R_int_delta
+
+Both terminate.
+
+What about `recΔ b s (eqW a a)`? 
+- `eqW a a` is not `void` or `delta n`, so `recΔ` doesn't apply. This is a normal form.
+
+What about `app t u`? No rule reduces `app`. So `app` terms at the top are normal forms (unless they're subterms of something reducible).
+
+Hmm, let me think about this more carefully. The rules are local rewrite rules. The Step relation is presumably the compatible closure (we'd need to see, but it's likely the inductive closure under all contexts).
+
+Actually, the inductive definition of `Step` only lists these specific patterns. It's not the reflexive/contextual closure! Let me re-read...
+
+Yes, the `Step` inductive type lists 8 constructors, each with a specific pattern. So `Step` is the one-step relation only on those exact patterns. There's no contextual closure stated!
+
+Hmm, but that's unusual. Usually you'd define `Step` as a relation closed under all contexts. If `Step` is only the 8 rules without closure under contexts, then:
+- `merge (merge a b) c` is NOT step-reducible to anything.
+- `app (recΔ b s void) x` is NOT step-reducible.
+
+In that case, the system trivially has strong normalization because every term is a normal form in at most one step, and the only reductions strictly decrease the size of the term (except `recΔ_succ` which... let me check).
+
+Actually wait, even in this case:
+- `R_rec_succ`: `recΔ b s (delta n) → app s (recΔ b s n)` - this increases size!
+
+So even in the bare rule set (no contextual closure), `R_rec_succ` is a non-size-decreasing rule.
+
+But this rule decreases the "number of `delta`s in the third argument of `recΔ`" measure. So we need a more sophisticated measure.
+
+The question is: can strong normalization be established?
+
+Let me think about a measure. Let me define:
+- `depth(t)` = maximum number of `delta`s in a chain from any `recΔ` position to its `void` base.
+- Or more carefully: for each `recΔ b s n` in the term, the "recursion depth" of `n`.
+
+Actually, the issue is: even if `recΔ` is "unrolled" via `app s (recΔ b s n)`, the resulting term has an `app` constructor. The `app` is in normal form, but it contains a smaller `recΔ`. So we can use a lexicographic measure.
+
+Let me think about this more carefully with a potential non-terminating example.
+
+`recΔ b s (delta (delta ... (delta void)))` where there are k `delta`s.
+
+Step: → `app s (recΔ b s (delta ... (delta void)))` (k-1 deltas)
+Step: → `app s (app s (recΔ b s (delta ... (delta void))))` (k-2 deltas)
+...
+Step: → `app s (app s (... (app s b)...))` (k apps, no more recΔ)
+
+This terminates.
+
+What if `s` itself contains a `recΔ`? Like `s = recΔ b' s' n'`. Then after unrolling:
+`app (recΔ b' s' n') (recΔ b s n)` - the inner `recΔ b' s' n'` is still reducible, and the outer `recΔ b s n` is still reducible (one less delta).
+
+So the inner `recΔ` will reduce first (it's a subterm), and once it's done, we still have the outer `recΔ` to reduce. The order doesn't matter; both terminate.
+
+But could the inner `recΔ` unrolling somehow increase the outer? Let me see.
+
+`app (recΔ b' s' n') (recΔ b s (delta n))`
+- Outer recΔ reduces: `app (recΔ b' s') (app s (recΔ b s n))`
+  Now the inner is `recΔ b' s' n'` (still reducible) and there's a new `recΔ b s n` (one less delta in the recursion argument).
+- Inner recΔ reduces: depending on `n'`.
+
+This seems fine. We can argue by induction on a well-founded measure.
+
+Possible measure: `(# of recΔ in term, sum of recursion depths of each recΔ)` in lex order? Or some other measure.
+
+Actually, I think the answer is YES, strong normalization can be established. The system is essentially a first-order rewrite system (no binders) with rules that are clearly size-decreasing on a suitable measure, or that can be shown to terminate via standard methods like:
+1. A termination measure (e.g., the recursion depth in `recΔ` decreases).
+2. Path/lexicographic ordering.
+3. RPO (recursive path ordering).
+4. Size-change termination.
+
+The key insight: the `recΔ` rule is a primitive recursion on the `delta`-chain, which is structurally decreasing.
+
+Now, the catch: looking at the Step definition again, it does NOT include contextual closure. So `Step (merge (merge a b) c) (merge b c)` is NOT derivable (only `merge a a → a` directly).
+
+Without contextual closure, almost every term is in normal form in one step. The only reductions are the 8 base rules, and each of them:
+- Strictly decreases term size, EXCEPT `R_rec_succ`.
+- `R_rec_succ` decreases the recursion depth.
+
+So strong normalization holds trivially under the bare step relation. But the question is what "Step" means in the system.
+
+Actually wait - re-reading the question: "rewrite calculus" and the rules listed. In rewrite calculi, the "step" is usually the compatible closure. But the inductive definition here only lists the rules. This might be the base rules, with closure implicit. Or it might be just the 8 rules.
+
+Hmm. Let me consider both cases:
+
+Case 1: Step is exactly the 8 rules (no contextual closure).
+Then strong normalization is easy. Even `R_rec_succ` doesn't lead to non-termination in multiple steps because:
+- After applying `R_rec_succ`, we get `app s (recΔ b s n)`. 
+- `app` is in normal form (no rule applies to it).
+- `recΔ b s n` is in the argument of `app`, but the step relation has no contextual closure, so it's stuck.
+- Unless `n` itself can reduce. If `n = delta n'`, then we can apply `R_rec_succ` again: `recΔ b s (delta n') → app s (recΔ b s n')`. So the new term `app s (recΔ b s n')` - this is again a step, but we apply step to the inner `recΔ`.
+- After k steps (where n had depth k), we get `app s (app s (... (app s (recΔ b s void))...))` = `app^k s (recΔ b s void)`. The innermost `recΔ b s void` reduces to `b` via `R_rec_zero`. So eventually we get `app^k s b`.
+- This terminates.
+
+Case 2: Step is closed under contexts.
+Then we have more reductions. But still, we can argue termination. For example:
+- `merge` rules decrease merge-arity.
+- `integrate (delta t) → void` decreases.
+- `recΔ b s (delta n) → app s (recΔ b s n)`: the recursion depth of `recΔ` decreases.
+- `eqW a a → void` and `eqW a b → integrate (merge a b)`: both decrease.
+
+For a measure: consider the multiset of `(recursion depth, term)` for each `recΔ` in the term, plus some other term measure. The `recΔ` rule decreases the recursion depth, so this should work.
+
+Actually, hmm, there's a potential issue. Consider `eqW a a`:
+- Can go to `void` (R_eq_refl) - normal form, depth 0 in all measures.
+- Can go to `integrate (merge a a) → integrate a` (R_merge_cancel).
+
+So the system is non-deterministic. But both paths terminate.
+
+For strong normalization, we need every possible reduction sequence to terminate. So we need to show no infinite reduction sequence exists.
+
+Can we construct an infinite sequence?
+- We need something that increases in size with each step.
+- `R_rec_succ` is the only size-increasing rule.
+- But it decreases the recursion depth of one `recΔ`.
+
+So I think we can use a measure like: "multiset of recursion depths of all `recΔ`s in the term, plus term size". Each step either decreases size or decreases the multiset of recursion depths (in multiset ordering).
+
+Actually, let me think again. The only step that doesn't strictly decrease term size is `R_rec_succ`. And `R_rec_succ` does the following:
+- Replaces `recΔ b s (delta n)` with `app s (recΔ b s n)`.
+- Size change: `1 + |b| + |s| + 1 + |n|` → `1 + |s| + 1 + |b| + |s| + 1 + |n|` = `|b| + 2|s| + |n| + 4` vs `|b| + |s| + |n| + 2`. So it adds `|s| + 2` to the size.
+
+Hmm, that's a significant size increase. But the recursion depth decreases by 1 (assuming `n` has depth k, then `delta n` has depth k+1, and after replacement the new `recΔ` has `n` with depth k).
+
+But wait - the new `recΔ b s n` is a subterm of the new term. The recursion depth of THIS particular `recΔ` decreased. But we also have the `s` term that got duplicated, and `s` might contain `recΔ`s. So the multiset of recursion depths could go up if `s` had a deeper `recΔ`.
+
+For example, let `s = recΔ b' s' (delta^k void)`. Then in the original term `recΔ b s (delta^n void)`:
+- One `recΔ` at the outer position with recursion depth n+1.
+- One `recΔ` inside `s` with recursion depth k+1.
+
+After `R_rec_succ`:
+- The new term is `app s (recΔ b s n)`.
+- `s` is unchanged, so still contains one `recΔ` with depth k+1.
+- The new outer `recΔ` has depth n (was n+1).
+
+So the multiset went from {n+1, k+1} to {n, k+1}. The multiset ordering: the new multiset is smaller iff n+1 is replaced by n in the multiset, which is a decrease.
+
+Actually, multiset ordering: {n+1, k+1} > {n, k+1} if n+1 > n, which is true. So yes, the multiset decreases.
+
+But what if `s` itself gets evaluated and its `recΔ` gets unrolled, creating more `recΔ`s?
+
+`s = recΔ b' s' (delta^k void)` unrolls to `app s' (recΔ b' s' (delta^{k-1} void))` after one step. So we get more `recΔ`s? No wait, we get ONE `recΔ` (the inner one), the outer one is gone. So:
+- Before: 2 recΔs (outer + s's).
+- After unrolling s: 2 recΔs (app s' (recΔ b' s' delta^{k-1})): 1 in s' (if any) + 1 in the recΔ.
+
+Hmm, this is getting complicated. Let me think about it as a measure.
+
+Let's use the multiset of `recΔ` depths (where depth is the number of `delta`s in the third arg going down to `void`).
+
+In the original term `recΔ b s (delta^n void)`:
+- The outer `recΔ` has depth n+1.
+- `s` might have its own `recΔ`s.
+- `b` might have its own `recΔ`s.
+
+After step `R_rec_succ`: `app s (recΔ b s (delta^{n} void))`:
+- The outer `recΔ` now has depth n.
+- `s` and `b` are unchanged.
+- So the multiset changed: the depth of the outer recΔ decreased by 1.
+
+In the multiset ordering, this is a decrease.
+
+For other rules, they don't create new `recΔ`s (since the rules are closed under... wait, if Step is the bare 8 rules, then no contextual closure, so no creation. If Step is the compatible closure, then the same arguments apply to subterms).
+
+So a measure: `(size of term, multiset of recΔ depths)` in lex order, where size is the number of constructors. Each rule either:
+- Decreases size (most rules), or
+- The `recΔ_succ` rule increases size but decreases the multiset of depths.
+
+Wait, but `recΔ_succ` increases size AND can be applied to subterms (under contextual closure), which might create situations...
+
+Actually no. Let me re-think. The measure should be such that EVERY step decreases it.
+
+For the bare 8 rules (no contextual closure): each step is applied at the root. We can use the multiset of `recΔ` depths in the term (since `recΔ_succ` decreases one depth, and other rules don't change recΔs... wait, they might.
+
+Actually, the other rules don't seem to interact with `recΔ` much. Let me re-check:
+- `integrate (delta t) → void`: doesn't touch recΔ.
+- `merge ... → ...`: doesn't touch recΔ.
+- `recΔ b s void → b`: removes a recΔ! So multiset of recΔ depths decreases.
+- `recΔ b s (delta n) → app s (recΔ b s n)`: the recΔ's depth decreases by 1.
+- `eqW ... → ...`: doesn't touch recΔ directly.
+
+OK so for the bare 8 rules, multiset of recΔ depths is a valid measure, plus we need a backup for when recΔ goes to size 0... actually `recΔ b s void → b` removes the recΔ, decreasing the multiset.
+
+For the contextual closure: any step is at some subterm. We can use the multiset of recΔ depths at all subterms, or just use the term's structure.
+
+Hmm, this is getting complex. Let me step back.
+
+The system, as a first-order term rewriting system (TRS), with `Step` being the contextual closure of the 8 rules, has the following rules:
+1. `integrate (delta x) → void`
+2. `merge (void, x) → x`
+3. `merge (x, void) → x`
+4. `merge (x, x) → x`
+5. `recΔ(b, s, void) → b`
+6. `recΔ(b, s, delta(x)) → app(s, recΔ(b, s, x))`
+7. `eqW(x, x) → void`
+8. `eqW(x, y) → integrate(merge(x, y))`
+
+Note rule 8 overlaps with rule 7 when x = y.
+
+For a TRS, strong normalization = termination (every reduction sequence is finite, i.e., no infinite reduction sequence exists).
+
+I claim this TRS is terminating. The measure: consider the "delta-depth" of recΔ subterms. For each recΔ(b, s, n), measure the number of `delta` constructors in n going down (so n = void has depth 0, n = delta(void) has depth 1, etc.). If n is neither void nor a delta-chain, give it depth ∞ (but then recΔ doesn't apply to it, so it's a normal form anyway).
+
+For each term, take the multiset of "recΔ depth" for each recΔ subterm. This multiset strictly decreases in multiset ordering under each rule (treating recΔ subterms that are not in normal form for recΔ as "infinite depth" but those don't get reduced by the recΔ rules).
+
+Wait, but the issue is that recΔ might be inside a term that gets reduced by other rules. For example, `merge (recΔ b s n) (recΔ b s n)`. The merge rule applies, reducing the size by 1, but the recΔs are still there. Hmm.
+
+Actually, for the merge_cancel rule `merge(x, x) → x`, if x is a recΔ, then we have:
+- Before: `merge (recΔ b s n, recΔ b s n)`. Two recΔs with depth d.
+- After: `recΔ b s n`. One recΔ with depth d.
+- Multiset of depths: {d, d} → {d}. Decreases.
+
+For `recΔ b s (delta n) → app s (recΔ b s n)`:
+- Before: one recΔ with depth d+1, plus whatever is in b, s, n.
+- After: recΔ b s n (depth d) wrapped in `app s`. Plus whatever was in b, s, n.
+- The recΔ b s n in the result has depth d.
+- The other recΔs in b, s are unchanged.
+- So one depth went from d+1 to d. Multiset decreases.
+
+For `recΔ b s void → b`:
+- Removes one recΔ. Multiset decreases.
+
+For other rules: they don't affect recΔ subterms directly, but they can reduce the surrounding structure, making the recΔs more "exposed". Hmm, but if a step is in a subterm of a recΔ (like reducing inside s or b), then the recΔ structure remains the same, and the subterm's size decreases.
+
+OK so I think strong normalization holds. The measure is a combination of:
+- The multiset of recΔ depths, in multiset well-ordering.
+- For "ties" or when no recΔ is involved, the term size.
+
+But actually we need to be careful: a step like `R_eq_diff` `eqW a b → integrate (merge a b)`. If this is applied to a subterm of a recΔ, the recΔ's structure doesn't change, but the term size changes. If the eqW is the WHOLE recΔ's argument, that's `recΔ b s (eqW a b)`, which is not in a reducible form for recΔ (since eqW a b is not void or delta). Hmm.
+
+Wait, recΔ only applies to `void` or `delta n` patterns. If the third argument is `eqW a b` (which is not void and not delta), then recΔ is stuck.
+
+OK so I think the answer is YES, strong normalization can be established, using a measure based on (multiset of recΔ depths) and term size.
+
+The potential subtlety is: the system uses `eqW` which is a non-deterministic equality (it can reduce in two ways: to void or to integrate (merge a b)). This non-determinism doesn't cause non-termination in this system, but it's worth noting.
+
+Another subtlety: there's no negative occurrence of recΔ, no mutually recursive rules that could loop, etc. The calculus is first-order (no binders), so we don't have to worry about substitution or variable capture.
+
+The rules are all "destructuring" or "recursive on a well-founded structure" (the `delta`-chain acts like a natural number with `void` as zero).
+
+So my assessment: YES, strong normalization can be established from the presented calculus alone, without needing extra axioms. The reason is:
+1. No binders mean no substitution issues.
+2. The only potentially problematic rule (`R_rec_succ`) decreases a well-founded measure (the depth of the `delta`-chain in the recΔ's argument).
+3. All other rules strictly decrease term size.
+4. A combined measure (lexicographic pair of (term size, multiset of recΔ depths)) works.
+
+Standard proof methods: termination via multiset ordering, or via a size-change principle, or simply by defining a measure and verifying each rule.
+
+Wait, let me also check: could there be non-termination through some clever interaction? Let me try:
+
+`eqW a a → integrate (merge a a) → integrate a`. This is a 2-step reduction that doesn't increase the "recΔ depth" and decreases the size.
+
+`recΔ b s (eqW a a)`. Hmm, this is stuck on recΔ (since eqW a a is not void or delta n). Could eqW reduce first? Only if Step has contextual closure. If yes:
+- `recΔ b s (eqW a a) → recΔ b s (integrate (merge a a))` (by R_eq_diff in the subterm)
+- `recΔ b s (integrate (merge a a))`. recΔ is still stuck.
+- Hmm, but `integrate (merge a a) → integrate a` → and then if a is something specific, integrate (delta x) → void.
+
+So `recΔ b s (eqW a a)` → `recΔ b s (integrate a)` → if a = delta x: `recΔ b s (void)` → `b`. Or if a is not a delta: stuck.
+
+OK seems fine.
+
+What if we have `recΔ b s (eqW a a)` and reduce differently: `recΔ b s (void) → b`. Also fine.
+
+What about `eqW (recΔ b s n) (recΔ b s n)`?
+- → `void` via R_eq_refl.
+- → `integrate (merge (recΔ b s n) (recΔ b s n))` → `integrate (recΔ b s n)` via R_merge_cancel.
+- Now `integrate (recΔ b s n)`. integrate is stuck unless its argument is `delta t`. recΔ is not delta. So stuck.
+- Alternative: the recΔ inside might reduce first. `integrate (merge (recΔ b s n) (recΔ b s n))` → `integrate (merge (recΔ b s n') (recΔ b s n))` (if n = delta n' and we reduce the left recΔ). Hmm, this is getting complex.
+
+But the recΔ reductions only unroll into more recΔs or terminate. They don't loop.
+
+I'm fairly confident the answer is YES, strong normalization holds.
+
+One more consideration: the system mentions "no external memory" and "no variable binding". The lack of variable binding makes this a pure first-order TRS, where standard termination techniques apply cleanly.
+
+So my final assessment: YES, strong normalization can be established from the calculus alone. The key is the structural recursion in `recΔ`, which is well-founded because it decreases the depth of the `delta`-chain. Other rules decrease term size. A combined measure (lex order of (size, multiset of recΔ-delta-depths)) works.
+
+Actually, I want to be more careful. Let me re-examine the issue with `recΔ_succ` and term size.
+
+`recΔ b s (delta n) → app s (recΔ b s n)`.
+
+Term size change: 
+- LHS: 1 (recΔ) + |b| + |s| + 1 (delta) + |n| = |b| + |s| + |n| + 2
+- RHS: 1 (app) + |s| + 1 (recΔ) + |b| + |s| + |n| = |b| + 2|s| + |n| + 2
+- Difference: |s|.
+
+So if |s| > 0, the term grows. If s is huge, the term grows a lot.
+
+But the recΔ-depth in the recΔ position decreases by 1 (from depth-of(delta n) = depth(n)+1, to depth(n)).
+
+So we need a measure that captures both:
+- A bound on the recursion depth, AND
+- A bound on how much s can grow.
+
+But s doesn't grow from `recΔ_succ` directly. Hmm, but if s contains a recΔ, then reducing s reduces its own recΔ-depth. So s's recΔ-depths decrease.
+
+I think the right measure is: multiset of recΔ-depths over all recΔs in the term. Let me verify:
+
+For `R_rec_succ` on a term T = C[recΔ b s (delta n)]:
+- The outer recΔ has depth d+1 (where d = depth of n).
+- After: T' = C[app s (recΔ b s n)].
+- The outer recΔ now has depth d.
+- All other recΔs in s, b, n, and the context C, are unchanged.
+- So the multiset of depths decreased by 1 in the position of this recΔ.
+
+For other rules applied to a subterm: the recΔ structure at this position is unchanged (or the recΔ is removed in `recΔ_zero`). The subterm's structure changes, but recΔs within it might be affected.
+
+Wait, actually, when a rule like `R_eq_diff` is applied to a subterm of a recΔ, the recΔ structure is unchanged, and the recΔ-depths inside the subterm... well, eqW doesn't reduce to recΔ. So no new recΔs are created.
+
+In general, none of the rules creates new recΔs. They might destroy recΔs (R_rec_zero) or decrease the depth of a recΔ (R_rec_succ). They don't create new recΔs.
+
+So the multiset of recΔ-depths strictly decreases with each step (or stays the same with the other rules... wait, the other rules don't touch recΔs at all if applied to non-recΔ subterms, but they might be applied to recΔ subterms' contents).
+
+Let me reconsider. Apply `R_int_delta` to a subterm: `integrate (delta t) → void`. This doesn't create or destroy recΔs; it just replaces one subtree with void (which contains no recΔs). So if the subtree had recΔs, they're gone — multiset decreases.
+
+Apply `R_merge_*` to a subterm: similar; merge is replaced by something smaller, potentially removing recΔs.
+
+Apply `R_rec_zero` to a subterm: removes a recΔ. Multiset decreases.
+
+Apply `R_rec_succ` to a subterm: one recΔ's depth decreases. Multiset decreases.
+
+Apply `R_eq_refl` to a subterm: replaces eqW a a with void. Removes any recΔs inside a. Multiset might decrease.
+
+Apply `R_eq_diff` to a subterm: replaces eqW a b with integrate (merge a b). The eqW is gone, replaced by integrate(merge(a, b)). RecΔs in a and b are preserved (merge doesn't destroy recΔs in its arguments). So multiset of recΔ-depths is preserved (no change), but term size decreases (eqW is replaced by integrate o merge, which is the same size if a ≠ b... actually same size: eqW(2) = integrate(merge(2)) since integrate and merge and eqW are all 1-arg or 2-arg constructors).
+
+Hmm wait, size of eqW(a, b) = 1 + |a| + |b|. Size of integrate(merge(a, b)) = 1 + 1 + |a| + |b| = |a| + |b| + 2. Same size.
+
+For R_eq_refl: size of eqW(a, a) = 2|a| + 1. Size of void = 0. Strictly decreases (assuming a is non-empty).
+
+For R_eq_diff applied to a subterm: size preserved, but recΔs in the subterm are preserved. So we need a measure that strictly decreases for this rule.
+
+Hmm, but is there an infinite chain of R_eq_diff applications? Let me think:
+- eqW a b → integrate (merge a b)
+- integrate (merge a b): integrate has no rule unless arg is delta. merge has rules.
+- merge a b → if a = void, b. If b = void, a. If a = b, a. Otherwise stuck.
+- So eqW a b → integrate (merge a b) → integrate a (if b=void) or integrate b (if a=void) or integrate a (if a=b via R_merge_cancel).
+- integrate a: stuck unless a = delta x, in which case → void.
+
+So R_eq_diff always leads to a 2-3 step reduction that terminates (modulo reducing inside a or b).
+
+What if a = b = eqW c d (some eqW)? Then:
+- eqW (eqW c d) (eqW c d) → void (R_eq_refl), terminating.
+- eqW (eqW c d) (eqW c d) → integrate (merge (eqW c d) (eqW c d)) → integrate (eqW c d) (R_merge_cancel). 
+- Now integrate (eqW c d): stuck.
+- Or, we could reduce the inner eqW first (if Step has contextual closure): integrate (eqW c d) → integrate (integrate (merge c d)) (R_eq_diff) or integrate void (R_eq_refl).
+- integrate void: stuck (not a delta).
+- integrate (integrate (merge c d)): stuck.
+- integrate (void): stuck.
+
+OK so this terminates.
+
+What if a = delta (eqW c d) and b = delta (eqW c d)?
+- eqW (delta (eqW c d)) (delta (eqW c d)) → void (R_eq_refl), terminating.
+- → integrate (merge (delta (eqW c d)) (delta (eqW c d))) → integrate (delta (eqW c d)) (R_merge_cancel). 
+- integrate (delta (eqW c d)) → void (R_int_delta). Terminating.
+
+OK so I think the system is strongly normalizing.
+
+Now, can we PROVE this from the calculus alone, without importing any extra axioms?
+
+Yes, using a measure argument. The measure I'll use:
+- M(t) = (multiset of recΔ-depths in t, t's size)
+- In lex order: first compare multisets (multiset well-ordering is well-founded), then sizes.
+
+Each rule, when applied to a subterm (or root), changes the measure:
+- Most rules: multiset of recΔ-depths decreases (or stays same) and size decreases (or stays same).
+- R_rec_succ: multiset of recΔ-depths strictly decreases (one depth went down by 1).
+- R_eq_diff: multiset unchanged, size unchanged. Hmm, this is a problem.
+
+Wait, R_eq_diff preserves both the multiset of recΔ-depths and the size. So if we apply R_eq_diff, the measure doesn't decrease. But we might apply R_eq_diff again, infinitely. But as we analyzed, after R_eq_diff, the term is `integrate (merge a b)`, which can reduce by R_merge rules or be stuck. R_eq_diff can be applied to a subterm of the form eqW(_,_), but after R_eq_diff, there are no more eqWs at this position (it's now integrate(merge(_,_))).
+
+Hmm wait, if a or b is itself an eqW, then yes, we can apply R_eq_diff to the inner eqW. So the sequence is:
+- eqW (eqW c d) (eqW c d) → integrate (merge (eqW c d) (eqW c d)) [R_eq_diff at outer]
+- → integrate (eqW c d) [R_merge_cancel at the merge]
+- Now we have integrate (eqW c d). 
+- Hmm, integrate doesn't have a rule for non-delta args. So we're stuck on integrate.
+- But the inner eqW c d could reduce: integrate (eqW c d) → integrate (integrate (merge c d)) [R_eq_diff at inner eqW].
+- → integrate (integrate (merge c d)): stuck.
+
+So the R_eq_diff can fire only a finite number of times, because each application either:
+- Replaces an eqW with integrate(merge), removing the eqW.
+- The eqW might contain other eqWs, but each application removes one eqW (the one at the root of the reduction).
+
+So the number of eqWs strictly decreases with each R_eq_diff application. Hmm, but eqWs can be CREATED by other rules? No, looking at the rules, none of them create eqWs. So the count of eqWs is a non-increasing measure.
+
+Wait, R_eq_refl replaces eqW with void (count decreases). R_eq_diff replaces eqW with integrate(merge(_,_)) (count decreases by 1 at this position). Other rules don't involve eqW.
+
+So the count of eqWs is a non-increasing natural number measure. Each eqW-eliminating step decreases it. So R_eq_diff can only fire a finite number of times (bounded by the initial number of eqWs).
+
+OK so we can refine the measure:
+- M(t) = (number of eqWs in t, multiset of recΔ-depths in t, size of t)
+- Or just (number of eqWs, ...).
+
+Wait, but R_eq_diff doesn't change the count of eqWs if a or b is itself an eqW. Hmm:
+- eqW (eqW c d) (eqW c d): count of eqWs = 3.
+- After R_eq_diff: integrate (merge (eqW c d) (eqW c d)). Count of eqWs = 2.
+- After R_merge_cancel: integrate (eqW c d). Count of eqWs = 1.
+- After R_eq_diff on the inner: integrate (integrate (merge c d)). Count of eqWs = 0.
+
+OK each R_eq_diff application removes one eqW (the one it was applied to), so count strictly decreases. 
+
+So actually, R_eq_diff strictly decreases the eqW count. And other rules don't create eqWs. So eqW count is a good measure, in conjunction with other measures for the other rules.
+
+Actually, let me restructure:
+- M1(t) = number of eqWs in t.
+- M2(t) = multiset of recΔ-depths in t.
+- M3(t) = size of t.
+
+For R_eq_diff: M1 strictly decreases. M2, M3 might change but we don't care since M1 decreased.
+
+For R_eq_refl: M1 strictly decreases (eqW replaced by void). 
+
+For R_rec_succ: M1 unchanged, but M2 strictly decreases.
+
+For other rules: M1 unchanged, M2 unchanged (no recΔs affected), M3 strictly decreases (the replaced subtree is strictly smaller).
+
+For R_rec_zero: M2 strictly decreases (recΔ removed).
+
+So the lex measure (M1, M2, M3) is strictly decreasing under each rule. This proves strong normalization (well, well-foundedness of the rewrite relation, which is strong normalization).
+
+Wait, we need to be careful: each rule, applied to a subterm (under contextual closure), should strictly decrease this measure.
+
+If R_eq_diff is applied to a subterm, it removes one eqW from the subterm. The total count of eqWs in the term decreases by 1.
+
+Similarly for other rules.
+
+And recΔ-depths: if R_rec_succ is applied to a recΔ, that recΔ's depth decreases by 1. The total multiset of depths in the term decreases in multiset ordering.
+
+Sizes: each rule replaces a subterm with one that's not larger (most cases strictly smaller, R_eq_diff is the same size but compensated by M1 decrease).
+
+So with (M1, M2, M3) in lex order (with M1 first, since it has a finite max), we get a well-founded measure.
+
+Wait, M1 is bounded by the number of constructors in the term, which is finite. M2 in multiset ordering is well-founded. M3 is a natural number, well-founded. The lex product of well-founded orders is well-founded.
+
+So strong normalization can be established by this measure argument, all derived from the syntax and rules of the calculus.
+
+OK so my final answer: YES, strong normalization can be established. The measure (number of eqWs, multiset of recΔ-depths, term size) in lex order works. This is a standard termination argument for first-order TRS, applied to the calculus as given.
+
+Actually wait, I want to double-check that R_eq_diff doesn't change the multiset of recΔ-depths. R_eq_diff: eqW a b → integrate (merge a b). The recΔs in a and b are preserved (just moved to inside `integrate o merge`). So multiset of recΔ-depths is unchanged. Good.
+
+And R_eq_diff on a subterm: it replaces a subterm containing recΔs with another subterm containing the same recΔs. Multiset of recΔ-depths is unchanged globally. Term size is unchanged. But M1 (eqW count) strictly decreases. Good.
+
+OK so I'm confident. The answer is YES, strong normalization holds, and can be proven by a measure argument using the lex order (eqW count, multiset of recΔ-depths, term size).
+
+Let me also think about whether the question is asking something more subtle. The question says "without importing structural axioms or object-level assumptions beyond what is derivable from the given syntax and rewrite rules". So I should not use, e.g., well-foundedness of natural numbers as an axiom (well, actually that's derivable in Lean... hmm). Actually, in Lean, the natural numbers are well-founded by construction (using `Nat.lt_wfRel`). So this is fine.
+
+The measure argument I gave is purely combinatorial: it counts things in the term. It doesn't require any structural axioms beyond what Lean already provides (well-foundedness of multiset ordering on `Nat`, and of the natural numbers).
+
+So the answer is YES, and the proof is a standard termination argument via a lex-combined measure.
+
+Hmm, let me also note: the system has no binders, so there's no issue of variable capture or substitution. This is a pure first-order TRS.
+
+So the answer is YES, with the explanation above.
+
+Let me also think if there are any subtleties I'm missing.
+
+One subtlety: the `Step` relation as defined is just the 8 rules, not closed under contexts. This is unusual for a TRS. If `Step` is the 8 rules alone, then strong normalization is even easier to establish (essentially every term is in normal form in 0 or 1 step, except recΔ_succ which is still terminating as analyzed).
+
+If `Step` is the 8 rules closed under contexts (compatible closure), then the measure argument above still works.
+
+In either case, strong normalization holds. So the answer is YES.
+
+I think this is my final answer.
+
+Wait, one more thing: is there a possibility that the `Step` definition is intentionally incomplete and the user is testing whether we notice? The user said "rewrite calculus", which usually implies contextual closure. The Lean 4 code only has the 8 rules, but maybe the intent is to use the rules as a rewriting system (with implicit closure under contexts).
+
+Either way, the answer is YES.
+
+Final answer: YES, strong normalization can be established. Use a measure argument with (eqW count, multiset of recΔ-depths, term size) in lex order. This is provable from the syntax and rules alone, using only standard well-foundedness of multisets and natural numbers, both of which are derivable in Lean.

@@ -1,0 +1,530 @@
+The user wants me to assess whether strong normalization can be established for a first-order rewrite calculus presented in a Lean 4 file.
+
+ Let me analyze the system:
+
+ 1. **Syntax**: `Trace` is an inductive type with constructors:
+    - `void`
+    - `delta` (unary)
+    - `integrate` (unary)
+    - `merge` (binary)
+    - `app` (binary)
+    - `recΔ` (ternary)
+    - `eqW` (binary)
+
+ 2. **Rewrite rules**:
+    - `R_int_delta`: `integrate (delta t) → void`
+    - `R_merge_void_left`: `merge void t → t`
+    - `R_merge_void_right`: `merge t void → t`
+    - `R_merge_cancel`: `merge t t → t`
+    - `R_rec_zero`: `recΔ b s void → b`
+    - `R_rec_succ`: `recΔ b s (delta n) → app s (recΔ b s n)`
+    - `R_eq_refl`: `eqW a a → void`
+    - `R_eq_diff`: `eqW a b → integrate (merge a b)` (when `a ≠ b`? Or always? The rule says `∀ a b`, so this applies even when `a = b`!)
+
+ Wait, looking closely at `R_eq_refl` and `R_eq_diff`:
+ - `R_eq_refl` says `eqW a a → void`
+ - `R_eq_diff` says `∀ a b, eqW a b → integrate (merge a b)`
+
+ If `a = b`, both rules apply! This is a non-confluent overlapping system, but the question is about strong normalization, not confluence.
+
+ Actually, looking at the Lean definition:
+ ```lean
+ | R_eq_refl : ∀ a, Step (eqW a a) void
+ | R_eq_diff : ∀ a b, Step (eqW a b) (integrate (merge a b))
+ ```
+
+ Since `R_eq_diff` is quantified over all `a b`, when `a = b`, we have two possible reductions from `eqW a a`:
+ 1. to `void`
+ 2. to `integrate (merge a a)`
+
+ This is a critical overlap. But for strong normalization, we just need to show there are no infinite reduction sequences.
+
+ Let me think about whether this system is strongly normalizing.
+
+ First, note that there are no binders, so it's a first-order term rewriting system (TRS).
+
+ Let me list the rules again:
+ 1. `integrate (delta t) → void`
+ 2. `merge void t → t`
+ 3. `merge t void → t`
+ 4. `merge t t → t`
+ 5. `recΔ b s void → b`
+ 6. `recΔ b s (delta n) → app s (recΔ b s n)`
+ 7. `eqW a a → void`
+ 8. `eqW a b → integrate (merge a b)`
+
+ Wait, rule 8 applies even when `a = b`. So `eqW a a` reduces to `integrate (merge a a)`. But `merge a a` reduces to `a` (rule 4), and then `integrate a` is a normal form (no rule applies to `integrate` unless its argument is `delta t`). Actually, `integrate a` where `a` is not `delta t` is a normal form.
+
+ But also `eqW a a` can reduce to `void` via rule 7.
+
+ Let me think about whether there are infinite reduction sequences.
+
+ The problematic rules seem to be around `recΔ` and `eqW` and `merge`.
+
+ Let's look at `recΔ`:
+ - `recΔ b s void → b`
+ - `recΔ b s (delta n) → app s (recΔ b s n)`
+
+ This looks like primitive recursion. If `n` is built from `delta`, then each step reduces the number of `delta` constructors. But what if `n` is something else?
+
+ If `n` is `void`, then `recΔ b s void → b` (terminates).
+ If `n` is `delta n'`, then `recΔ b s (delta n') → app s (recΔ b s n')`. The number of `delta` constructors decreases by 1. Eventually we hit `void` or something that is not `delta` or `void`.
+
+ Wait, what if `n` is `integrate t`? Then no rule applies to `recΔ b s (integrate t)`. It's a normal form.
+
+ What if `n` is `merge x y`? No rule applies. Normal form.
+
+ What if `n` is `app x y`? No rule applies. Normal form.
+
+ What if `n` is `recΔ ...`? No rule applies. Normal form.
+
+ What if `n` is `eqW x y`? No rule applies. Normal form.
+
+ So `recΔ` only reduces when the third argument is `void` or `delta n`. Since `delta` is a constructor that just wraps, and we decrease the depth of nested `delta`s, this terminates.
+
+ Now `merge`:
+ - `merge void t → t`
+ - `merge t void → t`
+ - `merge t t → t`
+
+ These rules can create infinite loops? Let's see:
+ Consider `merge (merge void void) void`.
+ It reduces to `merge void void` (via left merge), then to `void`.
+
+ What about `merge t t` where `t` is arbitrary? It reduces to `t`.
+
+ Can we have an infinite sequence with `merge`?
+ Suppose we have `merge A B` where neither is `void` and `A ≠ B`. Then no rule applies.
+
+ If one is `void`, it reduces to the other.
+ If both are equal, it reduces to that term.
+
+ So `merge` reductions always terminate, and in fact decrease the size of the term (if we measure appropriately). Wait, `merge void t → t` decreases size. `merge t void → t` decreases size. `merge t t → t` decreases size. So `merge` is always decreasing.
+
+ Now `integrate`:
+ - `integrate (delta t) → void`
+
+ So `integrate` only reduces when its argument is `delta t`, and then it goes to `void`.
+
+ Can we have infinite loops involving `integrate`? Only if we can create `delta t` from somewhere, but the rules don't introduce `delta` on the right-hand side except in... wait, do any rules introduce `delta`?
+
+ Let's check right-hand sides:
+ 1. `void` - no `delta`
+ 2. `t` - no new `delta`
+ 3. `t` - no new `delta`
+ 4. `t` - no new `delta`
+ 5. `b` - no new `delta`
+ 6. `app s (recΔ b s n)` - no new `delta`
+ 7. `void` - no new `delta`
+ 8. `integrate (merge a b)` - no new `delta`
+
+ So `delta` is never introduced by any rewrite rule! It's only eliminated (in rule 1).
+
+ Wait, `delta` appears in the LHS of rule 1 and rule 6, but rule 6 requires the third argument of `recΔ` to be `delta n`, and the RHS doesn't contain `delta` (unless `s` or the recursive call contains `delta`, but those are subterms already present).
+
+ So `delta` constructors are never created, only consumed or passed around.
+
+ This means any term has a finite number of `delta` constructors, and rules 1 and 6 consume them (rule 6 consumes one `delta` by moving to a smaller argument).
+
+ Now `eqW`:
+ - `eqW a a → void`
+ - `eqW a b → integrate (merge a b)`
+
+ These rules overlap when `a = b`.
+
+ Can these cause non-termination?
+
+ Consider `eqW t t`. It can reduce to `void`, or to `integrate (merge t t)`. The latter reduces to `integrate t` (if `merge t t → t`), and then `integrate t` is normal unless `t = delta t'`.
+
+ If `t` is arbitrary, `integrate t` might be normal. But if we keep choosing the `R_eq_diff` rule, what happens?
+
+ Wait, can we apply `R_eq_diff` infinitely? Let's see: `eqW a b` reduces to `integrate (merge a b)`. Can `integrate (merge a b)` reduce back to something containing `eqW`? No, none of the rules introduce `eqW` on the RHS.
+
+ So `eqW` only appears on the left of reductions. Once we reduce an `eqW`, it's gone.
+
+ Wait, actually, could `eqW` appear inside a term and keep getting recreated? No, because no RHS contains `eqW`.
+
+ So each `eqW` redex can be reduced at most once (or maybe twice if there are two rules applicable, but the result doesn't contain `eqW`).
+
+ Similarly, `recΔ` doesn't appear on any RHS. So once we reduce a `recΔ`, it's replaced by something not containing `recΔ` (well, rule 6 introduces `recΔ` recursively, but with a smaller argument).
+
+ Wait, rule 6: `recΔ b s (delta n) → app s (recΔ b s n)`. The RHS does contain `recΔ`, but with argument `n` instead of `delta n`. Since `delta` constructors are never created, and we're removing one layer of `delta`, this recursion terminates.
+
+ So the only potential source of non-termination would be some kind of cyclic dependency or infinite growth.
+
+ But looking at the rules, all right-hand sides are structurally smaller or equal in some sense? Not exactly.
+
+ Let's think about a measure. Since no rule introduces `delta`, `recΔ`, `eqW`, `integrate`, or `merge` on the right side in a way that increases "complexity", but wait:
+
+ Actually, `R_eq_diff` takes `eqW a b` to `integrate (merge a b)`. This replaces a binary constructor with two unary/binary constructors. The size might increase? Let's count symbols:
+ - `eqW a b` has size 1 + |a| + |b|
+ - `integrate (merge a b)` has size 2 + |a| + |b|
+
+ So the size increases by 1! And then `merge a b` might reduce further.
+
+ If `a = b`, we could have:
+ `eqW a a` → `integrate (merge a a)` → `integrate a` (by merge cancel) → normal form (if a is not `delta t`).
+
+ But if `a` is something like `eqW c d`? No, `integrate` doesn't distribute inside.
+
+ Wait, but if `a` itself contains `eqW`, those could reduce. But `eqW` doesn't appear in `merge` rules' RHS.
+
+ Actually, let's trace carefully. Can we create a larger term from a smaller one?
+
+ `R_eq_diff`: `eqW a b` → `integrate (merge a b)`. Size increases by 1.
+ Then `merge a b` might reduce. If `a = void`, `merge void b → b`, so we get `integrate b`. Size is 1 + |b| < 2 + |a| + |b| = 2 + |b|.
+
+ If `a = b`, `merge a a → a`, so we get `integrate a`. Size is 1 + |a| < 2 + 2|a|.
+
+ So after the `merge` reduction, the size drops below the original.
+
+ What if neither merge rule applies? Then `merge a b` is normal, and we have `integrate (merge a b)` which is normal (unless `merge a b` is `delta t`, but `merge` doesn't produce `delta` unless one argument is `delta t` and... wait, if `a = delta t` and `b = void`, then `merge (delta t) void → delta t`. So `integrate (delta t)` reduces to `void`.
+
+ So it seems like the system might be SN.
+
+ But wait, there's a subtlety. What about the overlap in `eqW` rules? If we always choose `R_eq_diff` when `a = b`, we get `integrate (merge a a)`. This introduces `merge`, which reduces to `a`, giving `integrate a`. This is fine.
+
+ But is there any term that can undergo infinite reduction?
+
+ Let me think about whether any rule can increase some measure that allows infinite loops.
+
+ All rules either:
+ - Remove a `delta` (R_int_delta, R_rec_succ)
+ - Remove a `merge` (R_merge_*)
+ - Remove a `recΔ` (R_rec_zero, R_rec_succ)
+ - Remove an `eqW` (R_eq_refl, R_eq_diff)
+
+ And importantly, no rule introduces any of these constructors on the RHS except:
+ - `R_eq_diff` introduces `integrate` and `merge`
+ - `R_rec_succ` introduces `app` and `recΔ`
+
+ The `recΔ` introduced by `R_rec_succ` has a strictly smaller argument (in terms of `delta`-height or something).
+
+ The `merge` introduced by `R_eq_diff` will immediately reduce away (if possible) or stay, but it doesn't introduce infinite behavior.
+
+ But wait, could we have infinite reduction due to `app`? `app` doesn't have any reduction rules! So `app` is just a constructor that doesn't reduce. It's a "frozen" binary operator.
+
+ So `app` acts like a pair constructor with no associated rules.
+
+ Similarly, `void`, `delta`, `integrate`, `merge`, `recΔ`, `eqW`, `app` are all constructors, but only some have rewrite rules.
+
+ Since no rule introduces `eqW`, and `eqW` is the only source of `integrate` (other than explicit terms), and `integrate` only reduces when applied to `delta`, and `delta` is never introduced...
+
+ Actually, `R_int_delta` removes `delta`. `delta` is never created. So any chain of `R_int_delta` applications must terminate because there are finitely many `delta`s.
+
+ `recΔ` reduces when third arg is `void` or `delta n`. In the `delta` case, it recurses with `n` which has one fewer `delta`. This is well-founded recursion.
+
+ But what if the third argument of `recΔ` is a term that reduces to `void` or `delta n`? For example, `recΔ b s (merge void void)`.
+ `merge void void → void`, so we could have:
+ `recΔ b s (merge void void)` → we can't apply `R_rec_zero` directly because the third arg is `merge void void`, not `void`.
+ First we need to reduce the third argument: `merge void void → void`, giving `recΔ b s void`, then `R_rec_zero` gives `b`.
+
+ So reduction can happen inside subterms. This is a standard TRS.
+
+ The question is: can we have an infinite reduction sequence?
+
+ Let me try to construct one.
+
+ Suppose we have a term that keeps growing. The only rule that increases term size is `R_eq_diff` (by replacing `eqW a b` with `integrate (merge a b)`). But then `merge` reduces, decreasing size.
+
+ What if `a` and `b` contain `eqW` themselves? Then after `R_eq_diff`, we have `integrate (merge a b)`. The subterms `a` and `b` still contain `eqW`, which can reduce. But reducing inside `a` or `b` doesn't affect the outer `integrate` or `merge` (unless it makes them reducible).
+
+ But `merge` is only reducible if one side is `void` or both sides are equal. Reducing inside `a` or `b` might make them equal or make one `void`.
+
+ For example, let `a = merge void c` and `b = c`. Then `merge a b = merge (merge void c) c`. But we might reduce `merge void c → c` first, getting `merge c c`, which reduces to `c`.
+
+ So reducing inside arguments can enable `merge` reductions.
+
+ But can this go on forever?
+
+ Let's consider the "potential" for `merge` to reduce. Once a `merge` is reduced, it disappears (unless it's the outermost `merge` in `R_eq_diff`'s RHS, which is a new `merge`).
+
+ Actually, each `eqW` can be rewritten at most once (choosing either rule). After that, it's gone. So the number of `eqW` constructors strictly decreases with each `eqW`-reduction.
+
+ Similarly, each `recΔ` either disappears (R_rec_zero) or turns into an `app` with a smaller `recΔ` (R_rec_succ). The number of `recΔ` constructors might stay the same in R_rec_succ (one is replaced by one), but the third argument has fewer `delta`s.
+
+ Wait, in R_rec_succ: `recΔ b s (delta n) → app s (recΔ b s n)`. The `recΔ` is preserved, but the third argument loses a `delta`. Since `delta` is never created, and each `recΔ` reduction either removes the `recΔ` or reduces the `delta`-depth of its third argument, the total number of `recΔ` reductions is bounded by the sum over all `recΔ` subterms of the `delta`-depth of their third argument.
+
+ But we also have inner reductions. A `recΔ` might become reducible only after its third argument is reduced. For example, `recΔ b s (merge void (delta n))`. First reduce inside: `merge void (delta n) → delta n`, then `recΔ` reduces.
+
+ The `merge` reduction might expose a `delta` or `void`.
+
+ Is there any way to get an infinite sequence?
+
+ Let me think about the weight of terms.
+
+ Define weight:
+ - w(void) = 1
+ - w(delta t) = w(t) + 1
+ - w(integrate t) = w(t) + 1
+ - w(merge a b) = w(a) + w(b) + 1
+ - w(app a b) = w(a) + w(b) + 1
+ - w(recΔ b s n) = 2*w(b) + 2*w(s) + w(n) + 1? No, need to be careful.
+
+ Actually, let's use a lexicographic measure or multiset ordering.
+
+ Since this is a first-order TRS, we can try to see if it's terminating by checking critical pairs or using a reduction ordering.
+
+ But the user asks for a raw assessment: can SN be established from the presented calculus alone?
+
+ Let me look for potential counterexamples to SN.
+
+ Rule 8: `eqW a b → integrate (merge a b)`. This applies even when `a = b`. When `a = b`, we also have rule 7: `eqW a a → void`.
+
+ If we have `eqW a b` where `a` and `b` reduce to the same thing, we could potentially have:
+ `eqW a b` →* `eqW a' a'` → void
+ or
+ `eqW a b` → `integrate (merge a b)` →* ... 
+
+ But this doesn't seem to give infinite loops.
+
+ What if we have `recΔ` with third argument that can grow? But nothing grows the third argument.
+
+ Wait, what about the interaction between `R_eq_diff` and `R_merge_cancel`?
+ `eqW a a` → `integrate (merge a a)` → `integrate a`.
+ This is fine.
+
+ What about `eqW (merge void t) t`?
+ This can reduce via `R_eq_diff` to `integrate (merge (merge void t) t)`.
+ Then `merge void t → t`, giving `integrate (merge t t)` → `integrate t`.
+ Or we could first reduce inside: `merge void t → t`, giving `eqW t t` → void.
+ Both terminate.
+
+ Let me try to find a term that reduces to itself.
+
+ Is there a fixed point?
+ - `merge void void → void`. Not a fixed point.
+ - `integrate (delta t) → void`. Not a fixed point.
+ - `recΔ b s void → b`. Not a fixed point.
+ - `eqW a a → void`. Not a fixed point.
+ - `eqW a b → integrate (merge a b)`. RHS doesn't contain `eqW`, so no fixed point there.
+
+ No rule has a RHS that is identical to its LHS.
+
+ Could there be a cycle of length > 1?
+ For a cycle, we'd need to generate a term that eventually reduces back to the original.
+
+ Since no rule introduces `eqW`, and `eqW` is on the LHS of two rules, once we reduce an `eqW`, we can't get it back. So any cycle would have to avoid `eqW` reductions? But we can start with a term containing `eqW`.
+
+ Actually, if we have a cycle, it must be within the set of terms not containing `eqW` or `recΔ` or `merge` or `integrate` with `delta` argument... but let's see.
+
+ Terms without `eqW`, `recΔ`, `merge` (or with `merge` only in inert positions), and `integrate` only over non-`delta`: these are normal forms!
+
+ Wait, is that true?
+ - If a term has no `eqW`, no `recΔ`, no `merge`, and no `integrate (delta t)`, then indeed no rule applies.
+ - If it has `merge`, but neither side is `void` and sides are not equal, then `merge` doesn't reduce.
+ - If it has `recΔ` but third arg is not `void` or `delta n`, and can't be reduced to such, then it doesn't reduce.
+ - If it has `integrate` but arg is not `delta t`, and can't be reduced to such, then it doesn't reduce.
+
+ So normal forms include many things.
+
+ But to get a cycle, we'd need to reduce forever. Since each reduction of a top-level redex removes at least one "active" constructor (`eqW`, `recΔ` with void/delta, `merge`, `integrate (delta ...)`), and these constructors are never introduced at the top level by reductions (except `merge` introduced by `eqW` reduction, and `recΔ` preserved in R_rec_succ), we need to check if the introduced ones can create new top-level redexes ad infinitum.
+
+ The only rule that introduces a redex is `R_eq_diff` introducing `integrate (merge a b)`.
+ - If `merge a b` reduces, it disappears.
+ - If after `merge` reductions we get `merge a' b'` that doesn't reduce, then `integrate` is inert.
+ - If `merge a b` reduces to `delta t`, then `integrate (delta t)` reduces to `void`.
+
+ So an `eqW` reduction creates at most a bounded amount of extra work (the `merge` reduction chain, then possibly an `integrate` reduction), and then disappears.
+
+ Similarly, `R_rec_succ` introduces `app s (recΔ b s n)`. The new `recΔ` has third argument `n`, which was a subterm of the original `delta n`. The number of `delta`s in `n` is one less than in `delta n`. So this is like structural recursion on the `delta` height.
+
+ Since `delta` is never introduced, the total number of `delta`s in a term is invariant under reduction except it decreases when `delta` is consumed by R_int_delta or R_rec_succ.
+
+ Wait, actually `delta` can appear in contexts where it's preserved. For example, `delta (eqW a b)` - reducing inside doesn't touch the outer `delta`.
+
+ But no rule creates new `delta`s. So the total number of `delta` constructors in a term is non-increasing? Let's check:
+ - R_int_delta: removes one `delta` (from `delta t` to `void`). Count decreases by 1.
+ - R_merge_*: doesn't affect `delta` count (just rearranges).
+ - R_rec_zero: removes `recΔ`, preserves `delta`s.
+ - R_rec_succ: replaces `delta n` with `n` in the third argument. So one `delta` is removed.
+ - R_eq_refl: removes `eqW`, preserves `delta`s.
+ - R_eq_diff: removes `eqW`, preserves `delta`s.
+
+ So the number of `delta` constructors strictly decreases in R_int_delta and R_rec_succ, and is unchanged in others.
+
+ Similarly, the number of `eqW` constructors: R_eq_refl and R_eq_diff each remove one `eqW` and don't introduce any. So `eqW` count strictly decreases.
+
+ The number of `recΔ` constructors: R_rec_zero removes one. R_rec_succ preserves the count (one in, one out). R_rec_succ also removes one `delta`.
+
+ So here's a potential measure: lexicographic order (#eqW + #recΔ, #delta, something else).
+
+ Actually, R_rec_succ preserves #recΔ but decreases #delta.
+ R_rec_zero decreases #recΔ.
+ All other rules decrease #eqW + #recΔ or keep it same while decreasing something else.
+
+ Wait, R_merge_void_left: `merge void t → t`. This removes one `merge`. Does it change #eqW, #recΔ, #delta? No.
+ R_merge_void_right: same.
+ R_merge_cancel: same.
+ R_int_delta: removes one `integrate` and one `delta`. #delta decreases.
+
+ So if we order by:
+ 1. Number of `eqW` + number of `recΔ` (decreases or stays same)
+ 2. Number of `delta` (decreases or stays same)
+ 3. Something that decreases for merge and integrate reductions.
+
+ For merge rules, they don't change `eqW`, `recΔ`, or `delta` counts. But they decrease term size.
+ For `integrate (delta t) → void`, #delta decreases.
+ For `eqW` rules, #eqW decreases.
+ For `recΔ` rules: R_rec_zero decreases #recΔ. R_rec_succ preserves #recΔ but decreases #delta.
+
+ So the lexicographic measure:
+ M(t) = (#eqW(t) + #recΔ(t), #delta(t), size(t))
+
+ Let's check each rule:
+ 1. `integrate (delta t) → void`: #eqW+#recΔ same, #delta decreases by 1. M decreases.
+ 2. `merge void t → t`: #eqW+#recΔ same, #delta same, size decreases. M decreases.
+ 3. `merge t void → t`: same, size decreases.
+ 4. `merge t t → t`: same, size decreases.
+ 5. `recΔ b s void → b`: #recΔ decreases by 1. M decreases.
+ 6. `recΔ b s (delta n) → app s (recΔ b s n)`: #recΔ same (one removed, one added), #delta decreases by 1 (the `delta` wrapping `n` is removed). M decreases because second component decreases.
+ 7. `eqW a a → void`: #eqW decreases by 1. M decreases.
+ 8. `eqW a b → integrate (merge a b)`: #eqW decreases by 1. M decreases.
+
+ Wait, does #recΔ change in rule 8? No. #eqW decreases by 1. So first component decreases.
+
+ Does this measure work for all reductions, including inner reductions?
+
+ Yes! Because when we reduce a subterm, the measure of the whole term decreases in the same way (since these counts are monotonic with respect to contexts).
+
+ More precisely, each of #eqW, #recΔ, #delta, and size is additive over the term structure. When a subterm is replaced by a term with smaller measure, the whole term has smaller measure.
+
+ So if we define a well-founded measure that decreases with every rewrite step, the system is strongly normalizing!
+
+ Let me double-check rule 6: `recΔ b s (delta n)` becomes `app s (recΔ b s n)`.
+ - Original contains: 1 recΔ, 1 delta, plus contents of b, s, n.
+ - New contains: 1 recΔ (in the subterm), 0 delta (the outer delta is gone), plus contents of b, s, n, plus app and s.
+ - So #recΔ is preserved exactly. #delta decreases by 1. Size: original has `recΔ b s (delta n)` which is 1 + |b| + |s| + 1 + |n| = 2 + |b| + |s| + |n|. New has `app s (recΔ b s n)` which is 1 + |s| + 1 + |b| + |s| + |n| = 2 + |b| + 2|s| + |n|. This is LARGER if |s| > 0!
+
+ Oh no! The size of the term can increase in rule 6 if `s` is non-empty. Because `s` is duplicated: it appears as the first argument of `app`, and also inside the `recΔ` as the second argument.
+
+ Wait, in `recΔ b s (delta n)`, `s` appears once.
+ In `app s (recΔ b s n)`, `s` appears twice!
+ So the size can increase.
+
+ This means my size measure doesn't work. But the first two components of the lexicographic measure still decrease:
+ - (#eqW + #recΔ) is preserved (still 1 recΔ).
+ - #delta decreases by 1.
+
+ So even though syntactic size increases, the number of `delta`s decreases.
+
+ Now, what about rule 8? `eqW a b` → `integrate (merge a b)`.
+ - #eqW decreases by 1.
+ - #recΔ unchanged.
+ - #delta unchanged.
+ - Size: original 1 + |a| + |b|. New: 1 + 1 + |a| + |b| = 2 + |a| + |b|. Size increases by 1.
+ But first component decreases.
+
+ What about merge rules? `merge void t` → `t`.
+ - #eqW, #recΔ, #delta unchanged.
+ - Size decreases.
+
+ So the lexicographic measure (N_eqW + N_recΔ, N_delta, size) should work, where size is syntactic size.
+
+ Let's verify that size is always decreasing when the first two components are preserved:
+ - Rules preserving first two components and #delta: only merge rules (2,3,4).
+   - `merge void t → t`: size decreases from 1 + 1 + |t| to |t|. (Wait, `void` has size 1, `merge` node has size 1, so 1 + 1 + |t| = 2 + |t| > |t|.)
+   - `merge t void → t`: 1 + |t| + 1 > |t|.
+   - `merge t t → t`: 1 + |t| + |t| = 1 + 2|t| > |t|.
+
+ So yes, when first two are preserved, size strictly decreases.
+
+ Wait, are there any rules that preserve all three? No.
+ - Rule 1: #delta decreases.
+ - Rule 2,3,4: size decreases.
+ - Rule 5: #recΔ decreases.
+ - Rule 6: #delta decreases.
+ - Rule 7: #eqW decreases.
+ - Rule 8: #eqW decreases.
+
+ So every rule decreases the lexicographic measure (A, B, C) where:
+ - A = number of eqW + number of recΔ
+ - B = number of delta
+ - C = syntactic size (number of constructors)
+
+ And this measure is well-founded because it's a lexicographic product of three well-founded orders (natural numbers).
+
+ Therefore, the system is strongly normalizing.
+
+ Wait, but I need to be careful. In rule 6, `recΔ b s (delta n) → app s (recΔ b s n)`, we said #recΔ is preserved. But is it exactly preserved? Yes, one recΔ node is removed, one is added in the subterm.
+
+ But what if `n` contains recΔ nodes? Those are preserved. So total #recΔ in the whole term: the top-level recΔ is gone, but a new one appears in the RHS. The recΔ nodes inside b, s, n remain. So the count is preserved.
+
+ Similarly for #delta: the `delta` at the top of the third argument is removed. Any deltas inside b, s, n remain. So #delta decreases by exactly 1.
+
+ So the measure works.
+
+ Let me also check that the measure is defined on all terms and decreases with every step.
+
+ Actually, syntactic size C must be defined carefully so that replacement of a subterm by a smaller one reduces the whole size.
+
+ Standard term size:
+ |void| = 1
+ |delta t| = 1 + |t|
+ |integrate t| = 1 + |t|
+ |merge a b| = 1 + |a| + |b|
+ |app a b| = 1 + |a| + |b|
+ |recΔ b s n| = 1 + |b| + |s| + |n|
+ |eqW a b| = 1 + |a| + |b|
+
+ Then for any rewrite rule L → R, we need |L| > |R| when the first two components are preserved.
+
+ For rules 2,3,4:
+ |merge void t| = 1 + 1 + |t| = 2 + |t| > |t|.
+ |merge t void| = 1 + |t| + 1 = 2 + |t| > |t|.
+ |merge t t| = 1 + |t| + |t| = 1 + 2|t| > |t| (for |t| ≥ 1). Wait, what if t = void? Then |merge void void| = 3 > 1 = |void|. Yes.
+
+ So size decreases.
+
+ Therefore, the lexicographic order is indeed a decreasing measure.
+
+ But wait, is it possible that reducing a subterm increases A or B? No, because A and B are just counts of specific constructors, and the rewrite rules never increase these counts:
+ - #eqW: rules 7,8 decrease by 1. Others don't touch.
+ - #recΔ: rule 5 decreases by 1. Rule 6 preserves. Others don't touch.
+ - #delta: rule 1 decreases by 1. Rule 6 decreases by 1. Others don't touch.
+
+ Actually, could a reduction inside a subterm increase #eqW? No, because no rule introduces eqW. So #eqW is non-increasing under all reductions. Similarly #recΔ is non-increasing (rule 6 preserves it, rule 5 decreases it, no rule introduces it). #delta is non-increasing (rules 1 and 6 decrease it, no rule introduces it).
+
+ Therefore, any reduction either:
+ - decreases A, or
+ - preserves A and decreases B, or
+ - preserves A and B and decreases C.
+
+ This means every rewrite step decreases the lexicographic tuple (A, B, C).
+
+ Since (ℕ, <) is well-founded, the lexicographic product is well-founded. Therefore, there are no infinite reduction sequences.
+
+ So strong normalization holds.
+
+ The user asks: "can strong normalization of this system be established from the presented calculus alone...? Provide your assessment and briefly explain the reasoning..."
+
+ My answer: Yes, strong normalization can be established. The reasoning is to define a well-founded measure that decreases with every rewrite step, specifically the lexicographic ordering on the triple:
+ 1. Total count of `eqW` and `recΔ` constructors,
+ 2. Total count of `delta` constructors,
+ 3. Syntactic size of the term.
+
+ Every rewrite rule decreases this measure: `eqW` and `recΔ` rules decrease the first component; `delta`-consuming rules decrease the second while not increasing the first; and `merge` rules decrease the third while not increasing the first two. No rule introduces any of these constructors, so the counts are non-increasing. This gives a global decreasing measure proving strong normalization without extra assumptions.
+
+ Let me double-check: does any rule introduce `delta`? Looking at the RHSs:
+ - void: no
+ - t: no (if t didn't have delta, but t is a variable/subterm, so it's just passing along what was there)
+ - same
+ - same
+ - b: no
+ - app s (recΔ b s n): no new delta
+ - void: no
+ - integrate (merge a b): no new delta
+
+ So indeed, no rule creates new `delta`s. Similarly for `eqW` and `recΔ`.
+
+ Wait, what about variables? In a rewrite rule, variables range over all terms. So when we say "no rule introduces eqW", we mean the RHS doesn't contain any eqW constructor. Yes, that's true.
+
+ So the argument is solid.
+
+ One subtlety: the system is not confluent (due to overlap between R_eq_refl and R_eq_diff), but confluence is not required for strong normalization.
+
+ Another subtlety: can `merge` rules increase #delta or other counts? No, they just remove merge nodes.
+
+ So yes, SN holds.
+
+ Let me write the final response.

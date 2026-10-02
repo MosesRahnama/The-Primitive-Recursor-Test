@@ -1,0 +1,907 @@
+This is an interesting question about strong normalization of a first-order rewrite system defined in Lean 4. Let me analyze the system carefully.
+
+First, let me understand the structure:
+- We have an inductive type `Trace` with constructors: `plum`, `grape`, `mango`, `peach`, `pear`, `banana`, and `cherry`.
+- We have a rewrite relation `Step` with several rules.
+
+Let me list the rewrite rules:
+1. `R_mango_grape`: `mango (grape t) → plum`
+2. `R_peach_plum_left`: `peach plum t → t`
+3. `R_peach_plum_right`: `peach t plum → t`
+4. `R_peach_cancel`: `peach t t → t`
+5. `R_banana_zero`: `banana b s plum → b`
+6. `R_apple_orange`: `banana b s (grape n) → pear s (banana b s n)`
+7. `R_cherry_refl`: `cherry a a → plum`
+8. `R_cherry_diff`: If `a ≠ b`, then `cherry a b → mango (peach a b)`
+
+The question is whether strong normalization can be established from the calculus alone.
+
+Strong normalization means that there are no infinite reduction sequences.
+
+Let me think about potential sources of non-termination:
+
+1. **Recursive constructors**: We have `grape`, `mango`, `peach`, `pear`, `banana`, `cherry` all take `Trace` arguments, so we can build nested terms.
+
+2. **Rewrite rules analysis**:
+   - Rule 1 (`R_mango_grape`): Decreases size significantly (mango(grape(t)) → plum)
+   - Rule 2 (`R_peach_plum_left`): peach(plum, t) → t, decreases size
+   - Rule 3 (`R_peach_plum_right`): peach(t, plum) → t, decreases size
+   - Rule 4 (`R_peach_cancel`): peach(t, t) → t, decreases size
+   - Rule 5 (`R_banana_zero`): banana(b, s, plum) → b, decreases size
+   - Rule 6 (`R_apple_orange`): banana(b, s, grape(n)) → pear(s, banana(b, s, n))
+     - Here, the third argument changes from `grape(n)` to `n` inside a recursive call
+     - This looks like it could be problematic if `n` is larger than `grape(n)`, but actually `grape(n)` is bigger than `n` (one more constructor), so we're decreasing the third argument
+     - But we're introducing a `pear` constructor and keeping `banana` with the same first two arguments
+     - Wait, let me look at this more carefully
+     - Left side: `banana b s (grape n)`
+     - Right side: `pear s (banana b s n)`
+     - The third argument goes from `grape n` to `n`, which is smaller
+     - But we wrap the result in `pear s (...)`
+     - So the size: if we define size naively as number of constructors:
+       - Left: 1 (banana) + size(b) + size(s) + 1 (grape) + size(n) = size(b) + size(s) + size(n) + 2
+       - Right: 1 (pear) + size(s) + 1 (banana) + size(b) + size(s) + size(n) = size(b) + 2*size(s) + size(n) + 2
+     - If size(s) > 0, the right side is larger!
+     - This is a potential problem for termination.
+
+Let me think about rule 6 again:
+`banana b s (grape n) → pear s (banana b s n)`
+
+If `s` is non-trivial, say `s = grape plum`, then:
+- Left: `banana b (grape plum) (grape n)`
+- Right: `pear (grape plum) (banana b (grape plum) n)`
+
+Size comparison (counting constructors):
+- Left: banana(1) + b + grape(1) + plum(1) + grape(1) + n = b + n + 4
+- Right: pear(1) + grape(1) + plum(1) + banana(1) + b + grape(1) + plum(1) + n = b + n + 6
+
+Actually, the right side is larger!
+
+Wait, let me recalculate more carefully.
+Size metric:
+- plum: 1
+- grape t: 1 + size(t)
+- mango t: 1 + size(t)
+- peach t1 t2: 1 + size(t1) + size(t2)
+- pear t1 t2: 1 + size(t1) + size(t2)
+- banana t1 t2 t3: 1 + size(t1) + size(t2) + size(t3)
+- cherry t1 t2: 1 + size(t1) + size(t2)
+
+Rule 6: `banana b s (grape n) → pear s (banana b s n)`
+- LHS size: 1 + |b| + |s| + (1 + |n|) = |b| + |s| + |n| + 2
+- RHS size: 1 + |s| + (1 + |b| + |s| + |n|) = |b| + 2|s| + |n| + 2
+
+Difference: RHS - LHS = |s|
+So if |s| > 0, the term grows!
+
+This suggests that repeated application of rule 6 could lead to growth, and potentially non-termination if we can create a cycle.
+
+But we also need to look at how `banana` terms are created.
+
+Actually, looking at all the rules, `banana` only appears on the left side of rules 5 and 6, and on the right side of rule 6.
+
+So `banana` terms can only be introduced by rule 6 itself (on the right side).
+
+Wait, let's trace where banana can appear:
+- Rule 5 eliminates banana (with plum as third arg)
+- Rule 6 transforms banana with grape third arg to a pear containing a banana
+- No other rule produces banana
+
+So we start with some banana term, and rule 6 reduces the third argument from `grape n` to `n`, but duplicates `s` and adds a `pear` wrapper.
+
+Specifically:
+`banana b s (grape n) → pear s (banana b s n)`
+
+Now, the new banana term has `n` instead of `grape n`. So the third argument is smaller.
+But we have an extra copy of `s`.
+
+If `s` contains a `grape` or if `n` eventually becomes `grape` of something, we might continue.
+
+Actually, we need to see if we can have an infinite chain.
+
+Consider: what if `n` itself is `grape n'`? Then:
+`banana b s (grape (grape n')) → pear s (banana b s (grape n'))`
+Then we can apply rule 6 again:
+`→ pear s (pear s (banana b s n'))`
+
+Each time we have `grape` in the third position, we strip one `grape` and duplicate `s`.
+
+So if we start with `banana b s (grape^k n)` where `grape^k` means k nested grapes, we get:
+`banana b s (grape^k n) →* pear s (pear s (... (pear s (banana b s n))...))` with k copies of `pear s`.
+
+This terminates as long as the third argument is finite and doesn't contain `grape` forever.
+
+But Trace is an inductive type, so all terms are finite trees. So any specific term has finite size, and the depth of `grape` nesting is finite.
+
+Wait, but the concern is: can we have a loop?
+
+Let me look at the other rules.
+
+Rule 7: `cherry a a → plum`
+Rule 8: `cherry a b → mango (peach a b)` when `a ≠ b`
+
+These eliminate `cherry`.
+
+Rule 1: `mango (grape t) → plum`
+This eliminates `mango` when its argument is `grape`.
+
+What about `mango` with other arguments? The rules don't specify reductions for `mango t` when `t` is not `grape`. So `mango` is a normal form constructor except when applied to `grape`.
+
+Similarly:
+- `peach` reduces when one argument is `plum` or when both are equal.
+- `pear` doesn't have any reduction rules! So `pear` is a constructor that blocks - it's a normal form.
+- `banana` reduces when third argument is `plum` or `grape`.
+- `cherry` always reduces.
+- `grape` never reduces on its own.
+- `plum` is a normal form.
+
+Wait, looking at the rules again:
+- `pear` appears on the RHS of rule 6, but there are no rules for `pear` on the LHS.
+- So once we create a `pear`, it stays there unless it's inside another redex.
+
+Now let me think about strong normalization.
+
+A rewrite system is strongly normalizing if every reduction sequence terminates.
+
+For first-order rewrite systems, we can use various methods:
+1. Find a well-founded ordering compatible with the rewrite rules
+2. Show that each rule reduces some measure
+3. Use the diamond property or confluence with termination
+4. Recursive path ordering or polynomial interpretations
+
+The issue is rule 6: `banana b s (grape n) → pear s (banana b s n)`
+
+This doesn't decrease the term size if `s` is non-empty.
+
+In fact, if `s` contains, say, a single `grape plum`, then the size increases.
+
+But notice that the third argument decreases in the sense that we go from `grape n` to `n`. Since `Trace` is well-founded (it's an inductive type), we can't have infinite descending chains by stripping off constructors from a fixed position... but wait, that's not quite right because we can have infinite rewriting inside subterms.
+
+Actually, for strong normalization, we need to ensure that no matter what reductions we do in subterms, the overall process terminates.
+
+Let me think about whether we can create an infinite reduction sequence.
+
+The critical rule is rule 6, which requires the third argument to be `grape n`. 
+
+After applying rule 6 to `banana b s (grape n)`, we get `pear s (banana b s n)`.
+
+Now, `pear` is a normal form constructor, so the outermost constructor is now `pear`. Inside, we have `banana b s n`.
+
+If `n` is of the form `grape n'`, we can apply rule 6 again, getting:
+`pear s (pear s (banana b s n'))`.
+
+We can continue this as long as the third argument is `grape` of something.
+
+Since any term is finite, we can only apply rule 6 finitely many times in this nested fashion before we reach a third argument that is not `grape`.
+
+When the third argument is not `grape`, can we apply other rules?
+
+- If third argument is `plum`, we use rule 5: `banana b s plum → b`.
+- If third argument is something else, say `mango t`, `peach t1 t2`, `pear t1 t2`, `banana t1 t2 t3`, `cherry t1 t2`, or `plum` (already covered), or `grape` (covered), then no rule applies to the `banana`.
+
+Wait, let's check:
+- `R_banana_zero`: third arg is `plum`
+- `R_apple_orange` (which is rule 6): third arg is `grape n`
+
+So if the third argument is neither `plum` nor `grape`, the `banana` term is a normal form.
+
+Therefore, for any `banana b s n` where `n` is in normal form and not `plum` or `grape`, we cannot reduce the `banana`.
+
+So the reduction of `banana` terms proceeds as follows:
+1. Reduce the third argument to normal form.
+2. If it's `plum`, apply rule 5.
+3. If it's `grape n'`, apply rule 6, which creates a `pear` and recursively calls `banana b s n'`.
+4. If it's anything else, stop (normal form).
+
+This looks like it terminates because each time we apply rule 6, we decrease the "grape-depth" of the third argument.
+
+But there's a catch: before we can apply rule 6, we need the third argument to be exactly `grape n`, not just reducible to it.
+
+Actually, the `Step` relation is defined on the structure. We can reduce subterms.
+
+So consider: `banana b s t` where `t` reduces to `grape n`.
+
+We first reduce `t` to `grape n`, then apply rule 6.
+
+Or we might apply rule 6 if `t` is already `grape n`.
+
+Since `Trace` is inductive and we're working with finite terms, and rule 6 reduces the depth of the third argument (removing one `grape` layer each time), this suggests termination.
+
+But we need to be careful about the duplication of `s`.
+
+Let's try to find a measure that decreases.
+
+Define a weight function `w : Trace → ℕ` that maps terms to natural numbers such that for every rule `l → r`, we have `w(l) > w(r)`.
+
+Or we could use a multiset ordering or recursive path ordering.
+
+Let me try a polynomial interpretation.
+
+Assign to each constructor `c` a polynomial in the weights of its arguments.
+
+We want:
+- `w(mango(grape(t))) > w(plum)`
+- `w(peach(plum, t)) > w(t)`
+- `w(peach(t, plum)) > w(t)`
+- `w(peach(t, t)) > w(t)`
+- `w(banana(b, s, plum)) > w(b)`
+- `w(banana(b, s, grape(n))) > w(pear(s, banana(b, s, n)))`
+- `w(cherry(a, a)) > w(plum)`
+- `w(cherry(a, b)) > w(mango(peach(a, b)))` for `a ≠ b`
+
+And we need the polynomials to be monotone in each argument.
+
+Let's try linear interpretations:
+Let `w(plum) = 1`
+Let `w(grape(x)) = a + b·w(x)`
+Let `w(mango(x)) = c + d·w(x)`
+Let `w(peach(x,y)) = e + f·w(x) + g·w(y)`
+Let `w(pear(x,y)) = h + i·w(x) + j·w(y)`
+Let `w(banana(x,y,z)) = k + l·w(x) + m·w(y) + n·w(z)`
+Let `w(cherry(x,y)) = p + q·w(x) + r·w(y)`
+
+We need all coefficients to be non-negative for monotonicity, and typically positive for constructors.
+
+The difficult constraint is rule 6:
+`w(banana(b, s, grape(n))) > w(pear(s, banana(b, s, n)))`
+
+Expanding:
+`k + l·w(b) + m·w(s) + n·(a + b·w(n)) > h + i·w(s) + j·(k + l·w(b) + m·w(s) + n·w(n))`
+
+Simplifying left: `k + n·a + l·w(b) + m·w(s) + n·b·w(n)`
+Right: `h + j·k + i·w(s) + j·l·w(b) + j·m·w(s) + j·n·w(n)`
+`= h + j·k + j·l·w(b) + (i + j·m)·w(s) + j·n·w(n)`
+
+We need:
+`k + n·a + l·w(b) + m·w(s) + n·b·w(n) > h + j·k + j·l·w(b) + (i + j·m)·w(s) + j·n·w(n)`
+
+Rearranging by variables:
+Constant: `k + n·a > h + j·k`
+Coeff of `w(b)`: `l > j·l`
+Coeff of `w(s)`: `m > i + j·m`
+Coeff of `w(n)`: `n·b > j·n`
+
+From `l > j·l`: we need `l > 0` and `j < 1`. Since we're using natural numbers or reals, if `l > 0` then `j` must be 0.
+
+From `n·b > j·n`: if `n > 0` and `j = 0`, we need `b > 0`.
+
+From `m > i + j·m` with `j = 0`: we need `m > i`.
+
+From constant: `k + n·a > h` (since `j = 0`).
+
+So let's set:
+- `j = 0`
+- `b ≥ 1` (for the grape coefficient)
+- `m > i ≥ 0`
+- `k + n·a > h`
+
+With `j = 0`, we have:
+`w(pear(x,y)) = h + i·w(x) + 0·w(y) = h + i·w(x)`
+
+This means `pear` doesn't depend on its second argument for the weight ordering, which is fine as long as the ordering is well-founded.
+
+Now let's check the other constraints with `j = 0`:
+
+1. `w(mango(grape(t))) > w(plum)`
+   `c + d·(a + b·w(t)) > 1`
+   `c + d·a + d·b·w(t) > 1`
+   Since `w(t) ≥ 1`, we need `c + d·a + d·b > 1`.
+
+2. `w(peach(plum, t)) > w(t)`
+   `e + f·1 + g·w(t) > w(t)`
+   `e + f + g·w(t) > w(t)`
+   Need `g ≥ 1` and `e + f > 0`, or `g > 1`.
+   Actually, if `g = 1`, we need `e + f > 0`.
+   If `g > 1`, we're fine.
+
+3. `w(peach(t, plum)) > w(t)`
+   `e + f·w(t) + g·1 > w(t)`
+   Need `f > 1` or `f = 1` and `e + g > 0`.
+
+4. `w(peach(t, t)) > w(t)`
+   `e + f·w(t) + g·w(t) > w(t)`
+   `e + (f+g)·w(t) > w(t)`
+   Need `f + g > 1` or `f + g = 1` and `e > 0`.
+
+5. `w(banana(b, s, plum)) > w(b)`
+   `k + l·w(b) + m·w(s) + n·1 > w(b)`
+   `k + n + m·w(s) + l·w(b) > w(b)`
+   Need `l ≥ 1` and `k + n + m·w(s) > 0`, which is true if all constants positive.
+   Actually, if `l > 1`, fine.
+   If `l = 1`, need `k + n + m·w(s) > 0`, true.
+
+6. Already handled: need `m > i`, `b > 0` (coefficient in grape), `j = 0`, and `k + n·a > h`.
+
+7. `w(cherry(a, a)) > w(plum)`
+   `p + q·w(a) + r·w(a) > 1`
+   `p + (q+r)·w(a) > 1`
+   Need `p > 0` or `q+r > 0` with `w(a) ≥ 1`.
+
+8. `w(cherry(a, b)) > w(mango(peach(a, b)))` for `a ≠ b`
+   `p + q·w(a) + r·w(b) > c + d·(e + f·w(a) + g·w(b))`
+   `p + q·w(a) + r·w(b) > c + d·e + d·f·w(a) + d·g·w(b)`
+   
+   Need:
+   `p > c + d·e` or
+   `q > d·f` or
+   `r > d·g` or
+   combinations.
+
+This is getting complicated. Let me try specific values.
+
+Set all base coefficients to 1 for simplicity, and try to solve.
+
+Actually, let me try a simpler approach. Use the height or size of the term.
+
+Simple size (number of constructors):
+- `|plum| = 1`
+- `|grape(t)| = 1 + |t|`
+- `|mango(t)| = 1 + |t|`
+- `|peach(t1,t2)| = 1 + |t1| + |t2|`
+- `|pear(t1,t2)| = 1 + |t1| + |t2|`
+- `|banana(t1,t2,t3)| = 1 + |t1| + |t2| + |t3|`
+- `|cherry(t1,t2)| = 1 + |t1| + |t2|`
+
+Check rule 6:
+LHS: `|banana(b, s, grape(n))| = 1 + |b| + |s| + 1 + |n| = 2 + |b| + |s| + |n|`
+RHS: `|pear(s, banana(b, s, n))| = 1 + |s| + 1 + |b| + |s| + |n| = 2 + |b| + 2|s| + |n|`
+Difference: `|RHS| - |LHS| = |s|`
+
+So if `|s| > 0`, the size increases!
+
+This means we cannot use simple term size.
+
+But maybe we can use a weighted size where `banana` has weight 0 on its second argument? No, that wouldn't be monotone.
+
+Or we could use a more sophisticated measure.
+
+Notice that in rule 6, we go from `banana b s (grape n)` to `pear s (banana b s n)`.
+The `s` is moved from inside the banana to outside in a pear, and we recurse on `n` instead of `grape n`.
+
+We could define a measure based on the third argument of banana.
+
+Define `μ(banana b s n) = (depth(n), something)` lexicographically.
+
+Actually, define a function that computes the maximum nesting of `grape` in certain positions.
+
+Or, consider that rule 6 eliminates one `grape` from the third argument of banana, but duplicates `s`. However, the duplicated `s` is now inside a `pear` constructor, and `pear` is a "harmless" constructor that doesn't interact with banana or create new redexes involving banana.
+
+Wait, the new `banana` is inside the second argument of `pear`. So to apply rule 6 again to it, we would need to have it as the main term, but it's inside `pear`.
+
+Actually, reduction can happen at any position. So we can reduce the subterm `banana b s n` inside `pear s (banana b s n)`.
+
+If `n = grape n'`, then we can apply rule 6 to the inner banana, getting:
+`pear s (pear s (banana b s n'))`.
+
+Each time we apply rule 6, we add another layer of `pear s` and strip one `grape` from the third argument.
+
+Since the original term is finite, we can only strip finitely many `grape`s, so this process terminates.
+
+But could we have infinite reduction by reducing `s` or `b` forever?
+
+Well, `s` and `b` are arguments that persist (or are duplicated), but we need to check if they can generate infinite reductions on their own.
+
+The question is: does the system allow creating "unbounded" work?
+
+Actually, let's think about whether there can be infinite reduction sequences.
+
+Suppose we have a term `t` that starts an infinite reduction.
+
+Since the only rules that don't obviously decrease the size (locally) are rule 6 and possibly rule 8, let's look at them.
+
+Rule 8: `cherry a b → mango (peach a b)` when `a ≠ b`.
+Size: LHS = 1 + |a| + |b|, RHS = 1 + (1 + |a| + |b|) = 2 + |a| + |b|.
+Size increases by 1!
+
+Oh no! Rule 8 increases size!
+`cherry a b` has size `1 + |a| + |b|`.
+`mango (peach a b)` has size `1 + (1 + |a| + |b|) = 2 + |a| + |b|`.
+
+So rule 8 increases the size by 1.
+
+And rule 6 can increase size if `|s| > 0`.
+
+This makes strong normalization non-obvious.
+
+Let me look at rule 8 again:
+`R_cherry_diff : ∀ {a b}, a ≠ b → Step (cherry a b) (mango (peach a b))`
+
+So `cherry` with different arguments reduces to `mango` of `peach` of those arguments.
+
+Now, `mango (peach a b)` could potentially be reduced if `peach a b` is `grape` something, but `peach a b` is not of the form `grape t` unless `a` or `b` has that form... wait, no, `peach` is a different constructor.
+
+`mango` only reduces when its argument is `grape t` (rule 1).
+So `mango (peach a b)` is a normal form with respect to rule 1, unless we can reduce inside.
+
+But `peach a b` might be reducible:
+- If `a = plum`, then `peach plum b → b` by rule 2.
+- If `b = plum`, then `peach a plum → a` by rule 3.
+- If `a = b`, then `peach a a → a` by rule 4.
+
+So if we have `cherry a b` with `a ≠ b`, we get `mango (peach a b)`.
+Then if `a` and `b` are such that `peach a b` reduces, we might get:
+- `mango b` (if `a = plum`)
+- `mango a` (if `b = plum`)
+- `mango a` (if `a = b`, but we assumed `a ≠ b` for rule 8, so this doesn't apply directly to the result of rule 8).
+
+Wait, if `a = plum` and `a ≠ b` (so `b ≠ plum`), then:
+`cherry plum b → mango (peach plum b) → mango b`.
+And `mango b` is in normal form unless `b = grape t` for some `t`.
+
+If `b = grape t`, then `mango b = mango (grape t) → plum`.
+
+So that terminates.
+
+The problem is that rule 8 creates a larger term. Could we have a loop?
+
+Let's try to find a cycle.
+
+Suppose we have a term that reduces to a larger term, which reduces to an even larger term, etc.
+
+For rule 6: `banana b s (grape n) → pear s (banana b s n)`
+The third argument gets smaller (in terms of grape-depth), but `s` is duplicated.
+
+If `s` contains a `cherry` or `banana` that can create growth, we might have problems.
+
+Consider: `s = cherry x y` with `x ≠ y`.
+Then `banana b (cherry x y) (grape n) → pear (cherry x y) (banana b (cherry x y) n)`.
+
+Now, we might reduce the inner `cherry x y` to `mango (peach x y)` before applying rule 6 to the banana again, or after.
+
+But the key insight is: to apply rule 6 to a `banana`, we need the third argument to be `grape` of something.
+
+Let's try to construct an infinite reduction.
+
+Start with: `banana plum (grape plum) (grape plum)`
+
+Apply rule 6:
+`→ pear (grape plum) (banana plum (grape plum) plum)`
+
+Now reduce the inner banana with rule 5:
+`banana plum (grape plum) plum → plum`
+So we get: `pear (grape plum) plum`.
+This is a normal form (pear has no rules).
+
+Let's try: `banana plum (grape plum) (grape (grape plum))`
+
+Apply rule 6:
+`→ pear (grape plum) (banana plum (grape plum) (grape plum))`
+
+Apply rule 6 to inner:
+`→ pear (grape plum) (pear (grape plum) (banana plum (grape plum) plum))`
+`→ pear (grape plum) (pear (grape plum) plum)`
+
+Normal form.
+
+Now, what if `s` is something that grows?
+Let `s = cherry a b` where `a ≠ b`.
+`banana b' s (grape n) → pear s (banana b' s n)`.
+
+The `s` is duplicated, but it's inside `pear`, and we can reduce each copy of `s` independently.
+
+But `s` itself, when reduced, becomes `mango (peach a b)`, which is bigger than `s`.
+
+Ah! This is the key.
+
+If `s` contains a `cherry` with distinct arguments, then when we apply rule 6, we duplicate `s`.
+Then we can reduce each copy of `s` to something larger.
+But that doesn't directly create a loop.
+
+Wait, let's trace:
+1. Start: `banana plum (cherry a b) (grape n)` with `a ≠ b`.
+2. Apply rule 6: `pear (cherry a b) (banana plum (cherry a b) n)`.
+3. Now reduce the first `cherry a b` to `mango (peach a b)` using rule 8:
+   `pear (mango (peach a b)) (banana plum (cherry a b) n)`.
+4. Reduce the second `cherry a b` inside the banana? Well, we might reduce inside the banana first or later.
+
+Actually, the banana subterm is `banana plum (cherry a b) n`.
+If `n = grape n'`, we can apply rule 6 to it.
+
+But notice: we have two copies of the work: we have to reduce `cherry a b` in the first position of pear, and we might reduce it in the second argument of banana (but it's the second argument of banana, not the third).
+
+Rule 6 duplicates the second argument `s` of banana, putting one copy in the first argument of pear, and keeping one copy in the second argument of banana.
+
+The copy in the first argument of pear can be reduced, and will become `mango (peach a b)` if `s = cherry a b`.
+The copy in banana stays as the second argument.
+
+When we continue reducing the inner banana (if its third argument is grape), we will duplicate `s` again.
+
+So each time we "unfold" a banana with rule 6, we create another copy of `s` in a pear constructor.
+
+If `s` requires work to reduce (e.g., contains redexes), we might have to reduce each copy.
+
+But that's just increasing the work, not creating a loop. Since each rule 6 application requires the third argument to have a `grape` at the top, and we consume that `grape`, we can only apply rule 6 finitely many times along any path (equal to the number of `grape` constructors in the original third argument).
+
+Wait, but we might be able to create new `grape` constructors!
+
+Can any rule create a `grape` constructor on the right-hand side?
+
+Looking at all RHS:
+1. `plum` - no grape
+2. `t` - no new constructors
+3. `t` - no new constructors
+4. `t` - no new constructors
+5. `b` - existing
+6. `pear s (banana b s n)` - no new grape
+7. `plum` - no grape
+8. `mango (peach a b)` - no grape
+
+None of the rules create a `grape` constructor!
+
+That's crucial!
+
+The `grape` constructor can only be eliminated (in rule 6 and rule 1), never created.
+
+Therefore, the number of `grape` constructors in a term is a non-increasing measure.
+
+In rule 6: `banana b s (grape n)` contains one `grape` (explicitly).
+The result `pear s (banana b s n)` has the `grape` removed, and `n` might contain `grape`, but the explicit `grape` is gone.
+
+So each application of rule 6 strictly decreases the total number of `grape` constructors in the term by 1.
+
+Rule 1: `mango (grape t) → plum` also decreases the number of `grape` by 1.
+
+No other rule mentions `grape` on the left side.
+
+Therefore, rules 1 and 6 can be applied at most as many times as there are `grape` constructors in the initial term.
+
+What about the other rules? They don't involve `grape`, but they might increase the size or create redexes.
+
+But since we can only apply rules 1 and 6 finitely many times (limited by initial grape count), and the other rules... wait, do the other rules create new redexes that involve grape?
+
+No, because they never create grape constructors.
+
+And they don't "unfold" into terms with grape unless the original term had grape in subterms.
+
+Actually, we need to be careful. A rewrite step can occur anywhere in the term.
+
+Consider rule 8: `cherry a b → mango (peach a b)` (a ≠ b).
+This creates `mango` and `peach`, but no `grape`.
+
+Rule 7: eliminates `cherry`.
+
+Rules 2,3,4: eliminate `peach`.
+
+Rule 5: eliminates `banana` with plum.
+
+The only rules that can enable other rules are those that expose new redexes.
+
+But the critical observation is:
+- The total number of `grape` constructors strictly decreases with rules 1 and 6.
+- These are the only rules that can be "triggered" by `grape`.
+- Other rules don't create `grape`, so the grape count is non-increasing overall, and decreases with each application of R1 or R6.
+
+Since the initial term has finitely many `grape` constructors, we can apply R1 and R6 only finitely many times.
+
+After all `grape` constructors are gone (i.e., the term contains no `grape`), can we still have infinite reductions?
+
+If there are no `grape` constructors, then:
+- R1 is inapplicable (requires `mango (grape t)`)
+- R6 is inapplicable (requires `banana b s (grape n)`)
+
+So we're left with rules 2,3,4,5,7,8.
+
+Rule 5: `banana b s plum → b` - requires `plum` as third arg, eliminates `banana`.
+
+Rule 2,3,4: eliminate `peach` in various forms.
+
+Rule 7: eliminates `cherry` when args equal.
+
+Rule 8: `cherry a b → mango (peach a b)` when a ≠ b.
+
+Now, rule 8 increases the size and creates `mango` and `peach`.
+The `peach` can be reduced by rules 2,3,4 if one arg is `plum` or args are equal.
+The `mango` persists unless its arg is `grape` (but we have no grape!).
+
+So without grape, `mango t` is a normal form.
+
+Similarly, `pear` is always a normal form.
+
+`banana b s n` with n ≠ plum and n ≠ grape (i.e., n is something else like mango, peach, pear, banana, cherry, or plum - wait, plum is excluded) is a normal form.
+
+Let's check: if n = mango t, then banana b s (mango t) - no rule applies (rules 5 and 6 are the only ones for banana, requiring plum or grape).
+
+So terms without grape can still have redexes:
+- peach plum t → t
+- peach t plum → t
+- peach t t → t
+- banana b s plum → b
+- cherry a a → plum
+- cherry a b → mango (peach a b) (if a ≠ b)
+
+Do these terminate?
+
+Consider the "cherry" rules:
+- cherry a a always reduces to plum.
+- cherry a b (a≠b) reduces to mango (peach a b).
+
+Now, mango (peach a b) doesn't reduce further (no grape).
+But peach a b might reduce if:
+- a = plum: peach plum b → b, giving mango b
+- b = plum: peach a plum → a, giving mango a
+- a = b: peach a a → a, giving mango a
+
+So if we start with cherry a b where a≠b:
+- If a = plum: → mango (peach plum b) → mango b (normal form, assuming b has no grape)
+- If b = plum: → mango (peach a plum) → mango a (normal form)
+- If a = b: would have used other rule, but a≠b assumption
+- If a≠b, a≠plum, b≠plum: → mango (peach a b) which is normal form (peach doesn't reduce since args not equal and neither is plum).
+
+Wait, is that right? 
+- peach a b reduces only if:
+  - a is plum (rule 2)
+  - b is plum (rule 3)  
+  - a = b (rule 4)
+  
+So if a≠plum, b≠plum, and a≠b, then peach a b is a normal form.
+
+Therefore, mango (peach a b) is a normal form in that case.
+
+So rule 8 creates a term that is either immediately in normal form, or reduces in one more step (if a=plum or b=plum) to a normal form.
+
+Therefore, cherry always reduces to a normal form in at most 2 steps.
+
+Similarly, peach rules strictly decrease size.
+banana with plum decreases size.
+
+So in the subsystem without grape, all reductions terminate.
+
+Therefore, the whole system is strongly normalizing!
+
+The argument is:
+1. Define the measure μ(t) = number of grape constructors in t.
+2. μ is decreased by rules R1 and R6 (the only rules involving grape on LHS).
+3. μ is preserved by all other rules (since they don't create or destroy grape).
+4. Since μ is a non-negative integer and decreases with each R1/R6 step, and R1/R6 are the only rules that can be applied to terms containing grape in specific positions, we can only have finitely many R1/R6 steps.
+5. Actually, more carefully: in any reduction sequence, the number of times R1 and R6 are applied is bounded by the initial μ(t).
+6. Once all grape are eliminated, the remaining system (rules 2,3,4,5,7,8) terminates because:
+   - Rules 2,3,4,5,7 decrease the size of the term.
+   - Rule 8 increases size but creates a term where the new redexes (if any) strictly decrease in potential: specifically, rule 8 applied to cherry a b produces mango (peach a b). The peach can be reduced only if a=plum or b=plum or a=b. But a≠b (rule 8 condition), so either a=plum or b=plum or neither. If neither, the result is normal. If one is plum, we get one more step to mango of the other arg. So finite.
+   
+Wait, we need to make sure that after grape is gone, we can't have infinite loops.
+
+The remaining rewrite system (on the signature without grape, or ignoring grape) has rules:
+- peach plum t → t
+- peach t plum → t  
+- peach t t → t
+- banana b s plum → b
+- cherry a a → plum
+- cherry a b → mango (peach a b)  [a≠b]
+
+And constructors: plum, mango, peach, pear, banana, cherry (and grape, but terms with grape are inert regarding these rules except as subterms).
+
+Actually, grape terms are just inert - they have no rules except when inside mango or as third arg of banana, but we've eliminated those by saying no grape.
+
+In the subsystem, let's verify strong normalization.
+
+We can use a weight function:
+- w(plum) = 1
+- w(mango(x)) = w(x) + 1
+- w(peach(x,y)) = w(x) + w(y) + 2  (or just ensure it's > w(x), > w(y))
+Actually, for rules 2,3,4 we need:
+w(peach(x,y)) > w(x) and > w(y).
+This suggests w(peach(x,y)) = w(x) + w(y) + c for c>0.
+
+For rule 5: w(banana(b,s,plum)) > w(b).
+If w(banana(b,s,n)) = w(b) + w(s) + w(n) + k, then we need w(s) + w(plum) + k > 0, which is true.
+
+For rule 7: w(cherry(a,a)) > w(plum).
+w(cherry(a,a)) = 2w(a) + p > 1.
+
+For rule 8: w(cherry(a,b)) > w(mango(peach(a,b))) for a≠b.
+LHS: w(a) + w(b) + q
+RHS: w(peach(a,b)) + r = w(a) + w(b) + s + r  (assuming w(peach) = w(a)+w(b)+s)
+So we need: w(a) + w(b) + q > w(a) + w(b) + s + r
+i.e., q > s + r.
+
+So we can choose parameters.
+
+Set:
+- w(plum) = 1
+- w(mango(x)) = w(x) + 1
+- w(peach(x,y)) = w(x) + w(y) + 2
+- w(pear(x,y)) = w(x) + w(y) + 1  (arbitrary, no rules)
+- w(banana(x,y,z)) = w(x) + w(y) + w(z) + 1
+- w(cherry(x,y)) = w(x) + w(y) + 3
+
+Check rule 8: cherry(a,b) = w(a)+w(b)+3
+mango(peach(a,b)) = w(peach(a,b)) + 1 = w(a)+w(b)+2+1 = w(a)+w(b)+3.
+So we have equality, not strict decrease!
+
+That's a problem. We need strict decrease for termination.
+
+But the term does change: cherry → mango(peach).
+If w(cherry) = w(mango(peach)), we don't have a decrease.
+
+However, after this step, the term is mango(peach a b).
+This can be reduced further only if peach a b reduces.
+peach a b reduces only if a=plum or b=plum or a=b.
+With a≠b (from rule 8 side condition), and assuming neither is plum, then peach a b is normal, so mango(peach a b) is normal.
+
+But we might have a=plum.
+Then: cherry plum b (with plum ≠ b) → mango(peach plum b) → mango b.
+Weight: 
+Start: w(cherry(plum,b)) = 1 + w(b) + 3 = w(b) + 4.
+After rule 8: w(mango(peach(plum,b))) = w(peach(plum,b)) + 1 = 1 + w(b) + 2 + 1 = w(b) + 4.
+After rule 2: w(mango(b)) = w(b) + 1.
+So we went from w(b)+4 to w(b)+1, a decrease of 3.
+
+Similarly if b=plum: w(cherry(a,plum)) = w(a) + 1 + 3 = w(a) + 4.
+→ mango(peach(a,plum)) with weight w(a)+1+2+1 = w(a)+4.
+→ mango(a) with weight w(a)+1.
+Decrease by 3.
+
+If a,b ≠ plum and a≠b: 
+cherry(a,b) has weight w(a)+w(b)+3.
+→ mango(peach(a,b)) has weight w(a)+w(b)+2+1 = w(a)+w(b)+3.
+Same weight, but now the term is in normal form (no more reductions possible since peach doesn't reduce).
+
+So we have a weak decrease, but the new term may have different reducibility.
+
+To handle this, we can use a multiset ordering or just observe that rule 8 strictly decreases the number of "cherry" constructors, and no rule creates cherry.
+
+Ah! That's the key for the no-grape subsystem.
+
+No rule creates cherry constructors:
+- Rule 7 eliminates cherry.
+- Rule 8 eliminates cherry and creates mango and peach, no cherry.
+- Other rules don't mention cherry on RHS.
+
+Therefore, the number of cherry constructors strictly decreases with rules 7 and 8, and is preserved by others.
+Since initial term has finitely many cherry, we apply 7 and 8 only finitely many times.
+
+After all cherry are gone, we have rules 2,3,4,5 left.
+These all strictly decrease the size (number of constructors).
+So they terminate.
+
+Therefore, the whole system is strongly normalizing!
+
+The argument:
+1. The number of `grape` constructors is decreased by rules 1 and 6, and unchanged by others. So finite applications of 1 and 6.
+2. The number of `cherry` constructors is decreased by rules 7 and 8, and unchanged by others. So finite applications of 7 and 8.
+3. After removing all `grape` and `cherry`, we have rules 2,3,4,5 which strictly decrease term size, so terminate.
+
+Wait, we have to be careful about the order. We interleave reductions.
+But in any reduction sequence:
+- Each application of R1 or R6 decreases the grape count.
+- Each application of R7 or R8 decreases the cherry count.
+- Applications of other rules preserve both counts.
+
+Actually, R1 and R6 don't affect cherry count.
+R7 and R8 don't affect grape count.
+
+So we can think of the measure (num_grape, num_cherry, term_size) in lexicographic order.
+
+- R1, R6: decrease num_grape, others arbitrary.
+- R7, R8: preserve num_grape, decrease num_cherry, others arbitrary.
+- R2, R3, R4, R5: preserve num_grape, preserve num_cherry, decrease term_size.
+
+R5: banana b s plum → b.
+Size decreases (unless s has negative size, impossible).
+Num_grape: banana b s plum might have grape in b or s, but the rule removes the banana wrapper and s. If s had grape, those are discarded! 
+Wait! Rule 5: `banana b s plum → b`.
+This discards `s` entirely!
+
+If `s` contains `grape` constructors, then applying rule 5 destroys those `grape`!
+So rule 5 also decreases the grape count (or cherry count, or any count in s).
+
+Oh! I missed that. Rule 5 throws away the second and third arguments (keeping only b).
+Third argument is plum (no constructors).
+Second argument s is thrown away.
+
+So if s contains grape, rule 5 decreases grape count.
+If s contains cherry, rule 5 decreases cherry count.
+
+Similarly, rules 2,3,4: peach reductions throw away one argument (or both, keeping one).
+Rule 2: peach plum t → t (throws away plum and the peach wrapper, keeps t)
+Rule 3: peach t plum → t (throws away plum and peach, keeps t)
+Rule 4: peach t t → t (throws away one t and peach, keeps one t)
+
+So all these rules strictly decrease the size, and may decrease the count of grape/cherry if the discarded arguments contained them.
+
+But for the lexicographic measure:
+Let μ(t) = (number of grape in t, number of cherry in t, size of t)
+
+Now check each rule:
+
+R1: mango(grape t) → plum
+- Grape: removes the explicit grape, and any in t are lost? No, mango(grape t) has the grape t as subterm.
+Wait: the term is mango applied to (grape t).
+Positions: ... 
+The grape constructor is present.
+Result is plum, which has no subterms.
+So grape count: at least 1 (from grape t) → 0.
+Decreases grape count.
+
+R2: peach(plum, t) → t
+Removes plum and peach wrapper, keeps t.
+Grape count: unchanged (t has whatever it had).
+Cherry count: unchanged.
+Size: decreases (removes peach and plum constructors).
+
+R3: peach(t, plum) → t
+Size decreases.
+Grape/cherry unchanged.
+
+R4: peach(t, t) → t
+Size decreases (removes peach and one copy of t).
+If t had grape, we lose the grape in the discarded t.
+So grape count may decrease.
+Cherry may decrease.
+Size decreases.
+
+R5: banana(b, s, plum) → b
+Removes s, the plum, and banana.
+Size decreases.
+Grape: any in s are lost, so may decrease.
+Cherry: any in s are lost, so may decrease.
+
+R6: banana(b, s, grape(n)) → pear(s, banana(b, s, n))
+Grape: the explicit grape is removed. n may have grape.
+So grape count: at least 1 removed.
+Decreases.
+
+R7: cherry(a, a) → plum
+Cherry count: at least 1 → 0.
+Decreases.
+
+R8: cherry(a, b) → mango(peach(a, b)) for a≠b
+Cherry count: decreases by 1 (removes cherry, adds no cherry).
+Grape count: unchanged.
+Size: increases! 
+As calculated: |cherry(a,b)| = 1 + |a| + |b|
+|mango(peach(a,b))| = 1 + (1 + |a| + |b|) = 2 + |a| + |b|
+Size increases by 1.
+
+But cherry count decreases.
+And no rule creates cherry.
+So in the lex order (grape, cherry, size):
+- R1, R6: grape decreases.
+- R5: grape may decrease (if s has grape) or stay same, cherry may decrease, size decreases.
+Actually R5: the third arg is plum (no grape), second arg s is discarded.
+So if s has grape, grape decreases.
+If s has no grape, grape unchanged.
+But size always decreases.
+
+Wait, for lex order with grape first:
+- Any rule that decreases grape is good.
+- If grape preserved, then cherry...
+- If both preserved, size must decrease.
+
+R8: preserves grape (assuming a,b don't introduce/remove... RHS is mango(peach(a,b)), which contains a and b, so same grape as in a,b).
+Cherry: removes the cherry(a,b), and a,b have their own cherry.
+Wait, cherry(a,b) has the cherry constructor plus cherry in a and b.
+The result mango(peach(a,b)) has cherry in a and b.
+So cherry count decreases by exactly 1 (the top-level cherry).
+So μ: grape same, cherry decreases.
+
+R2,R3: grape same, cherry same, size decreases.
+R4: grape may decrease (if we discard a t with grape), cherry may decrease, size decreases.
+R5: similar.
+
+So yes! The lexicographic measure (num_grape, num_cherry, size) works:
+- R1: grape decreases
+- R6: grape decreases
+- R8: grape same, cherry decreases
+- R7: grape same, cherry decreases
+- R2,R3: grape same, cherry same, size decreases
+- R4: grape decreases or same, cherry decreases or same, size decreases
+- R5: similar to R4
+
+Therefore, every step decreases this measure, and since it's well-founded (nested lex of naturals), the system is strongly normalizing.
+
+The crucial insight is that:
+1. Grape constructors are never created, only destroyed (by R1, R6, and potentially R4,R5 discarding them).
+2. Cherry constructors are never created, only destroyed (by R7, R8, and potentially R4,R5).
+3. Once grape and cherry counts are stable (can't decrease further), the only rules applicable are R2,R3 which decrease size.
+
+Actually, R4 and R5 can also apply when there are no grape/cherry left, and they decrease size.
+
+So yes, strong normalization holds.
+
+The system is strongly normalizable using a lexicographic measure counting grape constructors, then cherry constructors, then term size.
+
+Therefore, the answer is YES, strong normalization can be established.
+
+The reasoning is that we can define a well-founded measure based on the number of grape constructors (strictly decreased only by R1 and R6, preserved by others), then cherry constructors (strictly decreased by R7 and R8, preserved by size-decreasing rules), then term size (decreased by all remaining rules).
+
+Since this measure decreases with every step and is well-founded, all reduction sequences terminate.
